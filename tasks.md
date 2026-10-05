@@ -20,9 +20,9 @@
 
 ## M2 Web 服务（push #3）
 
-- [ ] T2.1 `src/web/server.ts`：127.0.0.1 绑定、端口占用自动+1、teardown 关闭、/api/health——验证：curl /api/health 返回端口与 db 可达性
-- [ ] T2.2 API 路由装配（DESIGN §6 全表）+ JSON 错误约定（db 缺失→503）——验证：curl 逐路由对照 DESIGN 口径抽查数字（对照已知：全历史总量/今日命中率）
-- [ ] T2.3 静态文件服务 `src/web/public/`——验证：浏览器打开根路径出页面骨架
+- [x] T2.1 `src/web/server.ts`：127.0.0.1 绑定、端口占用自动+1（最多 10 次，可注入 serverFactory 测试）、teardown 关闭（closeAllConnections 释放 keep-alive + 关 db）、/api/health——✅ 真实 socket 测试通过：teardown 后端口可用裸 server 复绑证明真正释放；两台 server 同端口实测 EADDRINUSE 重试链；10 并发请求全 200
+- [x] T2.2 API 路由装配（DESIGN §6 全表）+ JSON 错误约定（db 缺失→503）——✅ /api/{health,overview,trend,models,agents,sessions,todo} + /api/session/:id/{messages,system-prompt} 全路由实测（真实库 fetch 集成测试 109 用例全绿）；坏参数回落默认值（days=abc→30）；旧表会话 404 "session not found in current tables"；60s TTL 缓存按 函数名+参数 包裹全部查询；index.ts 已装配真实 server 并把实际端口写入 storage（insight-server-port），db 路径可经 storage（insight-db-path）覆盖
+- [ ] T2.3 静态文件服务 `src/web/public/`——serve 层已随 M2 完成（路径穿越防护 + Content-Type 映射 + 根路径缺失时 404 "dashboard not deployed"），页面骨架验证待 M3 前端落地后勾选
 
 ## M3 看板前端（push #4）
 

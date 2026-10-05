@@ -7,12 +7,13 @@
 ## [Unreleased]
 
 ### Added
-- M1 取数层（src/db/）：opencode.db 只读连接（node:sqlite 特性探测，失败返回 null 供 API 层 503）、全部查询函数——overview / dailyTrend / modelMetrics / agentStats / sessionList / sessionMessages / todoStats / sessionSystemPrompt（instruction_state → instruction_blob）；行解析与 JSON 容错收敛在 src/db/rows.ts，共享类型在 src/db/types.ts。
-- M1 聚合纯函数（src/stats/，零 IO）：hit-rate（双口径命中率 + 总量口径）、daily-buckets（本地时区日分桶、零填充）、model-metrics（步均输出/中位/p95 上下文/推理占比/活跃区间）、agent-fingerprint（工具偏好指纹）、session-survival（存活时长分布）、hour-heatmap（小时×星期热力）、cache（60s TTL 进程内缓存，key=函数名+参数 JSON）。
-- M1 测试（test/，node:test）：全部 stats 纯函数单测（正常值/空数组/除零/单条数据/日期边界/时钟倒挂）+ 行解析单测 + 连真实 opencode.db 的冒烟测试（库缺失自动 skip）。
+- M2 HTTP 服务（src/web/，仅绑定 127.0.0.1）：startInsightServer 默认端口 18789、EADDRINUSE 自动 +1 重试最多 10 次（serverFactory 可注入测试）、close() 释放端口并关闭 db；router.ts 纯路由匹配、api.ts 路由处理、static-files.ts 静态解析（防路径穿越）、request-handler.ts node:http 胶水。
+- M2 API 路由（DESIGN §6 全表）：/api/health（端口/版本/dbStatus）、/api/overview、/api/trend?days=、/api/models、/api/agents、/api/sessions?limit=&offset=、/api/todo、/api/session/:id/messages、/api/session/:id/system-prompt；全部查询套 60s TTL 缓存；db 不可用→503 {error}，旧表会话→404 "session not found in current tables"，坏参数回落默认值。
+- M2 插件装配（src/index.ts）：setup 启动真实 server 并把实际端口写入 storage（insight-server-port），db 路径支持 storage 覆盖（insight-db-path），teardown 清理 storage 并关停 server。
+- M2 测试：路由匹配/参数容错、静态路径穿越防护、端口重试（假 serverFactory）、真实库 fetch 集成（health/overview/trend/sessions/messages 404/system-prompt）、teardown 端口复绑证明、并发 10 请求、index 装配往返。
 
 ### Changed
-- test 脚本改为 `node --test --experimental-strip-types "test/*.test.ts"`：Node v24.14.1（Windows）下 `node --test <目录>` 形式报 "Cannot find module"，改用 node 内建 glob 跨平台可用。
+- （M1）test 脚本改为 `node --test --experimental-strip-types "test/*.test.ts"`：Node v24.14.1（Windows）下 `node --test <目录>` 形式报 "Cannot find module"，改用 node 内建 glob 跨平台可用。
 
 ### Added (M0)
 - 项目骨架：DESIGN.md（设计文档）、tasks.md（任务清单）、CHANGELOG.md、README 骨架、LICENSE（MIT）、OpenCode V2 插件空入口（src/index.ts / src/tui.tsx）。
