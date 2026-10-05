@@ -19,3 +19,14 @@
 
 ### Changed
 - DESIGN.md 图表选型按业界调研校准（ccusage / claude-lens / OpenWebUI / opencode-stats 等已验证形态）：KPI 卡增加环比 ▲▼ 与精度标签（🟢实值/🟡估算）、逐日堆叠面积图按模型分色、新增 52 周日历热力图与 Token 漏斗、回放视图升级为会话级+turn 级两级。
+
+## [M1] 取数层与聚合
+
+### Added
+- 只读 DB 访问层（node:sqlite 特性探测 + 全部查询函数）、统计聚合纯函数（命中率/模型指标/agent 指纹/会话存活/小时热力/60s TTL 缓存）、node:test 测试套件 67 用例全绿（含真实库冒烟，库缺失自动跳过）。
+- T1.1 实测决策：Bun 1.4.0 与 Node 24 均支持 node:sqlite，无需 better-sqlite3 回退。
+
+## [M5-core] 导出渲染器（M5 核心部分，服务端路由与命令待接）
+
+### Added
+- 会话 Markdown 导出渲染器（src/export/）：角色分节标注（🧑用户/🤖助手/工具调用/系统指令/模型切换/压缩事件）、自适应围栏转义、4000 字符工具输出截断、系统提示词尾节；10 用例测试全绿。
