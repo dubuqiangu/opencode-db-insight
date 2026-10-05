@@ -79,7 +79,7 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 ## 4. 数据源与读取层
 
 - 路径解析：默认 `~/.local/share/opencode/opencode.db`（Windows 为 `%USERPROFILE%\.local\share\opencode\opencode.db`），允许通过 storage 持久化设置覆盖；
-- **只读连接**：`node:sqlite` 以 `file:...?mode=ro` URI 打开，避免写锁与 WAL 干扰；宿主正在写库时并发读是安全的（WAL 模式）；
+- **只读连接**：`node:sqlite` 以 `new DatabaseSync(path, {readOnly: true})` 打开（T1.1 实测采纳；与 `file:...?mode=ro` URI 等价），避免写锁与 WAL 干扰；宿主正在写库时并发读是安全的（WAL 模式）；
 - 可用性已实测（2026-10-05，T1.1）：`node:sqlite DatabaseSync` 在 Bun 1.4.0（插件实际运行时）与 Node 24 均可用，`readOnly: true` 连接真实库查询正常，**无需 better-sqlite3 回退**；保留 try/catch 特性探测，探测失败时 API 返回 503 并在 health 中标注；
 - 全部 SQL 收敛在 `src/db/queries.ts` 单文件，便于替换与审计。
 
@@ -88,13 +88,13 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 | 指标 | 公式 / 来源 | 说明 |
 |---|---|---|
 | 今日总量 | Σ(tokens.input+output+cache.read) 当日 assistant 消息 | 以 session_message 为准 |
-| 缓存命中率 | cache.read / (cache.read + input) | usage-meter 同款口径；会话严格口径含 write，面板注明 |
+| 缓存命中率 | cache.read / (cache.read + input) | usage-meter 同款口径；严格口径含 write 的 `strictHitRate` 纯函数已备，v0.2 在回放页接线并注明口径 |
 | 模型单点指标 | 步数、总量、命中率、步均输出、步均上下文、中位/p95 上下文、推理占比、活跃区间 | 排行榜核心 |
 | agent 指纹 | Σ 各工具调用次数 / 该 agent 总调用 | 工具偏好分布 |
 | 逐日趋势 | 按本地时区分桶：步骤、input、read、output、命中率 | 折线/面积图数据 |
-| 小时热力 | 历史步骤数按 小时×日期 分桶 | 作息画像 |
-| 会话存活 | time_created→time_updated 时长分布、idle_outcome 计数 | 短命会话占比 |
-| 压缩事件 | compaction 消息计数（按会话/按日） | 马拉松会话信号 |
+| 小时热力 | 历史步骤数按 小时×星期 分桶（纯函数已备） | 作息画像；API 路由与前端区块排 v0.2 |
+| 会话存活 | time_created→time_updated 时长分布、idle_outcome 计数（纯函数已备） | 短命会话占比；API 路由与前端区块排 v0.2 |
+| 压缩事件 | compaction 消息计数（按会话/按日） | 马拉松会话信号；统计实现排 v0.2（当前仅导出 Markdown 渲染压缩通知行） |
 | todo 完成率 | completed / total | `todo` 表 |
 | 数字精度标签 | cost 为 DB 实值标 🟢；tokens 换算金额标 🟡 估算 | 采纳 claude-lens 精度分级，UI 全局生效 |
 
@@ -106,7 +106,7 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 | `/api/trend?days=30` | 逐日序列：tokens 分项 + 命中率 |
 | `/api/models` | 模型单点指标排行 |
 | `/api/agents` | agent 用量 + 工具指纹 |
-| `/api/sessions?limit=&offset=` | 会话列表（标题/模型/agent/时间/token，可排序） |
+| `/api/sessions?limit=&offset=` | 会话列表（标题/模型/agent/时间/token；服务端固定按 time_updated 倒序，客户端排序） |
 | `/api/session/:id/messages` | 单会话全部消息（角色分型，供回放） |
 | `/api/session/:id/system-prompt` | 该会话关联的 instruction_blob 内容 |
 | `/api/export/session/:id.md` | 服务端渲染的 Markdown 导出 |
@@ -125,15 +125,15 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 ## 8. TUI 面
 
 - `/insight`：打开看板（Windows `start` / macOS `open` / Linux `xdg-open`），并在 toast 显示实际端口；
-- `/insight-status` 面板（`session.panel` slot，无 sidebar 时降级 dialog）：今日总量、今日命中率、模型 TOP5、7 日趋势字符条形图——视觉语言对齐 usage-meter（图标行、静默降级）；
-- `/insight-export [会话ID]`：无参数时弹出 `dialog.select` 列最近 20 个会话；导出到 `./insight-exports/<日期>-<slug>.md`，角色分节（`## 🧑 用户` / `## 🤖 助手` / reasoning 引用块 / 工具调用代码块）。
+- `/insight-status` 面板（`session.panel` slot；宿主无 panel/slot API 时降级为 toast 提示「当前界面不支持面板」）：今日总量、今日命中率、模型 TOP5、7 日趋势字符条形图——视觉语言对齐 usage-meter（图标行、静默降级）；
+- `/insight-export [会话ID]`：无参数时弹出 `dialog.select` 列最近 20 个会话；导出到**当前工作目录** `./insight-exports/<YYYYMMDD-HHmmss>-<slug>.md`，角色分节（`## 🧑 用户` / `## 🤖 助手` / reasoning 引用块 / 工具调用代码块）。
 
 ## 9. 生命周期与安全
 
 - server 插件 `setup()` 内启动 HTTP 服务，`teardown` 关闭；端口默认 `18789`，被占用时自动 +1 重试（最多 10 次），实际端口写入 storage 供 TUI 读取；
 - 仅绑定 `127.0.0.1`，不对外网暴露；无鉴权（本机单人使用）；
 - DB 连接只读；API 不返回凭据类表（`credential` / `account` 等绝不触碰）；
-- 导出文件可能含会话内容：导出路径固定在用户目录下，README 提示注意敏感信息后再分享。
+- 导出文件可能含会话内容：导出落在运行 OpenCode 时的工作目录 `./insight-exports/` 下，README 提示注意敏感信息后再分享。
 
 ## 10. 已知限制
 

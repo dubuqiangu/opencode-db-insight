@@ -2,17 +2,14 @@
  * Data acquisition for the /insight-status panel (DESIGN.md §8, task T6.2).
  *
  * The panel talks to the query layer in-process (same approach as the
- * export command). One scan of the assistant messages feeds every panel
- * widget: today totals + hit rate, today's model TOP5 and the 7-day trend.
- *
- * Layering note: src/db/queries.ts keeps its fetchAssistantStepRows private
- * and exposes no per-model-today query, so this module issues the same
- * read-only statement and reuses the exported row parser and the stats
- * aggregation functions. Everything downstream stays pure.
+ * export command). One bounded scan of the assistant messages feeds every
+ * panel widget: today totals + hit rate, today's model TOP5 and the 7-day
+ * trend. The scan goes through the exported queryAssistantStepRows, whose
+ * sinceMs lower bound keeps the scan proportional to the trend window.
  */
 
-import type { AssistantStepRow, SqliteReadConnection } from "../db/types.ts"
-import { asRecord, parseAssistantStepRow } from "../db/rows.ts"
+import type { SqliteReadConnection } from "../db/types.ts"
+import { queryAssistantStepRows } from "../db/queries.ts"
 import { computeModelMetrics } from "../stats/model-metrics.ts"
 import { bucketDailyTrend, toLocalDateKey, type DailyTrendPoint } from "../stats/daily-buckets.ts"
 import { hitRate, totalUsageTokens } from "../stats/hit-rate.ts"
@@ -22,6 +19,13 @@ export const STATUS_PANEL_MODEL_LIMIT = 5
 
 /** How many days the panel trend chart covers. */
 export const STATUS_PANEL_TREND_DAYS = 7
+
+/**
+ * SQL lower bound for the panel scan: the 7-day window covers the six days
+ * before today plus today, so "now minus seven days" is always safely below
+ * the window start while pruning everything older.
+ */
+const PANEL_SCAN_WINDOW_MS = STATUS_PANEL_TREND_DAYS * 24 * 60 * 60 * 1000
 
 /** One model row of the panel leaderboard. */
 export interface TodayModelUsage {
@@ -49,17 +53,7 @@ export function collectStatusPanelData(
 ): StatusPanelData | null {
   if (database === null) return null
 
-  const rawRows = database
-    .prepare("SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant'")
-    .all()
-
-  const stepRows: AssistantStepRow[] = []
-  for (const rawRow of rawRows) {
-    const rowRecord = asRecord(rawRow)
-    if (rowRecord === null) continue
-    const stepRow = parseAssistantStepRow(rowRecord)
-    if (stepRow !== null) stepRows.push(stepRow)
-  }
+  const stepRows = queryAssistantStepRows(database, nowMs - PANEL_SCAN_WINDOW_MS) ?? []
 
   const todayDateKey = toLocalDateKey(nowMs)
   const todayStepRows = stepRows.filter(

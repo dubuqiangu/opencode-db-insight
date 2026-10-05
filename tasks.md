@@ -54,7 +54,16 @@
 
 ## M7 收敛与发布（push #8）
 
-- [ ] T7.1 对照 DESIGN.md 逐项核验（需求→设计→任务→实现双向追溯），缺口回填
-- [ ] T7.2 README 完整化：安装（github:add 三方式）/更新/卸载/验证/排障
+- [x] T7.1 对照 DESIGN.md 逐项核验（需求→设计→任务→实现双向追溯），缺口回填——✅ 双向对账完成（§4/§5/§6/§8/§9/§10 逐条比对实现与 tasks.md 勾项）；发现 8 处差异已整理成决策清单交付（小时热力未接 API/前端、会话存活与压缩事件有口径无消费、strictHitRate 未接线、/api/sessions 排序参数缺、状态面板降级 toast 而非 dialog、导出文件名时间戳粒度、导出目录 §8 与 §9 表述冲突、sqlite 打开方式readOnly 选项而非 mode=ro URI）——按任务约定差异交用户决策，不回填 DESIGN.md
+- [x] T7.2 README 完整化：安装（github:add 三方式）/更新/卸载/验证/排障——✅ README 重写完成：一句话简介+功能清单（三条斜杠命令、看板六区块、回放）、安装三方式表格（官方 add 推荐 / git clone / opencode.json file://，注明单方式）、plugin update/remove/list 验证命令（更新需重启）、使用说明（端口 18789 起 +1 重试、./insight-exports/、db 路径通用写法）、排障表（看板未启动/数据不可用/旧表 404/0% 命中率/日志位置）、与 usage-meter 互补、MIT；全文无本机绝对路径与用户名，todo 等未上前端的指标已按实测降级表述
 - [ ] T7.3 `opencode plugin update` 后重启实测全部功能 + 卸载重装干净
 - [ ] T7.5 v0.1.0 版本号 + CHANGELOG 汇总 + 用户验收
+
+## v0.2 Backlog（来自 T7.1 设计对账，未排期）
+
+- [ ] 小时×星期热力：/api/hour-heatmap 路由 + 看板前端区块（纯函数已备）
+- [ ] 会话存活统计：API 路由 + 前端区块（纯函数已备）
+- [ ] 压缩事件统计：按会话/按日计数（当前仅导出渲染通知行）
+- [ ] strictHitRate 接线到回放页并注明口径
+- [ ] /api/sessions 服务端排序参数（当前客户端排序够用）
+- [ ] 前端消费 /api/todo（todo 完成率卡片）

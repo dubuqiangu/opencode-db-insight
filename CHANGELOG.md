@@ -6,20 +6,19 @@
 
 ## [Unreleased]
 
-### Added
-- M2 HTTP 服务（src/web/，仅绑定 127.0.0.1）：startInsightServer 默认端口 18789、EADDRINUSE 自动 +1 重试最多 10 次（serverFactory 可注入测试）、close() 释放端口并关闭 db；router.ts 纯路由匹配、api.ts 路由处理、static-files.ts 静态解析（防路径穿越）、request-handler.ts node:http 胶水。
-- M2 API 路由（DESIGN §6 全表）：/api/health（端口/版本/dbStatus）、/api/overview、/api/trend?days=、/api/models、/api/agents、/api/sessions?limit=&offset=、/api/todo、/api/session/:id/messages、/api/session/:id/system-prompt；全部查询套 60s TTL 缓存；db 不可用→503 {error}，旧表会话→404 "session not found in current tables"，坏参数回落默认值。
-- M2 插件装配（src/index.ts）：setup 启动真实 server 并把实际端口写入 storage（insight-server-port），db 路径支持 storage 覆盖（insight-db-path），teardown 清理 storage 并关停 server。
-- M2 测试：路由匹配/参数容错、静态路径穿越防护、端口重试（假 serverFactory）、真实库 fetch 集成（health/overview/trend/sessions/messages 404/system-prompt）、teardown 端口复绑证明、并发 10 请求、index 装配往返。
+（暂无——下一批变更记录于此）
 
-### Changed
-- （M1）test 脚本改为 `node --test --experimental-strip-types "test/*.test.ts"`：Node v24.14.1（Windows）下 `node --test <目录>` 形式报 "Cannot find module"，改用 node 内建 glob 跨平台可用。
+## [0.1.0] - 2026-10-06 · 首个可用版本（M0~M7）
 
-### Added (M0)
-- 项目骨架：DESIGN.md（设计文档）、tasks.md（任务清单）、CHANGELOG.md、README 骨架、LICENSE（MIT）、OpenCode V2 插件空入口（src/index.ts / src/tui.tsx）。
+### 发布摘要
+- **Web 看板**（127.0.0.1:18789 起，占用自动+1）：KPI 卡（环比 ▲▼ / sparkline / 🟢🟡 精度标签）、逐日堆叠趋势、52 周日历热力图、工具条形图、Token 漏斗、模型排行榜（10 列排序下钻）、会话列表
+- **单会话回放**：角色时间线（🧑/🤖/💭/🔧/🔔）+ turn 级成本条 + 系统提示词面板 + 大会话分块加载 + 旧表会话 404 文案
+- **导出**：/api/export/session/:id.md 与 /insight-export 命令，角色分节 Markdown 落盘 ./insight-exports/
+- **终端面**：/insight（打开看板）、/insight-status（今日用量/命中率/模型 TOP5/7 日条形，60s 刷新）
+- 技术债闭环：queryAssistantStepRows 上提为 queries.ts 导出（SQL 全收敛 §4 达成）、toast 助手单一实现
+- 测试 165 用例全绿（含真实库集成）
 
-### Changed
-- DESIGN.md 图表选型按业界调研校准（ccusage / claude-lens / OpenWebUI / opencode-stats 等已验证形态）：KPI 卡增加环比 ▲▼ 与精度标签（🟢实值/🟡估算）、逐日堆叠面积图按模型分色、新增 52 周日历热力图与 Token 漏斗、回放视图升级为会话级+turn 级两级。
+（以下为各里程碑明细）
 
 ## [M1] 取数层与聚合
 

@@ -97,11 +97,25 @@ export function openOpencodeDb(
   }
 }
 
-/** Extract and parse every assistant message of `session_message`. */
-function fetchAssistantStepRows(db: SqliteReadConnection): AssistantStepRow[] {
+/**
+ * Every assistant message of `session_message`, parsed into step rows. The
+ * single shared scan behind the stats queries and the TUI status panel
+ * (which passes a `sinceMs` lower bound so its 7-day window prunes old rows
+ * in SQL). Returns null when the database is unavailable.
+ */
+export function queryAssistantStepRows(
+  db: SqliteReadConnection | null,
+  sinceMs?: number,
+): AssistantStepRow[] | null {
+  if (db === null) return null
+  const hasTimeFloor = typeof sinceMs === "number" && Number.isFinite(sinceMs)
   const rawRows = db
-    .prepare("SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant'")
-    .all()
+    .prepare(
+      hasTimeFloor
+        ? "SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant' AND time_created >= ?"
+        : "SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant'",
+    )
+    .all(...(hasTimeFloor ? [sinceMs] : []))
 
   const stepRows: AssistantStepRow[] = []
   for (const rawRow of rawRows) {
@@ -122,7 +136,7 @@ function clampPaginationValue(value: number, minimum: number, maximum: number): 
 /** KPI overview for GET /api/overview. A "step" is one assistant message. */
 export function queryOverview(db: SqliteReadConnection | null): OverviewStats | null {
   if (db === null) return null
-  const stepRows = fetchAssistantStepRows(db)
+  const stepRows = queryAssistantStepRows(db) ?? []
 
   const todayDateKey = toLocalDateKey(Date.now())
   let todayTokens = 0
@@ -163,14 +177,14 @@ export function queryDailyTrend(
   days: number = 30,
 ): DailyTrendPoint[] | null {
   if (db === null) return null
-  const stepRows = fetchAssistantStepRows(db)
+  const stepRows = queryAssistantStepRows(db) ?? []
   return bucketDailyTrend(stepRows, days)
 }
 
 /** Per-model leaderboard for GET /api/models, sorted by total tokens. */
 export function queryModelMetrics(db: SqliteReadConnection | null): ModelMetric[] | null {
   if (db === null) return null
-  const stepRows = fetchAssistantStepRows(db)
+  const stepRows = queryAssistantStepRows(db) ?? []
   return computeModelMetrics(stepRows)
 }
 
@@ -185,7 +199,7 @@ export function queryAgentStats(db: SqliteReadConnection | null): AgentStat[] | 
     return [{ agent: readAgentName(rowRecord["agent"]), sessionId: coerceText(rowRecord["id"]) }]
   })
 
-  const stepRows = fetchAssistantStepRows(db)
+  const stepRows = queryAssistantStepRows(db) ?? []
   return computeAgentStats(memberships, stepRows)
 }
 

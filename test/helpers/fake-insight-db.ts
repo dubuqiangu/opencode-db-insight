@@ -69,6 +69,7 @@ export function createFakeInsightDatabase(
     }
     if (sql.includes("FROM session_message")) {
       const isPerSessionQuery = sql.includes("session_id = ?")
+      const hasTimeFloor = sql.includes("time_created >= ?")
       return {
         all: (...parameters: unknown[]) => {
           const messageFixtures = isPerSessionQuery
@@ -78,7 +79,7 @@ export function createFakeInsightDatabase(
               Object.values(scenario.messagesBySessionId)
                 .flat()
                 .filter((messageFixture) => messageFixture.type === "assistant")
-          return messageFixtures.map((messageFixture, messageIndex) => ({
+          const messageRows = messageFixtures.map((messageFixture, messageIndex) => ({
             id: messageFixture.id ?? `msg_${messageIndex}`,
             session_id: isPerSessionQuery ? String(parameters[0] ?? "") : "ses_panel_scan",
             type: messageFixture.type,
@@ -87,6 +88,12 @@ export function createFakeInsightDatabase(
             time_updated: messageFixture.timeCreated ?? DEFAULT_MESSAGE_TIMESTAMP,
             data: JSON.stringify(messageFixture.data),
           }))
+          // The panel scan may carry a time_created >= ? floor.
+          return hasTimeFloor
+            ? messageRows.filter(
+                (messageRow) => Number(messageRow.time_created) >= Number(parameters[0]),
+              )
+            : messageRows
         },
         get: () => undefined,
       }

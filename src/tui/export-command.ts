@@ -26,6 +26,7 @@ import {
 import { renderSessionMarkdown } from "../export/markdown.ts"
 import { formatLocalTimestamp } from "../export/format-helpers.ts"
 import { buildExportSlug, findSessionSummaryById, flattenSystemPromptForExport } from "../web/api.ts"
+import { showInsightToast } from "./tui-context.ts"
 
 /** How many recent sessions the picker dialog offers. */
 export const RECENT_SESSION_PICK_COUNT = 20
@@ -54,23 +55,6 @@ function readDialogSelect(context: unknown): DialogSelectFunction | null {
       : null
   } catch {
     return null
-  }
-}
-
-/** Show a toast; any missing API or failure degrades silently. */
-function showInsightToast(
-  context: unknown,
-  message: string,
-  variant: "info" | "error" | "success",
-): void {
-  try {
-    const contextRecord = context as
-      | { ui?: { toast?: { show?: (toastOptions: unknown) => void } } }
-      | null
-      | undefined
-    contextRecord?.ui?.toast?.show?.({ message, variant })
-  } catch {
-    // The host TUI may not implement toasts — nothing we can do about it.
   }
 }
 
