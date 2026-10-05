@@ -53,3 +53,16 @@
 - /insight-export 斜杠命令：无参 dialog.select 最近 20 会话，进程内直连查询层+渲染器，落盘 ./insight-exports/；全防御式 context 访问
 - slug/文件名纯函数（中文保留、非法字符替换、代理对安全截断）、flattenSystemPromptForExport、fake-insight-db 测试基座
 - 测试 24 用例（8 文件名 + 7 路由含真实库集成 + 6 命令含写盘失败容错 + fake db 基座）
+
+## [M6] 终端面板与命令
+
+### Added
+- /insight 命令：storage 读端口 → 三平台打开浏览器（win start/darwin open/xdg-open），非回环 URL 拒绝，失败降级 toast 手动 URL
+- /insight-status 面板：今日总量+命中率、模型 TOP5 横条、近 7 日字符条形；60s 定时刷新、teardown 清理、db 连接即用即关
+- 数据卫生：db 缺失/异常 →「db-insight: 数据不可用」；空结果 →「今日暂无用量」；行宽 ≤40 字符（代理对安全）
+- tui-context/command-registry/status-panel-{data,text,controller} 模块化拆分；tui.tsx 薄装配（Solid signal）
+- 测试 29 用例（命令矩阵 8 + 面板文本/采集/控制器 12 + 注册与 slot 6 + fake db 扩展）
+
+### Technical Debt（M7 处理）
+- status-panel-data.ts 重复一条只读 SELECT（queries.ts 无今日分组导出），建议上提为 queries.ts 导出
+- showInsightToast 在 tui-context.ts 与 export-command.ts 各一份，M7 合并

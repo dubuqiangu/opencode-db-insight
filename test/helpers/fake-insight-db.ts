@@ -1,5 +1,5 @@
 /**
- * A fake SqliteReadConnection for export-route / export-command tests:
+ * A fake SqliteReadConnection for export / panel / command tests:
  * serves canned session_v2 / session_message / instruction_state /
  * instruction_blob rows in the raw wire shapes the parsers in
  * src/db/rows.ts expect, without touching a real database.
@@ -7,12 +7,17 @@
 
 import type { SessionSummary, SqliteReadConnection, SqliteStatement } from "../../src/db/types.ts"
 
+/** Fallback message timestamp when a fixture does not pin one. */
+const DEFAULT_MESSAGE_TIMESTAMP = Date.UTC(2026, 9, 5, 6, 31)
+
 /** One fake message, before it is turned into a wire row. */
 export interface FakeMessageFixture {
   type: string
   data: unknown
   seq?: number
   id?: string
+  /** epoch-ms of the message; panel "today" tests pin this. */
+  timeCreated?: number
 }
 
 /** Everything the fake database serves, grouped per table. */
@@ -63,17 +68,23 @@ export function createFakeInsightDatabase(
       }
     }
     if (sql.includes("FROM session_message")) {
+      const isPerSessionQuery = sql.includes("session_id = ?")
       return {
         all: (...parameters: unknown[]) => {
-          const sessionId = String(parameters[0] ?? "")
-          const messageFixtures = scenario.messagesBySessionId[sessionId] ?? []
+          const messageFixtures = isPerSessionQuery
+            ? scenario.messagesBySessionId[String(parameters[0] ?? "")] ?? []
+            : // The status-panel scan asks for every assistant message with
+              // no session filter; the SQL itself selects type = 'assistant'.
+              Object.values(scenario.messagesBySessionId)
+                .flat()
+                .filter((messageFixture) => messageFixture.type === "assistant")
           return messageFixtures.map((messageFixture, messageIndex) => ({
             id: messageFixture.id ?? `msg_${messageIndex}`,
-            session_id: sessionId,
+            session_id: isPerSessionQuery ? String(parameters[0] ?? "") : "ses_panel_scan",
             type: messageFixture.type,
             seq: messageFixture.seq ?? messageIndex,
-            time_created: Date.UTC(2026, 9, 5, 6, 31),
-            time_updated: Date.UTC(2026, 9, 5, 6, 31),
+            time_created: messageFixture.timeCreated ?? DEFAULT_MESSAGE_TIMESTAMP,
+            time_updated: messageFixture.timeCreated ?? DEFAULT_MESSAGE_TIMESTAMP,
             data: JSON.stringify(messageFixture.data),
           }))
         },

@@ -1,47 +1,47 @@
 /** @jsxImportSource @opentui/solid */
 /**
- * opencode-db-insight TUI entry.
- * Registers slash commands (/insight, /insight-status, /insight-export);
- * this file only wires commands, the logic lives in src/tui/ (DESIGN.md §8).
+ * opencode-db-insight TUI entry (DESIGN.md §8, M6): thin assembly only.
+ * Command/slot registration lives in src/tui/command-registry.ts, the
+ * panel refresh loop in src/tui/status-panel-controller.ts; this file just
+ * wires them together and holds the one JSX render the slot needs.
  */
+import { createSignal } from "solid-js"
 import { Plugin } from "@opencode/plugin/tui"
-import { runExportCommand } from "./tui/export-command.ts"
+
+import {
+  registerInsightTuiCommands,
+  registerStatusPanelSlot,
+  shouldRenderStatusPanel,
+} from "./tui/command-registry.ts"
+import { createStatusPanelController } from "./tui/status-panel-controller.ts"
 
 export default Plugin.define({
   id: "opencode-db-insight",
   setup(context: any) {
-    const keymapDispose = context.keymap?.layer(() => ({
-      mode: "global",
-      commands: [
-        {
-          id: "opencode-db-insight.open",
-          title: "打开 db-insight 看板",
-          bind: "",
-          palette: true,
-          slash: { name: "insight", aliases: [] },
-          run: () => {
-            context.ui?.toast?.show?.({
-              message: "db-insight 看板开发中（见 tasks.md M6）",
-              variant: "info",
-            })
-          },
-        },
-        {
-          id: "opencode-db-insight.export",
-          title: "导出会话为 Markdown",
-          bind: "",
-          palette: true,
-          // arguments: true makes the raw text after "/insight-export " reach
-          // run(input) — an explicit session id skips the picker dialog.
-          slash: { name: "insight-export", aliases: [], arguments: true },
-          run: (commandInput?: string) => {
-            void runExportCommand(context, commandInput)
-          },
-        },
-      ],
-    }))
+    // Reactive panel text: the slot render reads the signal, the controller
+    // pushes every (re)computed text into it.
+    const [statusPanelText, setStatusPanelText] = createSignal("db-insight: 初始化…")
+    const statusPanelController = createStatusPanelController({
+      onPanelTextChanged: (refreshedPanelText) => {
+        setStatusPanelText(refreshedPanelText)
+      },
+    })
+
+    const commandsDispose = registerInsightTuiCommands(context)
+    const slotDispose = registerStatusPanelSlot(context, (slotInput) =>
+      shouldRenderStatusPanel(slotInput) ? (
+        <box>
+          <text>{statusPanelText()}</text>
+        </box>
+      ) : (
+        <box></box>
+      ),
+    )
+
     return () => {
-      keymapDispose?.()
+      commandsDispose?.()
+      slotDispose?.()
+      statusPanelController.dispose()
     }
   },
 })
