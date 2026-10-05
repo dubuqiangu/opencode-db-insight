@@ -9,7 +9,7 @@ import type { IncomingMessage, RequestListener, ServerResponse } from "node:http
 import { readFile } from "node:fs/promises"
 
 import type { SqliteReadConnection } from "../db/types.ts"
-import { handleApiRequest } from "./api.ts"
+import { handleApiRequest, type RawTextResponse } from "./api.ts"
 import { matchApiRoute } from "./router.ts"
 import { contentTypeForFilePath, resolveStaticFilePath } from "./static-files.ts"
 
@@ -44,6 +44,20 @@ function respondWithText(response: ServerResponse, statusCode: number, bodyText:
     "Content-Length": String(Buffer.byteLength(bodyText)),
   })
   response.end(bodyText)
+}
+
+/** Write a raw (non-JSON) API body, e.g. the markdown export download. */
+function respondWithRawText(
+  response: ServerResponse,
+  statusCode: number,
+  rawText: RawTextResponse,
+): void {
+  response.writeHead(statusCode, {
+    "Content-Type": rawText.contentType,
+    "Content-Length": String(Buffer.byteLength(rawText.text)),
+    ...rawText.headers,
+  })
+  response.end(rawText.text)
 }
 
 /** Serve one static file (or the right 404) for a non-API pathname. */
@@ -114,7 +128,11 @@ async function handleInsightExchange(
       databasePath: dependencies.databasePath,
       serverPort: dependencies.serverPortProvider(),
     })
-    respondWithJson(response, apiResponse.statusCode, apiResponse.body)
+    if (apiResponse.rawText !== undefined) {
+      respondWithRawText(response, apiResponse.statusCode, apiResponse.rawText)
+    } else {
+      respondWithJson(response, apiResponse.statusCode, apiResponse.body)
+    }
     return
   }
 

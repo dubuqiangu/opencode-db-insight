@@ -17,6 +17,7 @@ export type InsightRoute =
   | { routeName: "todo" }
   | { routeName: "sessionMessages"; sessionId: string }
   | { routeName: "sessionSystemPrompt"; sessionId: string }
+  | { routeName: "sessionExport"; sessionId: string }
 
 /** Percent-decode a single path segment; malformed encoding yields "". */
 function decodePathSegment(segment: string): string {
@@ -60,6 +61,15 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
       if (pathSegments[3] === "messages") return { routeName: "sessionMessages", sessionId }
       if (pathSegments[3] === "system-prompt") return { routeName: "sessionSystemPrompt", sessionId }
       return null
+    }
+    case "export": {
+      // /api/export/session/:id.md — the ".md" suffix is literal (DESIGN §6).
+      if (pathSegments.length !== 4 || pathSegments[2] !== "session") return null
+      const sessionSegment = pathSegments[3]
+      if (!sessionSegment.endsWith(".md")) return null
+      const sessionId = decodePathSegment(sessionSegment.slice(0, -3))
+      if (sessionId === "") return null
+      return { routeName: "sessionExport", sessionId }
     }
     default:
       return null
