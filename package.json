@@ -1,0 +1,22 @@
+{
+  "name": "opencode-db-insight",
+  "version": "0.0.1",
+  "description": "OpenCode V2 plugin: historical usage dashboard, session replay and markdown export from the local opencode database",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tui": "./src/tui.tsx"
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types test/",
+    "check": "npx esbuild src/index.ts && npx esbuild src/tui.tsx --loader:.tsx=tsx --jsx=automatic"
+  },
+  "dependencies": {
+    "@opencode/plugin": "latest"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.5.8",
+    "@opentui/solid": ">=0.5.8",
+    "solid-js": ">=1.9.0"
+  }
+}
