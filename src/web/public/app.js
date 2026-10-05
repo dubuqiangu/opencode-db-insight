@@ -4,7 +4,15 @@
  * data-source.js（当前 mock，M2 后切真实 API 只改那一处）。
  */
 
-import { fetchOverview, fetchTrend, fetchModels, fetchAgents, fetchSessions } from "./data-source.js";
+import {
+  fetchOverview,
+  fetchTrend,
+  fetchModels,
+  fetchAgents,
+  fetchSessions,
+  fetchHealth,
+  MAX_TREND_DAYS,
+} from "./data-source.js";
 import { formatTokens, formatPercent, escapeHtml } from "./format.js";
 import { onSchemeChange } from "./theme.js";
 import { renderKpiRow } from "./components/kpi-card.js";
@@ -14,14 +22,16 @@ import { renderToolBars } from "./components/tool-bars.js";
 import { renderTokenFunnel } from "./components/token-funnel.js";
 import { renderModelTable } from "./components/model-table.js";
 import { renderSessionList } from "./components/session-list.js";
+import { renderSessionReplay } from "./components/session-replay.js";
 import { renderError } from "./components/state-views.js";
 
-/** 日历热力图固定窗口：53 周。 */
-const TREND_CALENDAR_WINDOW_DAYS = 371;
+/** 日历热力图固定窗口 = 后端 MAX_TREND_DAYS（366 天 ≈ 52.3 周，缺的天按零渲染）。 */
+const TREND_CALENDAR_WINDOW_DAYS = MAX_TREND_DAYS;
 
 const state = {
   range: "30",
   modelFilter: null,
+  healthStatus: "连接中…",
   cache: {
     overview: undefined,
     calendarTrend: undefined,
@@ -58,8 +68,21 @@ function updateStatus() {
     statusTextElement.textContent = `${state.failedSections.size} 个区块加载失败`;
   } else {
     statusDotElement.className = "status-dot ok";
-    statusTextElement.textContent = "数据源：mock（M2 后切真实 API）";
+    statusTextElement.textContent = state.healthStatus;
   }
+}
+
+/** 探活 /api/health：dbStatus 驱动顶栏文案（失败降级，不阻塞区块加载）。 */
+async function loadHealthStatus() {
+  try {
+    const health = await fetchHealth();
+    state.healthStatus = health.dbStatus === "ok"
+      ? `已连接 opencode.db · v${health.version}`
+      : "数据库不可用（503）";
+  } catch {
+    state.healthStatus = "API 不可达";
+  }
+  updateStatus();
 }
 
 function markSection(sectionName, didSucceed) {
@@ -199,42 +222,19 @@ function bindRangeSwitch() {
 function routeByHash() {
   const sessionMatch = /^#\/session\/(.+)$/.exec(window.location.hash);
   if (sessionMatch !== null) {
-    renderSessionPlaceholder(sessionMatch[1]);
+    dashboardElement.hidden = true;
+    sessionViewElement.hidden = false;
+    renderSessionReplay(sessionViewElement, sessionMatch[1]);
     return;
   }
   dashboardElement.hidden = false;
   sessionViewElement.hidden = true;
 }
 
-/** M4 回放页占位：保持路由可达，避免白屏或 404 感。 */
-function renderSessionPlaceholder(sessionId) {
-  dashboardElement.hidden = true;
-  sessionViewElement.hidden = false;
-  sessionViewElement.innerHTML = `
-    <a class="back-link" href="#/">返回看板</a>
-    <article class="panel">
-      <header class="panel-head">
-        <div>
-          <h2>会话回放</h2>
-          <p class="panel-sub">角色时间线 + 系统提示词 + turn 级成本条 —— M4 里程碑交付</p>
-        </div>
-      </header>
-      <div class="panel-body">
-        <div class="state-view">
-          <svg class="state-icon" width="34" height="34" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8 5.5v13l10-6.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-            <path d="M3 21h18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-          </svg>
-          <div>回放视图还在施工中（M4）</div>
-          <div class="session-id-line">目标会话 ID：${escapeHtml(sessionId)}</div>
-        </div>
-      </div>
-    </article>`;
-}
-
 /* ---------- 启动 ---------- */
 function startInitialLoad() {
   renderKpiRow(kpiRowElement, null);
+  loadHealthStatus();
   loadOverviewSection();
   loadTrendSection();
   loadCalendarSection();

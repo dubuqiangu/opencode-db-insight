@@ -292,8 +292,8 @@
 }
 .tooltip .tooltip-row .row-value { margin-left: auto; padding-left: 14px; font-weight: 600; }
 
-/* ---------- 会话回放占位页（M4） ---------- */
-.session-view { max-width: 860px; margin: 0 auto; }
+/* ---------- 会话回放页 ---------- */
+.session-view { max-width: 960px; margin: 0 auto; }
 .session-view .panel { margin-bottom: 16px; }
 .back-link { display: inline-block; margin-bottom: 14px; font-size: 13px; }
 .back-link::before { content: "← "; }

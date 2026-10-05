@@ -1,0 +1,252 @@
+/* ============================================================
+   opencode-db-insight · 单会话回放视图（M4）
+   头部 / 系统提示词面板 / 角色时间线 / turn 成本条 / 分页
+   ============================================================ */
+
+/* ---------- 头部 ---------- */
+.replay-title { font-size: 16px; margin: 0; }
+.replay-header-stats {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.replay-header-stats b { color: var(--text); font-weight: 600; font-size: 14px; }
+
+/* ---------- 系统提示词面板（默认收起） ---------- */
+.replay-prompt summary,
+.replay-reasoning summary,
+.replay-tool summary {
+  cursor: pointer;
+  user-select: none;
+}
+.replay-prompt summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+.replay-prompt summary:hover { color: var(--text); }
+.replay-prompt[open] summary { margin-bottom: 6px; }
+
+/* ---------- 时间线骨架（左侧竖线 + 图标） ---------- */
+.replay-timeline {
+  position: relative;
+  padding-top: 4px;
+}
+.replay-timeline::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+.replay-node {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  padding: 10px 0;
+}
+.replay-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  font-size: 14px;
+  z-index: 1;
+}
+.role-user .replay-icon { border-color: var(--blue); }
+.role-assistant .replay-icon { border-color: var(--accent); }
+
+.replay-body { flex: 1; min-width: 0; }
+
+.replay-node .replay-time {
+  position: absolute;
+  top: 12px;
+  right: 0;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+/* ---------- 正文气泡 ---------- */
+.replay-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text);
+}
+.role-user .replay-text {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-inline-start: 3px solid var(--blue);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+.replay-text.muted {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  padding: 8px 12px;
+  border-inline-start: 2px dashed var(--border-strong);
+}
+
+.replay-assistant-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-height: 20px;
+}
+.replay-model-chip {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* ---------- reasoning 折叠块（默认展开） ---------- */
+.replay-reasoning {
+  margin: 6px 0;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+.replay-reasoning summary {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  list-style: none;
+}
+.replay-reasoning summary::before { content: "▾ "; }
+.replay-reasoning:not([open]) summary::before { content: "▸ "; }
+.replay-reasoning summary::-webkit-details-marker { display: none; }
+
+/* ---------- 工具调用折叠块 ---------- */
+.replay-tool {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 8px 12px;
+}
+.replay-tool summary {
+  font-size: 12.5px;
+  color: var(--text);
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.replay-tool summary::before { content: "▾ "; color: var(--text-faint); }
+.replay-tool:not([open]) summary::before { content: "▸ "; }
+.replay-tool summary::-webkit-details-marker { display: none; }
+.replay-tool summary code {
+  font-family: var(--font-num);
+  color: var(--amber);
+}
+.replay-tool-size { font-size: 10.5px; color: var(--amber); }
+
+.replay-code {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow: auto;
+  max-height: 340px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+}
+.replay-code-head {
+  margin-top: 10px;
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+}
+
+/* ---------- 通知行（system / model-switched / compaction） ---------- */
+.replay-notice {
+  position: relative;
+  margin: 10px 0 10px 44px;
+  padding: 2px 90px 2px 12px;
+  border-inline-start: 2px solid var(--border-strong);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.replay-notice em { font-style: italic; }
+.replay-notice .replay-time { position: absolute; right: 0; top: 2px; }
+
+/* ---------- turn 级成本条 ---------- */
+.turn-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.turn-model-marker {
+  flex: none;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--amber);
+  border: 1px dashed var(--amber);
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: help;
+}
+.turn-bar {
+  flex: 1;
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--border);
+}
+.turn-seg { display: block; height: 100%; }
+.turn-seg:hover { outline: 1px solid var(--text); outline-offset: 1px; }
+.seg-read { background: var(--accent); }
+.seg-input { background: var(--amber); }
+.seg-output { background: var(--purple); }
+.turn-bar-total {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+  cursor: help;
+}
+
+/* ---------- 加载更多 ---------- */
+.load-more-button {
+  display: block;
+  margin: 16px auto;
+  padding: 6px 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--accent);
+  transition: background 0.15s, border-color 0.15s;
+}
+.load-more-button:hover { background: var(--accent-soft); border-color: var(--accent); }
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 640px) {
+  .replay-node { gap: 10px; }
+  .replay-node .replay-time { display: none; }
+  .replay-notice { margin-left: 0; padding-right: 0; }
+  .replay-notice .replay-time { display: none; }
+  .replay-header-stats { gap: 10px; font-size: 11.5px; }
+}

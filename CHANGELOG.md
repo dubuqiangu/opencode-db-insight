@@ -54,6 +54,24 @@
 - slug/文件名纯函数（中文保留、非法字符替换、代理对安全截断）、flattenSystemPromptForExport、fake-insight-db 测试基座
 - 测试 24 用例（8 文件名 + 7 路由含真实库集成 + 6 命令含写盘失败容错 + fake db 基座）
 
+## [M3-wiring] 看板联调接线
+
+### Changed
+- data-source.js 切换到真实 API（USE_MOCK=false）：overview/trend/models/agents/sessions 五路 fetch + 形状适配器单独导出
+- trend/sessions 裸数组兼容（byModel 空时趋势降级为总量单层、sessions 无 total 时脚注降级）；模型表无 cacheSupported 时按 hitRate===0 判定"通道无缓存"
+- 日历窗口 371→366 对齐后端 MAX_TREND_DAYS；顶栏接 /api/health 探活
+- KPI 对账实测：overview.todayTokens === /api/trend 末日总量（86,178,515 一致）
+
+## [M4] 单会话回放视图
+
+### Added
+- #/session/:id 回放页：角色时间线（🧑用户/🤖助手/💭reasoning 折叠/🔧工具块含超长折叠/🔔系统与压缩事件斜体行）
+- turn 级成本条：缓存读/实付/输出三段分色 + hover token + ⚑ 模型切换标
+- 系统提示词折叠面板（instruction key 分块展示）；旧表会话 404 → 专门文案
+- 大会话性能：>200 条消息"加载更多"分块渲染 + 会话切换渲染竞态守卫
+- 组件：session-replay/replay-timeline/replay-turn-bar + replay.css（深浅主题走既有变量）
+- 离线验证：esbuild 18/18、M4 冒烟 46/46（fetch 打桩回真实后端裸形状）
+
 ## [M6] 终端面板与命令
 
 ### Added

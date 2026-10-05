@@ -56,7 +56,11 @@ export function renderSessionList(container, sessionPayload, modelFilter) {
   const footNoteParts = [];
   if (modelFilter !== null) footNoteParts.push(`已过滤掉 ${hiddenAfterFilterCount} 条非 ${modelFilter} 会话`);
   if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);
-  footNoteParts.push(`全库共 <b class="num">${sessionPayload.total.toLocaleString("en-US")}</b> 个会话`);
+  if (sessionPayload.total === null || sessionPayload.total === undefined) {
+    footNoteParts.push("按最近更新时间倒序");
+  } else {
+    footNoteParts.push(`全库共 <b class="num">${sessionPayload.total.toLocaleString("en-US")}</b> 个会话`);
+  }
 
   container.innerHTML = `
     <table class="data-table" aria-label="会话列表">

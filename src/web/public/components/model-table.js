@@ -45,7 +45,8 @@ function sortModels(modelMetrics) {
 }
 
 function hitRateCell(metric) {
-  if (metric.cacheSupported === false) {
+  // 通道不报缓存：DESIGN §10 —— hitRate 为 0 视为 provider 侧不上报缓存
+  if (metric.cacheSupported === false || (metric.hitRate === 0 && metric.tokens > 0)) {
     return `<span class="hit-pill low">—</span> <span class="badge no-cache" title="该通道不上报缓存用量，命中率不可得（DESIGN §10）">通道无缓存</span>`;
   }
   const isHigh = metric.hitRate >= 0.9;

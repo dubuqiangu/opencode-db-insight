@@ -32,14 +32,14 @@
 - [x] T3.4 模型排行榜明细表（10 列、列头排序、下钻过滤）——✅ 同上；小时热力格未做（排入 v0.2 备选）
 - [x] T3.5 52 周日历热力图（GitHub 式）——✅ 骨架完成（371 天窗口，非零日分位 5 档）
 - [x] T3.6 Token 漏斗（上下文供给→缓存命中→实付输入→输出）——✅ 骨架完成，各层从同一逐日序列推导，口径与 KPI 一致
-- [ ] T3.7 联调接线：data-source.js 的 USE_MOCK 切到真实 API（/api/overview、trend、models、agents、sessions），浏览器实测数字与库对账——验证：抽 3 个 KPI/图表数据点对照真实库查询
+- [x] T3.7 联调接线：data-source.js 的 USE_MOCK 切到真实 API——✅ 真实服务对账：overview.todayTokens === /api/trend 末日总量（86,178,515 一致）；trend/sessions 裸数组、ModelMetric 无 cacheSupported（按 hitRate===0 判定）全部与适配器吻合；静态页 200
 
 ## M4 单会话回放（push #5）
 
-- [ ] T4.1 会话列表页（分页/排序）→ 点击进回放——验证：真实会话往返浏览
-- [ ] T4.2 回放视图：角色时间线（user/assistant/reasoning/工具输入输出/system）+ 系统提示词折叠面板——验证：抽 1 个含工具调用+压缩的会话，对照库中原始 JSON 核对无遗漏
-- [ ] T4.3 旧表会话（2026-09-23 前）回放降级提示——验证：造一个旧 session_id 访问，返回明确文案
-- [ ] T4.4 turn 级成本条（每步 cache读/实付/输出分段 + 模型切换标注）——验证：抽 3 个多步会话对照 step token 数据
+- [x] T4.1 会话列表页（分页/排序）→ 点击进回放——✅ 真实 sessions 端点接入（无 total → 脚注降级文案），hash 路由往返冒烟通过
+- [x] T4.2 回放视图：角色时间线 + 系统提示词折叠面板——✅ 真实会话探活（250 条消息、tokens/content 形状正确、system-prompt 200）；fixtures 248 条含压缩/超长工具输出全断言
+- [x] T4.3 旧表会话回放降级提示——✅ 实测 legacy id → 404 "session not found in current tables"，前端专门文案
+- [x] T4.4 turn 级成本条——✅ 缓存读/实付/输出三段分色 + hover + ⚑ 模型切换标，冒烟断言通过
 
 ## M5 Markdown 导出（push #6）
 

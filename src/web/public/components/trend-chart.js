@@ -22,9 +22,18 @@ const MAX_STACKED_MODELS = 7; // 超出的并入「其他」
 const hiddenModelIds = new Set();
 let hitRateVisible = true;
 
-/** 窗口内每个模型的总 token，降序取前 N。 */
+/** 窗口内每个模型的总 token，降序取前 N；byModel 为空（真实 API 现状）时降级为「总量」单层。 */
 function rankModels(trendData) {
-  const windowSums = trendData.byModel.map((series) => ({
+  const byModel = Array.isArray(trendData.byModel) ? trendData.byModel : [];
+  if (byModel.length === 0) {
+    return [{
+      modelId: "总量",
+      total: trendData.points.reduce((sum, point) => sum + point.input + point.read + point.output, 0),
+      values: trendData.points.map((point) => point.input + point.read + point.output),
+    }];
+  }
+
+  const windowSums = byModel.map((series) => ({
     modelId: series.modelId,
     total: series.values.reduce((sum, value) => sum + value, 0),
     values: series.values,

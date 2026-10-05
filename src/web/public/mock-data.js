@@ -9,18 +9,18 @@
  *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts ModelMetric）
  *   GET /api/agents    → buildAgentStats()（stats/agent-fingerprint.ts AgentStat）
  *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）
+ *   GET /api/session/:id/* → 回放 fixtures 见 mock-replay-data.js
  *
  * 全部数据由同一个确定性随机源在模块加载时生成一次，
  * 各视图的"今日"数字从同一份逐日序列推导——KPI 卡、趋势图、漏斗、
- * 热力图彼此口径一致。M2 联调时把 data-source.js 切到真实 API 即可，
- * 组件不感知。
+ * 热力图彼此口径一致。联调后 data-source.js 默认走真实 API，组件不感知。
  *
  * 量级参考真实重度用户：今日 ~5 亿 token、命中率 ~97%、月活跃模型 20+、
  * 深夜活跃为主。
  */
 
-/** 日历热力图覆盖 53 周（371 天），趋势图最大窗口与之相同。 */
-export const CALENDAR_DAYS = 371;
+/** 趋势窗口上限 = 后端 MAX_TREND_DAYS（stats/daily-buckets.ts，366）。 */
+export const CALENDAR_DAYS = 366;
 
 const DAY_COUNT = CALENDAR_DAYS;
 const SEED = 20261006;
@@ -348,7 +348,7 @@ function buildSessionSummaries() {
     const tokens = Math.round(randomInRange(1_800_000, 72_000_000));
 
     sessions.push({
-      id: "ses_" + (0x8f3a0000 + sessionIndex * 7919).toString(16).padStart(8, "0"),
+      id: sessionIndex === 0 ? "ses_replay_demo" : "ses_" + (0x8f3a0000 + sessionIndex * 7919).toString(16).padStart(8, "0"),
       title: SESSION_TITLE_POOL[sessionIndex % SESSION_TITLE_POOL.length],
       modelId: modelPick.modelId,
       agent: AGENT_TOOL_MIXES[sessionIndex % AGENT_TOOL_MIXES.length].agent,
