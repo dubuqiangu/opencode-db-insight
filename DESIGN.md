@@ -32,9 +32,28 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 - 系统提示词本体在 `instruction_blob`（按内容哈希存储，含环境块、工具目录、日期），可还原会话当时的指令注入；
 - 工具调用的输入参数与执行输出完整保留在 tool part 的 `state.input` / `state.output`。
 
-### 2.3 业界看板调研
+### 2.3 业界看板调研（@librarian 已完成，star 数实时查证于 2026-10-05）
 
-@librarian 全网调研（LiteLLM / Helicone / Langfuse / 个人 token 统计工具的指标与图表选型）**进行中**，返回后校准 §7 图表选型并在本文档记录变更。
+**同类项目已存在，但组合定位是空位**：ccusage（18.9k★）有数据无交互 web 页；claude-lens（250★）有完整页面规格书但不支持 OpenCode 数据源；opencode-stats（75★，Rust+ratatui）只有终端无 web；touchkale/opencode-dashboard（3★，单文件 Python）已验证"读同一个 opencode.db + 手绘 SVG"可行。**"OpenCode 原生插件 + web 看板/回放 + 终端面板"这个组合目前无人占据**——指标与图表选型不需要再发明，直接采用业界已验证形态。
+
+关键可借鉴仓库：
+
+| 仓库 | Stars | License | 借鉴点 |
+|---|---:|---|---|
+| ryoppippi/ccusage | 18,877 | MIT | 五种聚合口径（daily/weekly/monthly/session/blocks）；cache read/write 分列；models.dev 定价缓存 |
+| foyzulkarim/claude-lens | 250 | MIT | **页面规格书 `specs/claude-lens-pages.md` 可当 PRD 用**；三级数据精度标签；Session Detail/Turn Inspector 两级回放 |
+| Cateds/opencode-stats | 75 | MIT | 终端看板直接竞品（Rust+ratatui 读 OpenCode SQLite）；时间范围三档热键 |
+| open-webui/open-webui | 153,985 | 自定义 | Analytics 布局范式：KPI 行 → 大时序图 → 双明细表 → 行级下钻 |
+| touchkale/opencode-dashboard | 3 | MIT | 单文件零依赖读同一 db 手绘 SVG——轻量档可行性证明 |
+
+业界共识图表选型（已验证，直接采用）：模型占比→表+%列或环形图；每日消耗→**堆叠面积/堆叠条**（按模型分色）；趋势→折线+上周期 ghost line；工具调用→**横向条形**；长期活跃→**GitHub 式日历热力图**（CLI 圈最讨喜的图，三家在用）；时段习惯→小时×星期二维热力；成本异常→直方图+p50/p90/p99 刻度线。
+
+差异化设计采纳（v0.1 内实现的排进任务，其余进 §13 备选）：
+1. **数据精度分级标签**（🟢 DB 实值 / 🟡 估算）：本库 cost 字段常为 0，UI 必须明示每个数字的可信度；
+2. **KPI 卡环比 delta（▲▼ vs 上一等长周期）**；
+3. **GitHub 式 52 周日历热力图**作主视图之一；
+4. **Token 漏斗**（上下文供给 → 缓存命中 → 实付输入 → 输出）——叙事图，比纯占比表直观；
+5. **回放视图升级为两级**：会话级（角色时间线）+ turn 级成本条。
 
 ## 3. 总体架构
 
@@ -77,6 +96,7 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 | 会话存活 | time_created→time_updated 时长分布、idle_outcome 计数 | 短命会话占比 |
 | 压缩事件 | compaction 消息计数（按会话/按日） | 马拉松会话信号 |
 | todo 完成率 | completed / total | `todo` 表 |
+| 数字精度标签 | cost 为 DB 实值标 🟢；tokens 换算金额标 🟡 估算 | 采纳 claude-lens 精度分级，UI 全局生效 |
 
 ## 6. Web API 设计（全部 GET，JSON）
 
@@ -92,15 +112,15 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 | `/api/export/session/:id.md` | 服务端渲染的 Markdown 导出 |
 | `/api/health` | 端口/版本/db 可达性探活 |
 
-## 7. 前端与图表选型（v1，待调研校准）
+## 7. 前端与图表选型（v1.1，已按 §2.3 调研结论校准）
 
-- 零构建前端：原生 HTML + ES module JS + 手写 CSS，图表不引重型库——折线/面积用 **uPlot**（约 50KB，本地 vendored），环形图与横向条形图用手写 SVG（实现量小、无依赖）；
-- 布局模式（业界通用，最终以调研结果校准）：
-  1. 顶部 KPI 卡片行（今日 token、命中率、步骤、会话数）
-  2. 图表网格：逐日消耗堆叠面积图 + 命中率折线（同轴双图）；模型/agent 占比环形图；工具调用横向条形图；小时热力格
-  3. 模型排行榜明细表（§5 单点指标列）
-  4. 会话列表 → 点击进入**单会话回放视图**：左列角色时间线（user / assistant 文本 / reasoning / 工具输入输出 / system），系统提示词折叠面板
-- 深浅色主题跟随系统 `prefers-color-scheme`。
+- 零构建前端：原生 HTML + ES module JS + 手写 CSS，图表不引重型库——折线/面积用 **uPlot**（约 50KB，本地 vendored），环形图、横向条形、日历热力、漏斗用手写 SVG（实现量小、无依赖）；
+- 布局采用业界三段式共识（OpenWebUI 范式）：
+  1. **KPI 卡片行**：今日 token（in/out 分列）、今日命中率（▲▼ 环比昨日）、步骤数、会话数；每张卡含 sparkline；数字带精度标签（🟢 实值 / 🟡 估算）
+  2. **图表网格**：逐日消耗**堆叠面积图（按模型分色）**+ 命中率折线；**52 周日历热力图**；工具调用横向条形图；Token 漏斗（供给→缓存命中→实付→输出）
+  3. **明细表区**：模型排行榜（§5 单点指标列，可排序）→ 会话列表（行可点开 → 回放视图）
+- **单会话回放视图**（两级）：会话级角色时间线（user / assistant 文本 / reasoning / 工具输入输出 / system）+ 系统提示词折叠面板；turn 级每步成本条（cache 读/实付/输出分段，模型切换标注）
+- 深浅色主题跟随系统 `prefers-color-scheme`；图表点击可下钻到过滤后的会话列表（drill-anywhere，v0.1 至少模型行→会话列表）。
 
 ## 8. TUI 面
 
