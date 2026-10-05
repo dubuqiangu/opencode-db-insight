@@ -80,7 +80,7 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 
 - 路径解析：默认 `~/.local/share/opencode/opencode.db`（Windows 为 `%USERPROFILE%\.local\share\opencode\opencode.db`），允许通过 storage 持久化设置覆盖；
 - **只读连接**：`node:sqlite` 以 `file:...?mode=ro` URI 打开，避免写锁与 WAL 干扰；宿主正在写库时并发读是安全的（WAL 模式）；
-- 风险点：OpenCode 运行时若为 Bun，`node:sqlite` 可用性需实测（tasks T1.1）；不可用则回退 `better-sqlite3`（引入构建依赖，最后手段）；
+- 可用性已实测（2026-10-05，T1.1）：`node:sqlite DatabaseSync` 在 Bun 1.4.0（插件实际运行时）与 Node 24 均可用，`readOnly: true` 连接真实库查询正常，**无需 better-sqlite3 回退**；保留 try/catch 特性探测，探测失败时 API 返回 503 并在 health 中标注；
 - 全部 SQL 收敛在 `src/db/queries.ts` 单文件，便于替换与审计。
 
 ## 5. 指标目录（口径定义）
