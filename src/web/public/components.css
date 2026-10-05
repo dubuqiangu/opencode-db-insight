@@ -1,0 +1,305 @@
+/* ============================================================
+   opencode-db-insight 看板 · 组件层样式
+   面板 / 图表网格 / uPlot 定制 / 手写 SVG 图表 / 明细表 / 提示
+   ============================================================ */
+
+/* ---------- 图表与表格网格 ---------- */
+.charts {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.charts .span-8 { grid-column: span 8; }
+.charts .span-4 { grid-column: span 4; }
+.charts .span-12 { grid-column: span 12; }
+@media (max-width: 1100px) {
+  .charts .span-8, .charts .span-4 { grid-column: span 12; }
+}
+
+.tables {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 1100px) { .tables { grid-template-columns: 1fr; } }
+
+/* ---------- 面板 ---------- */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px 16px;
+  min-width: 0;
+}
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.panel-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+.panel-sub { margin: 3px 0 0; font-size: 12px; color: var(--text-faint); }
+.panel-head-extra { font-size: 12px; color: var(--text-dim); }
+.panel-body { min-height: 60px; }
+
+.chart-body { position: relative; }
+.chart-mount { width: 100%; }
+
+/* ---------- uPlot 定制 ---------- */
+.trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 2px 9px 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  transition: opacity 0.15s, border-color 0.15s;
+  max-width: 190px;
+}
+.legend-chip:hover { border-color: var(--border-strong); }
+.legend-chip .swatch {
+  width: 10px; height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
+.legend-chip .chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.legend-chip.off { opacity: 0.38; }
+.legend-chip.off .swatch { background: transparent !important; border: 1px solid currentColor; }
+
+.uplot {
+  font-family: var(--font-num) !important;
+  font-variant-numeric: tabular-nums;
+}
+.uplot .u-legend { display: none; } /* 用自绘图例替代 */
+.uplot .u-axis text { font-size: 10px; fill: var(--text-faint); }
+.uplot .u-cursor-x { border-left: 1px dashed var(--border-strong); }
+.uplot .u-select { background: var(--accent-soft); }
+
+/* ---------- 日历热力图 ---------- */
+.calendar-body { overflow-x: auto; }
+.heatmap-svg { width: 100%; min-width: 640px; display: block; }
+.heatmap-cell { transition: stroke 0.1s; }
+.heatmap-cell:hover { stroke: var(--text); stroke-width: 1; }
+.heatmap-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+  flex-wrap: wrap;
+}
+.heatmap-scale { display: inline-flex; align-items: center; gap: 4px; }
+.heatmap-scale .cell-sample {
+  width: 11px; height: 11px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* ---------- 工具调用条形图 ---------- */
+.toolbars-svg { width: 100%; display: block; }
+.toolbar-row { cursor: default; }
+.toolbar-row:hover .toolbar-name { fill: var(--text); }
+.toolbar-row:hover .toolbar-track { fill: var(--border); }
+
+/* ---------- Token 漏斗 ---------- */
+.funnel-svg { width: 100%; display: block; }
+.funnel-layer { transition: opacity 0.15s; }
+.funnel-layer:hover { opacity: 0.82; }
+
+/* ---------- 明细表 ---------- */
+.table-body { overflow-x: auto; }
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.data-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.3px;
+  color: var(--text-faint);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  white-space: nowrap;
+}
+.data-table th.sortable { cursor: pointer; }
+.data-table th.sortable:hover { color: var(--text); }
+.data-table th .sort-arrow { font-size: 9px; margin-left: 3px; }
+.data-table th.sorted { color: var(--accent); }
+.data-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.data-table tbody tr { transition: background 0.12s; }
+.data-table tbody tr:hover { background: var(--panel-2); }
+.data-table tbody tr.selected { background: var(--accent-soft); }
+.data-table tbody tr.selected:hover { background: var(--accent-soft); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table td.primary { color: var(--text); }
+.data-table td.num, .data-table th.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.data-table th.num, .data-table td.num { text-align: right; }
+
+.model-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+}
+.model-cell .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.model-cell .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-num);
+  font-size: 12px;
+}
+.badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.badge.no-cache { color: var(--amber); border-color: var(--amber-soft); cursor: help; }
+
+.session-title-cell {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-row { cursor: pointer; }
+
+/* 行内小徽标：命中率高亮 */
+.hit-pill { font-weight: 600; color: var(--accent); }
+.hit-pill.low { color: var(--text-dim); font-weight: 500; }
+
+/* ---------- 状态占位 ---------- */
+.state-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 34px 16px;
+  text-align: center;
+  min-height: 140px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+.state-view .state-icon { opacity: 0.55; }
+.state-view .state-hint { font-size: 11.5px; }
+.state-view.error {
+  border-left: 3px solid var(--red);
+  align-items: flex-start;
+  text-align: left;
+  background: var(--panel-2);
+  padding: 16px 18px;
+  border-radius: var(--radius-sm);
+}
+.retry-button {
+  margin-top: 4px;
+  padding: 5px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.retry-button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- 模型过滤 chip（drill 下来） ---------- */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-family: var(--font-num);
+  color: var(--text);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 3px 6px 3px 11px;
+}
+.filter-chip button {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 50%;
+}
+.filter-chip button:hover { color: var(--red); }
+
+/* ---------- 提示浮层 ---------- */
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 8px 11px;
+  font-size: 12px;
+  color: var(--text);
+  max-width: 260px;
+}
+.tooltip .tooltip-title {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 3px;
+  font-family: var(--font-num);
+}
+.tooltip .num { font-size: 12.5px; }
+.tooltip .tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tooltip .tooltip-row .swatch {
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+.tooltip .tooltip-row .row-value { margin-left: auto; padding-left: 14px; font-weight: 600; }
+
+/* ---------- 会话回放占位页（M4） ---------- */
+.session-view { max-width: 860px; margin: 0 auto; }
+.session-view .panel { margin-bottom: 16px; }
+.back-link { display: inline-block; margin-bottom: 14px; font-size: 13px; }
+.back-link::before { content: "← "; }
+.session-id-line {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--text-faint);
+  word-break: break-all;
+}

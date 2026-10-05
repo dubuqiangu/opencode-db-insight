@@ -31,3 +31,25 @@
 
 ### Added
 - 会话 Markdown 导出渲染器（src/export/）：角色分节标注（🧑用户/🤖助手/工具调用/系统指令/模型切换/压缩事件）、自适应围栏转义、4000 字符工具输出截断、系统提示词尾节；10 用例测试全绿。
+
+## [M2] Web 服务与 API
+
+### Added
+- HTTP 服务（src/web/，仅绑定 127.0.0.1）：默认端口 18789、占用自动 +1 重试（≤10 次）、close() 释放端口与 db；router/api/static-files/request-handler 分层，路径穿越防护
+- API 路由（DESIGN §6 全表）+ 60s TTL 缓存；db 不可用→503、旧表会话→404；插件装配写入实际端口到 storage
+- 测试 42 用例（含真实库 fetch 集成、端口重试链、10 并发、teardown 复绑证明）
+
+## [M3-skeleton] 看板前端骨架（mock 数据）
+
+### Added
+- 15 文件零构建前端（src/web/public/）：KPI 卡（in/out 分列、▲▼ 环比、sparkline、🟢🟡 精度标签）、uPlot 堆叠面积趋势（按模型分色+图例开关+命中率折线）、52 周日历热力图、工具条形图、Token 漏斗、模型排行榜（10 列排序+下钻）、会话列表（→ #/session/:id 占位）
+- 深浅双主题（CSS 变量 + prefers-color-scheme）、区块级容错（独立加载/空态/错误重试）、窄屏响应式
+- data-source 单一数据入口（USE_MOCK 开关，联调只改一处）；DOM-shim 冒烟 41/41、量级断言 13/13
+
+## [M5] 导出路由与命令
+
+### Added
+- GET /api/export/session/:id.md（text/markdown + RFC 5987 中文附件名；404/503 错误约定）
+- /insight-export 斜杠命令：无参 dialog.select 最近 20 会话，进程内直连查询层+渲染器，落盘 ./insight-exports/；全防御式 context 访问
+- slug/文件名纯函数（中文保留、非法字符替换、代理对安全截断）、flattenSystemPromptForExport、fake-insight-db 测试基座
+- 测试 24 用例（8 文件名 + 7 路由含真实库集成 + 6 命令含写盘失败容错 + fake db 基座）

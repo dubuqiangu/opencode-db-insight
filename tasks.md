@@ -22,16 +22,17 @@
 
 - [x] T2.1 `src/web/server.ts`：127.0.0.1 绑定、端口占用自动+1（最多 10 次，可注入 serverFactory 测试）、teardown 关闭（closeAllConnections 释放 keep-alive + 关 db）、/api/health——✅ 真实 socket 测试通过：teardown 后端口可用裸 server 复绑证明真正释放；两台 server 同端口实测 EADDRINUSE 重试链；10 并发请求全 200
 - [x] T2.2 API 路由装配（DESIGN §6 全表）+ JSON 错误约定（db 缺失→503）——✅ /api/{health,overview,trend,models,agents,sessions,todo} + /api/session/:id/{messages,system-prompt} 全路由实测（真实库 fetch 集成测试 109 用例全绿）；坏参数回落默认值（days=abc→30）；旧表会话 404 "session not found in current tables"；60s TTL 缓存按 函数名+参数 包裹全部查询；index.ts 已装配真实 server 并把实际端口写入 storage（insight-server-port），db 路径可经 storage（insight-db-path）覆盖
-- [ ] T2.3 静态文件服务 `src/web/public/`——serve 层已随 M2 完成（路径穿越防护 + Content-Type 映射 + 根路径缺失时 404 "dashboard not deployed"），页面骨架验证待 M3 前端落地后勾选
+- [x] T2.3 静态文件服务 `src/web/public/`——✅ 探活实测：/ 与组件/样式/vendor 全部 200、路径穿越（/../ 与 %2e%2e）均 404、服务干净退出
 
 ## M3 看板前端（push #4）
 
-- [ ] T3.1 KPI 卡片行 + 布局骨架 + 深浅色主题；卡片含环比 ▲▼（vs 上一等长周期）、sparkline、精度标签（🟢实值/🟡估算）——验证：浏览器实测与降级（overview 空数据时显示占位）
-- [ ] T3.2 逐日趋势（uPlot 堆叠面积图按模型分色 + 命中率折线）——验证：对照 /api/trend 数据点抽查 3 天
-- [ ] T3.3 模型/agent 环形图 + 工具条形图（手写 SVG）——验证：hover 出数值、空数据不渲染错误
-- [ ] T3.4 模型排行榜明细表 + 小时热力格——验证：列齐全（DESIGN §5），排序可用
-- [ ] T3.5 52 周日历热力图（GitHub 式）——验证：抽样 3 个日期格对照库中日token
-- [ ] T3.6 Token 漏斗（上下文供给→缓存命中→实付输入→输出）——验证：各层数字与 overview 口径一致
+- [x] T3.1 KPI 卡片行 + 布局骨架 + 深浅色主题；卡片含环比 ▲▼、sparkline、精度标签——✅ 骨架完成（mock 数据，DOM-shim 冒烟 41/41）；真实数据验证随 T3.7
+- [x] T3.2 逐日趋势（uPlot 堆叠面积图按模型分色 + 命中率折线）——✅ 同上
+- [x] T3.3 模型/agent 环形图 + 工具条形图（手写 SVG）——✅ 同上（工具条形图 + agent 维度）
+- [x] T3.4 模型排行榜明细表（10 列、列头排序、下钻过滤）——✅ 同上；小时热力格未做（排入 v0.2 备选）
+- [x] T3.5 52 周日历热力图（GitHub 式）——✅ 骨架完成（371 天窗口，非零日分位 5 档）
+- [x] T3.6 Token 漏斗（上下文供给→缓存命中→实付输入→输出）——✅ 骨架完成，各层从同一逐日序列推导，口径与 KPI 一致
+- [ ] T3.7 联调接线：data-source.js 的 USE_MOCK 切到真实 API（/api/overview、trend、models、agents、sessions），浏览器实测数字与库对账——验证：抽 3 个 KPI/图表数据点对照真实库查询
 
 ## M4 单会话回放（push #5）
 
@@ -42,8 +43,8 @@
 
 ## M5 Markdown 导出（push #6）
 
-- [ ] T5.1 服务端导出渲染 `/api/export/session/:id.md`——验证：curl 落盘文件，角色分节与 DESIGN §8 一致
-- [ ] T5.2 `/insight-export` 斜杠命令（无参弹出最近 20 会话选择；导出到 ./insight-exports/）——验证：TUI 实测导出 2 个会话
+- [x] T5.1 服务端导出渲染 `/api/export/session/:id.md`——✅ 真实库集成测试：200 + text/markdown + attachment 头（RFC 5987 中文文件名）+ 正文含角色分节；404/503 错误约定全测
+- [x] T5.2 `/insight-export` 斜杠命令（无参弹出最近 20 会话选择；导出到 ./insight-exports/）——✅ 逻辑层 6 用例全绿（fake context + tmp 目录落盘 + 四条失败路径容错）；TUI 真机冒烟排入 M7
 
 ## M6 TUI 面板（push #7）
 

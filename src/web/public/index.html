@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>opencode-db-insight · 用量看板</title>
+  <link rel="stylesheet" href="vendor/uplot/uPlot.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="components.css" />
+  <script src="vendor/uplot/uPlot.iife.min.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar reveal">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+          <path d="M12 2 3 7v10l9 5 9-5V7l-9-5z" fill="none" stroke="currentColor" stroke-width="1.6" />
+          <circle cx="12" cy="12" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6" />
+          <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+        </svg>
+        <div class="brand-text">
+          <h1>opencode-db-insight</h1>
+          <p class="brand-sub">本地用量看板 · 只读 opencode.db</p>
+        </div>
+      </div>
+
+      <nav class="range-switch" id="range-switch" aria-label="时间范围">
+        <button type="button" data-range="7">7d</button>
+        <button type="button" data-range="30" class="active">30d</button>
+        <button type="button" data-range="90">90d</button>
+        <button type="button" data-range="all">all</button>
+      </nav>
+
+      <div class="top-status" id="top-status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">连接中…</span>
+      </div>
+    </header>
+
+    <main id="view">
+      <!-- 仪表盘视图（hash 为空或 #/ 时渲染；#/session/:id 由 app.js 切换占位页） -->
+      <div id="dashboard" class="dashboard">
+        <section id="kpi-row" class="kpi-row reveal d1" aria-label="关键指标"></section>
+
+        <section class="charts">
+          <article class="panel span-8 reveal d2">
+            <header class="panel-head">
+              <div>
+                <h2>逐日消耗</h2>
+                <p class="panel-sub">按模型分色的堆叠面积 · 右轴为缓存命中率</p>
+              </div>
+              <div class="trend-legend" id="trend-legend"></div>
+            </header>
+            <div class="panel-body chart-body">
+              <div id="trend-chart" class="chart-mount" aria-label="逐日 token 消耗与命中率趋势图"></div>
+            </div>
+          </article>
+
+          <article class="panel span-4 reveal d2">
+            <header class="panel-head">
+              <div>
+                <h2>工具调用 TOP10</h2>
+                <p class="panel-sub">全部 agent 合计</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="tool-bars" aria-label="工具调用次数排行"></div>
+            </div>
+          </article>
+
+          <article class="panel span-12 reveal d3">
+            <header class="panel-head">
+              <div>
+                <h2>52 周日历热力图</h2>
+                <p class="panel-sub">每日 token 总量（input + output + cache.read）· 深夜档也在其中</p>
+              </div>
+            </header>
+            <div class="panel-body calendar-body">
+              <div id="calendar-heatmap" aria-label="过去一年的每日用量日历热力图"></div>
+            </div>
+          </article>
+
+          <article class="panel span-8 reveal d4">
+            <header class="panel-head">
+              <div>
+                <h2>Token 漏斗</h2>
+                <p class="panel-sub">上下文供给 → 缓存命中 → 实付输入 → 输出</p>
+              </div>
+              <div class="panel-head-extra" id="funnel-caption"></div>
+            </header>
+            <div class="panel-body">
+              <div id="token-funnel" aria-label="Token 漏斗图"></div>
+            </div>
+          </article>
+        </section>
+
+        <section class="tables">
+          <article class="panel reveal d5">
+            <header class="panel-head">
+              <div>
+                <h2>模型排行榜</h2>
+                <p class="panel-sub">点击列头排序 · 点击行可在下方会话列表中过滤该模型</p>
+              </div>
+            </header>
+            <div class="panel-body table-body">
+              <div id="model-table"></div>
+            </div>
+          </article>
+
+          <article class="panel reveal d5">
+            <header class="panel-head">
+              <div>
+                <h2>会话列表</h2>
+                <p class="panel-sub" id="session-sub">最近会话 · 点击行进入回放（M4）</p>
+              </div>
+              <div class="panel-head-extra" id="session-filter-chip"></div>
+            </header>
+            <div class="panel-body table-body">
+              <div id="session-list"></div>
+            </div>
+          </article>
+        </section>
+      </div>
+
+      <!-- 单会话回放占位（M4 实现） -->
+      <div id="session-view" class="session-view" hidden></div>
+    </main>
+
+    <footer class="footnote reveal d6">
+      <p>口径：今日总量 = Σ(input + output + cache.read)；缓存命中率 = cache.read / (cache.read + input)，会话严格口径另含 cache.write。</p>
+      <p>🟢 实值 = 直接来自数据库 · 🟡 估算 = 由 token 换算，仅作量级参考 · 历史遗留旧表（2026-09-23 前）不在统计范围内。</p>
+    </footer>
+  </div>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
