@@ -1,18 +1,17 @@
 # verify-install.ps1 — opencode-db-insight one-click install self-verification.
 # Run from anywhere after git push:  pwsh <repo>/scripts/verify-install.ps1
 #
-# Chain: local HEAD pushed -> plugin update -> plugin list commit match ->
-#        on-disk installed version match -> installed file tree mirrors the
-#        repo (src/test counts) -> host opencode.json registration.
+# First run installs the plugin (opencode plugin add); later runs update it
+# (opencode plugin update). Then the same chain verifies either path:
+#   local HEAD pushed -> install/update -> plugin list commit match ->
+#   on-disk installed version match -> installed file tree mirrors the
+#   repo (src/test counts) -> host opencode.json registration.
 # Prints a PASS/FAIL line per check; exits 0 only when every check passes.
 #
-# Notes:
-#  - `opencode plugin update` returns BEFORE the install lands on disk, so the
-#    script polls the host registry and the install stamps instead of racing
-#    them. This verifies the DISK state only — the running host still needs a
-#    full restart to pick the new code up.
-#  - First-run flow: if the plugin is not installed yet, the script prints the
-#    `plugin add` guidance and exits with code 2 (nothing to verify against).
+# Note: `opencode plugin add/update` returns BEFORE the install lands on
+# disk, so the script polls the host registry and the install stamps
+# instead of racing them. This verifies the DISK state only — the running
+# host still needs a full restart to actually load the new code.
 param(
   [string]$PluginId = "github:dubuqiangu/opencode-db-insight",
   [int]$InstallTimeoutSeconds = 120
@@ -74,19 +73,7 @@ function Read-ListedCommit {
   return $null
 }
 
-# --- first-run guard: nothing installed yet -> guide, don't verify ---------------
-$hostConfigPath = Join-Path $env:USERPROFILE ".config\opencode\opencode.json"
-$hostConfig = if (Test-Path $hostConfigPath) {
-  Get-Content $hostConfigPath -Raw -Encoding UTF8
-} else { "" }
-if (-not $hostConfig.Contains($PluginId)) {
-  Write-Output "NOT INSTALLED — $PluginId is not registered in opencode.json."
-  Write-Output "First run:  opencode plugin add $PluginId"
-  Write-Output "Then restart OpenCode and re-run this script after your next push."
-  exit 2
-}
-
-# --- expected state, derived from the local repo ----------------------------------
+# --- expected state, derived from the local repo (fail fast if unpushed) ------------
 $packageJson = Get-Content (Join-Path $repoRoot "package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 $expectedVersion = $packageJson.version
 $localHead = (git -C $repoRoot rev-parse --short HEAD).Trim()
@@ -102,14 +89,28 @@ if (-not $upstreamRef) {
 $expectedSrcCount = Count-TrackedFiles $repoRoot "src"
 $expectedTestCount = Count-TrackedFiles $repoRoot "test"
 
-# --- one-click update (returns early — poll for the install below) -----------------
+# --- install-or-update: first run does `plugin add`, later runs `plugin update` -----
+$hostConfigPath = Join-Path $env:USERPROFILE ".config\opencode\opencode.json"
+$hostConfig = if (Test-Path $hostConfigPath) {
+  Get-Content $hostConfigPath -Raw -Encoding UTF8
+} else { "" }
+$firstInstall = -not $hostConfig.Contains($PluginId)
+if ($firstInstall) {
+  Write-Output ("first install — running: opencode plugin add " + $PluginId)
+} else {
+  Write-Output ("already registered — running: opencode plugin update " + $PluginId)
+}
 Push-Location $env:USERPROFILE
 try {
-  $updateOutput = (opencode plugin update $PluginId 2>&1 | Out-String).Trim()
+  $installOutput = if ($firstInstall) {
+    (opencode plugin add $PluginId 2>&1 | Out-String).Trim()
+  } else {
+    (opencode plugin update $PluginId 2>&1 | Out-String).Trim()
+  }
 } finally {
   Pop-Location
 }
-Write-Output ("update: " + $updateOutput)
+Write-Output ("install: " + $installOutput)
 
 # --- wait until the host registry reflects the pushed commit -----------------------
 $installedCommit = $null
@@ -141,7 +142,10 @@ $installedTestCount = if ($installedPkg) { Count-Files (Join-Path $installedPkg 
 Assert-Check "installed src tree mirrors the repo" ($installedSrcCount -eq $expectedSrcCount) "installed=$installedSrcCount repo=$expectedSrcCount"
 Assert-Check "installed test tree mirrors the repo" ($installedTestCount -eq $expectedTestCount) "installed=$installedTestCount repo=$expectedTestCount"
 
-# --- host registration ---------------------------------------------------------------
+# --- host registration (re-read: plugin add rewrites opencode.json) ----------------
+$hostConfig = if (Test-Path $hostConfigPath) {
+  Get-Content $hostConfigPath -Raw -Encoding UTF8
+} else { "" }
 Assert-Check "plugin registered in opencode.json" ($hostConfig.Contains($PluginId))
 
 Write-Output "----"

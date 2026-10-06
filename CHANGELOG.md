@@ -6,7 +6,11 @@
 
 ## [Unreleased]
 
-（暂无——下一批变更记录于此）
+### Added
+- DESIGN.md §3.1：仓库目录树章节（模块职责逐目录标注，填补文档空缺）
+
+### Changed
+- verify-install.ps1 升级为真"一键安装自验证"：未注册时脚本自跑 `opencode plugin add`（首装），已注册走 `plugin update`，后续验证链完全复用；注册检查改为事后重读（plugin add 会重写 opencode.json）——首装实测一次通过（VERIFY OK，v0.1.2 @ eaf5902 五项检查全 PASS）
 
 ## [0.1.2] - 2026-10-06 · 增量审查修复
 

@@ -76,6 +76,47 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 - 入口文件（index.ts / tui.tsx）只做装配与生命周期清理，不承载业务逻辑；
 - 单文件超 ~400 行即拆分（同全局规则）。
 
+### 3.1 仓库目录树
+
+```
+opencode-db-insight/
+├─ scripts/                      # 工具脚本：verify-install.ps1（推送后一键安装自验证）
+├─ src/
+│  ├─ index.ts                   # 插件入口：装配 insight server + 端口持久化 + 生命周期清理
+│  ├─ tui.tsx                    # TUI 插件入口：装配三条斜杠命令
+│  ├─ db/                        # 只读取数层
+│  │  ├─ queries.ts              #   SQL 收敛处（会话列表 / 回放步骤 / todo）
+│  │  ├─ aggregate-queries.ts    #   SQL 侧聚合（overview / trend / models / agents，与旧 JS 口径逐字段对账）
+│  │  ├─ rows.ts                 #   行记录解析与类型强制（coerceNumber / coerceText）
+│  │  └─ types.ts                 #   数据面类型定义（SessionSummary / AssistantStepRow / ...）
+│  ├─ stats/                     # 纯聚合函数层（无 IO，可单测）
+│  │  ├─ daily-buckets.ts / model-metrics.ts / agent-fingerprint.ts / hit-rate.ts
+│  │  ├─ hour-heatmap.ts / session-survival.ts    # v0.2 预置纯函数（待接线路由）
+│  │  └─ cache.ts                #   60s TTL + 64 条上限的结果缓存
+│  ├─ web/                       # HTTP 服务层（node:http，仅绑定 127.0.0.1）
+│  │  ├─ server.ts               #   生命周期（listen / shutdown / 端口重试）
+│  │  ├─ request-handler.ts      #   Host 头校验（防 DNS rebinding）
+│  │  ├─ router.ts / api.ts      #   路由分发 / JSON API（INSIGHT_VERSION 常量）
+│  │  ├─ static-files.ts         #   静态文件服务（路径逃逸防护）
+│  │  ├─ db-connection-guard.ts  #   连接自愈守卫（结构化致命错误判别）
+│  │  └─ public/                 #   前端看板（原生 ESM，零构建）
+│  │     ├─ app.js / data-source.js / format.js / theme.js / tooltip.js
+│  │     ├─ components/          #     KPI 卡 / 趋势图 / 日历热力 / token 漏斗 / 模型表 /
+│  │     │                       #     会话列表 / 回放时间线与成本条 / 空态与加载态
+│  │     └─ vendor/uplot/        #     uPlot 本地化（无 CDN 依赖）
+│  ├─ export/                    # Markdown 导出渲染（角色分节 / 格式化辅助）
+│  └─ tui/                       # TUI 命令实现
+│     ├─ command-registry.ts     #   斜杠命令注册表
+│     ├─ status-panel-{data,text,controller}.ts  #   /insight-status 面板三件套
+│     ├─ open-dashboard-command.ts / export-command.ts
+│     └─ tui-context.ts         #   storage 读取（端口 / 数据库路径）
+├─ test/                         # 194 用例：模块测试 + 集成 / 韧性 / SQL 对账
+│  └─ helpers/                   # fake-insight-db / step 工厂
+├─ DESIGN.md / tasks.md / CHANGELOG.md / README.md
+└─ package.json / LICENSE
+```
+
+
 ## 4. 数据源与读取层
 
 - 路径解析：默认 `~/.local/share/opencode/opencode.db`（Windows 为 `%USERPROFILE%\.local\share\opencode\opencode.db`），允许通过 storage 持久化设置覆盖；
