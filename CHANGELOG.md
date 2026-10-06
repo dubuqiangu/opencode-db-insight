@@ -8,6 +8,22 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.2.1] - 2026-10-06 · v0.2.0 增量审查修复
+
+@oracle 对 v0.2.0 增量代码的审查（P0 零 / P1×2 / P2×6，含真实库探针验证）发现项的修复版本；测试 208 → 222。
+
+### Fixed
+- **hour-heatmap 窗口口径对齐**（P1-1）：bucketStepsByHourAndWeekday 新增窗口下界参数（最老一天本地零点），slack 行不再入格——修复前 days=1 时窗口实为 48h（偏差可达 100%）；顺带跳过 timeCreated<=0 的 1970 落格理论变体。**跨路由守恒回归测试**：同 days 下 heatmap 步数总和 === trend steps 求和（先红后绿复现）
+- **谓词/时间口径单点化**（P2-3）：新建 src/db/scan-conventions.ts（ASSISTANT 谓词、DAY_MS、下推 floor 与回收窗口成对导出），trend/heatmap/compaction 全走同一构建器，消除"注释同步"漂移入口
+- **缓存键钳位**（P2-6）：trend 与 hour-heatmap 的 cache key 均用 Math.min(days, 366)，days=1000 与 366 不再各占缓存槽
+- **fake 的 SQLite reason 语义修正**（P2-2）：布尔→"0"/"1"、对象→JSON 文本等，并加 node:sqlite 内存库权威联测锁 fake↔真实语义一致（含非法 JSON 文本/SQL NULL 形状）
+- **前端死代码清理**（P2-1）：删除 fetchTodo / todo-card 的不可达 null 分支，注释对齐真实契约（db 不可用统一 503）
+- **mock 保真度**（P2-4）：survival 键名对齐真实库（succeeded/failed/interrupted/none）、compaction reason 对齐（auto/manual/unknown）、heatmap mock 改从 simulated.points 最大余数法精确分摊（守卫 mock 内部跨视图步数守恒）；顺带修复 getMockHourHeatmap 忽略 days 参数的 bug；回放夹具 reason 对齐真实库
+- **tooltip swatch 白名单**（P2-5）：swatch 只接受 var(--x) / #hex 形态，恶意值静默不渲染色块，关闭 style 注入 sink
+
+### Added
+- **前端组件入库测试**（P1-2）：test/web-components.test.ts（10 用例，薄 DOM 垫片）——五个新区块的渲染/转义/占位断言进入 npm test 回归网；strictHitRate 前后端镜像对拍测试（同 fixture 逐值相等，后端口径将来一改即红）
+
 ## [0.2.0] - 2026-10-06 · v0.2-A 统计补全
 
 ### Added

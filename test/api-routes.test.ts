@@ -18,7 +18,7 @@ import {
 } from "../src/web/api.ts"
 import type { SqliteReadConnection } from "../src/db/types.ts"
 import { matchApiRoute } from "../src/web/router.ts"
-import { clearResultCache } from "../src/stats/cache.ts"
+import { clearResultCache, resultCacheSize } from "../src/stats/cache.ts"
 import {
   buildFakeSessionSummary,
   createFakeInsightDatabase,
@@ -266,6 +266,54 @@ test("v0.2-A behavior routes are registered and answer 200 with a live database"
     assert.deepEqual(compactionBody["topSessions"], [
       { sessionId: "ses_behavior_route", count: 1 },
     ])
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("trend and hour-heatmap cache keys clamp days to the 366-day bound (P2-6)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [buildFakeSessionSummary({ id: "ses_cache_clamp" })],
+      messagesBySessionId: {
+        ses_cache_clamp: [{ type: "assistant", data: {}, timeCreated: Date.now() - 60_000 }],
+      },
+      systemPromptBySessionId: {},
+    })
+
+    const trendRoute = matchApiRoute("/api/trend")!
+    const heatmapRoute = matchApiRoute("/api/hour-heatmap")!
+    const contextWithDays = (route: typeof trendRoute, days: string): ApiRequestContext => ({
+      route,
+      searchParams: new URLSearchParams(`days=${days}`),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+
+    // Warm the entry with the absurd value, then hit it with the clamp
+    // bound: identical clamped key → still exactly one cache entry per
+    // route, and the responses agree (same underlying window).
+    const absurdTrendResponse = handleApiRequest(contextWithDays(trendRoute, "1000"))
+    const boundedTrendResponse = handleApiRequest(contextWithDays(trendRoute, "366"))
+    assert.equal(absurdTrendResponse.statusCode, 200)
+    assert.equal(boundedTrendResponse.statusCode, 200)
+    assert.deepEqual(boundedTrendResponse.body, absurdTrendResponse.body)
+
+    const absurdHeatmapResponse = handleApiRequest(contextWithDays(heatmapRoute, "1000"))
+    const boundedHeatmapResponse = handleApiRequest(contextWithDays(heatmapRoute, "366"))
+    assert.equal(absurdHeatmapResponse.statusCode, 200)
+    assert.equal(boundedHeatmapResponse.statusCode, 200)
+    assert.deepEqual(boundedHeatmapResponse.body, absurdHeatmapResponse.body)
+
+    // 2 routes × 1 clamped entry each — days=1000 did NOT spray a
+    // near-duplicate entry next to the days=366 one.
+    assert.equal(resultCacheSize(), 2)
+
+    // A genuinely different window still gets its own entry.
+    handleApiRequest(contextWithDays(heatmapRoute, "90"))
+    assert.equal(resultCacheSize(), 3)
   } finally {
     clearResultCache()
   }

@@ -17,7 +17,7 @@
  *                                          shortLivedShare, idleOutcomeCounts}
  *   GET /api/compaction                  → {total, byReason, recentDaily,
  *                                          topSessions}
- *   GET /api/todo                        → queryTodoStats | null（db 不可用为 null）
+ *   GET /api/todo                        → queryTodoStats（db 不可用统一 503）
  *   GET /api/health              → { status, version, port, dbStatus, dbPath }
  *
  * 真实/裸形状 → 组件所需形状的适配函数（normalizeTrendPayload 等）单独导出，
@@ -214,7 +214,7 @@ export const HOUR_HEATMAP_WINDOW_DAYS = 90;
 
 /** GET /api/hour-heatmap?days=90 —— 7×24 步骤分布（168 项零填充裸数组）。 */
 export async function fetchHourHeatmap(days = HOUR_HEATMAP_WINDOW_DAYS) {
-  if (USE_MOCK) return resolveWithLatency(getMockHourHeatmap());
+  if (USE_MOCK) return resolveWithLatency(getMockHourHeatmap(days));
   const heatmapCells = await fetchJson(`/hour-heatmap?days=${clampTrendDays(days)}`);
   return Array.isArray(heatmapCells) ? heatmapCells : [];
 }
@@ -240,14 +240,15 @@ export async function fetchCompaction() {
 }
 
 /**
- * GET /api/todo —— queryTodoStats 的返回。
- * 后端 db 不可用时 body 为 null：返回 null 由卡片渲染空占位（不算错误）。
+ * GET /api/todo —— queryTodoStats 的返回（{total, completed, pending, inProgress}）。
+ * db 不可用时与所有数据路由一样返回 503 → 走区块错误态（含重试），
+ * 不存在 200 + null 的契约；total 为 0（todo 表为空）由卡片渲染空占位。
  */
 export async function fetchTodo() {
   if (USE_MOCK) return resolveWithLatency(getMockTodoStats());
   const todoStats = await fetchJson("/todo");
   if (todoStats === null || typeof todoStats !== "object" || Array.isArray(todoStats)) {
-    return null;
+    throw new Error("/api/todo 返回空数据");
   }
   return todoStats;
 }

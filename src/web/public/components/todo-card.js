@@ -12,12 +12,13 @@ import { bindHoverTooltip } from "../tooltip.js";
 import { renderEmpty } from "./state-views.js";
 
 /**
- * 渲染 todo 完成率卡片。todoStats 为契约对象或 null。
- * total 为 0 时渲染空占位（todo 表为空不算错误）。
+ * 渲染 todo 完成率卡片。todoStats 为 queryTodoStats 返回（fetchTodo 已保证
+ * 非 null；db 不可用在 loader 层就走错误态）。total 为 0 时渲染空占位
+ * （todo 表为空不算错误）。
  */
 export function renderTodoCard(container, todoStats) {
   const totalCount = Number(todoStats?.total);
-  if (todoStats === null || !Number.isFinite(totalCount) || totalCount <= 0) {
+  if (!Number.isFinite(totalCount) || totalCount <= 0) {
     renderEmpty(container, "还没有 todo 记录", "数据库 todo 表为空，或尚无 todo 写入");
     return;
   }

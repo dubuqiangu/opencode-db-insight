@@ -19,12 +19,25 @@ export interface StepTimestampSample {
 
 /**
  * Bucket steps into a full 7×24 grid (168 cells, zero-filled), ordered by
- * weekday then hour. Invalid timestamps (NaN) are skipped; out-of-range
- * hour/weekday can never occur because values come from Date directly.
+ * weekday then hour. Invalid timestamps (NaN) and non-positive timestamps
+ * (coerceNumber degrades malformed rows to 0 → epoch 0) are skipped;
+ * out-of-range hour/weekday can never occur because values come from
+ * Date directly.
+ *
+ * windowStartEpochMs (optional): lower bound of the statistics window,
+ * the local midnight of its oldest day — the same bound bucketDailyTrend
+ * enforces via its date-key map. Rows at or above the SQL scan floor but
+ * below this bound are the floor's +1-day DST slack and must NOT land in
+ * cells, or the heatmap silently counts one more day than requested.
  */
-export function bucketStepsByHourAndWeekday(samples: StepTimestampSample[]): HourWeekdayCell[] {
+export function bucketStepsByHourAndWeekday(
+  samples: StepTimestampSample[],
+  windowStartEpochMs: number = Number.NEGATIVE_INFINITY,
+): HourWeekdayCell[] {
   const stepCounts = new Array<number>(7 * 24).fill(0)
   for (const sample of samples) {
+    if (!Number.isFinite(sample.timeCreated) || sample.timeCreated <= 0) continue
+    if (sample.timeCreated < windowStartEpochMs) continue
     const sampleDate = new Date(sample.timeCreated)
     if (Number.isNaN(sampleDate.getTime())) continue
     const cellIndex = sampleDate.getDay() * 24 + sampleDate.getHours()

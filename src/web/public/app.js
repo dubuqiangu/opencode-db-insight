@@ -236,7 +236,6 @@ async function loadCompactionSection() {
 
 async function loadTodoSection() {
   try {
-    // fetchTodo 对 null body 返回 null：卡片渲染空占位，不算失败
     state.cache.todo = await fetchTodo();
     renderTodoCard(todoCardElement, state.cache.todo);
     markSection("todo", true);

@@ -8,12 +8,14 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { createRequire } from "node:module"
 
 import {
   queryCompactionStats,
   queryHourHeatmap,
   querySessionSurvival,
 } from "../src/db/behavior-queries.ts"
+import { queryDailyTrend } from "../src/db/aggregate-queries.ts"
 import { toLocalDateKey } from "../src/stats/daily-buckets.ts"
 import type { SqliteReadConnection } from "../src/db/types.ts"
 import {
@@ -136,6 +138,52 @@ test("queryHourHeatmap answers days <= 0 with the zero grid and never touches th
   const heatmapCells = queryHourHeatmap(refusingDatabase(), 0)
   assert.equal(heatmapCells!.length, 168)
   assert.equal(heatmapCells!.every((cell) => cell.steps === 0), true)
+})
+
+/**
+ * Cross-route conservation (审查盲区②): for the same days window the
+ * heatmap's 168 cells must sum to exactly the trend's steps sum. The
+ * heatmap SQL floor carries one extra day of DST slack — without a
+ * JS-side window lower bound every row above the floor lands in a cell,
+ * silently widening the window to days+1 (100% off at days=1).
+ */
+test("queryHourHeatmap step total conserves the trend step total for the same days", () => {
+  const HOUR_MS = 60 * 60 * 1000
+  const todayLocalMidnight = new Date()
+  todayLocalMidnight.setHours(0, 0, 0, 0)
+
+  const freshTodayTime = todayLocalMidnight.getTime() + 60_000
+  // ~yesterday noon: above the days=1 SQL floor (now - 2d) but below the
+  // window start (today's local midnight) — trend must drop it, so the
+  // heatmap must drop it too.
+  const staleOutsideWindowTime = todayLocalMidnight.getTime() - 12 * HOUR_MS
+  // 80 days back: inside the 90-day window on both routes.
+  const deepInsideWindowTime = todayLocalMidnight.getTime() - 80 * DAY_MS
+
+  const fakeDatabase = createFakeInsightDatabase({
+    ...emptyScenario(),
+    sessions: [buildFakeSessionSummary({ id: "ses_conservation" })],
+    messagesBySessionId: {
+      ses_conservation: [
+        { type: "assistant", data: {}, timeCreated: freshTodayTime },
+        { type: "assistant", data: {}, timeCreated: staleOutsideWindowTime },
+        { type: "assistant", data: {}, timeCreated: deepInsideWindowTime },
+      ],
+    },
+  })
+
+  const trendStepTotal = queryDailyTrend(fakeDatabase, 90)!
+    .reduce((stepSum, trendPoint) => stepSum + trendPoint.steps, 0)
+  const heatmapStepTotal = queryHourHeatmap(fakeDatabase, 90)!
+    .reduce((stepSum, cell) => stepSum + cell.steps, 0)
+  assert.equal(heatmapStepTotal, trendStepTotal, "days=90: heatmap and trend must count the same steps")
+
+  const oneDayTrendTotal = queryDailyTrend(fakeDatabase, 1)!
+    .reduce((stepSum, trendPoint) => stepSum + trendPoint.steps, 0)
+  const oneDayHeatmapTotal = queryHourHeatmap(fakeDatabase, 1)!
+    .reduce((stepSum, cell) => stepSum + cell.steps, 0)
+  assert.equal(oneDayTrendTotal, 1, "days=1 trend window is today only (the fresh step)")
+  assert.equal(oneDayHeatmapTotal, oneDayTrendTotal, "days=1: heatmap must not leak the slack-day rows")
 })
 
 // ---------------------------------------------------------------------------
@@ -277,4 +325,117 @@ test("queryCompactionStats ranks topSessions by count descending with a stable i
   ])
   assert.equal(compactionStats.total, 8)
   assert.deepEqual(compactionStats.byReason, { auto: 7, manual: 1 })
+})
+
+/**
+ * Weird reason shapes the wire could carry, asserted against BOTH the
+ * fake database and an in-memory node:sqlite database. The expected map
+ * follows real SQLite json_extract semantics (probed on the live
+ * SQLite build): booleans → 0/1, numbers → numbers, objects → JSON
+ * text; empty-string reason folds into "unknown" together with missing
+ * reason, JSON null, non-object documents, invalid JSON and NULL data.
+ */
+const WEIRD_REASON_BY_REASON_EXPECTED: Record<string, number> = {
+  "0": 1,
+  "1": 1,
+  "5": 1,
+  '{"a":1}': 1,
+  unknown: 3,
+}
+
+test("queryCompactionStats maps weird reason shapes the way the fake's SQLite semantics dictate", () => {
+  const fakeDatabase = createFakeInsightDatabase({
+    ...emptyScenario(),
+    compactionMessages: [
+      { sessionId: "ses_weird_reasons", data: { reason: false } },
+      { sessionId: "ses_weird_reasons", data: { reason: true } },
+      { sessionId: "ses_weird_reasons", data: { reason: 5 } },
+      { sessionId: "ses_weird_reasons", data: { reason: "" } },
+      { sessionId: "ses_weird_reasons", data: { reason: { a: 1 } } },
+      { sessionId: "ses_weird_reasons", data: null },
+      { sessionId: "ses_weird_reasons", data: { status: "completed", summary: "no reason key" } },
+    ],
+  })
+
+  const compactionStats = queryCompactionStats(fakeDatabase)!
+
+  assert.deepEqual(compactionStats.byReason, WEIRD_REASON_BY_REASON_EXPECTED)
+  assert.equal(compactionStats.total, 7)
+})
+
+/**
+ * The authoritative variant of the weird-shapes test: a real in-memory
+ * SQLite database, which can also express rows the JSON.stringify-based
+ * fake cannot — raw invalid JSON text and a SQL NULL data column.
+ * Skipped when node:sqlite is unavailable (same fallback as the live
+ * smoke tests).
+ */
+function createInMemoryCompactionDatabase(
+  compactionRows: Array<{ sessionId: string; data: string | null }>,
+): SqliteReadConnection | null {
+  try {
+    const requireNodeModule = createRequire(import.meta.url)
+    const { DatabaseSync } = requireNodeModule("node:sqlite") as {
+      DatabaseSync: new (databasePath: string) => {
+        exec: (sql: string) => void
+        prepare: (sql: string) => { run: (...parameters: unknown[]) => void }
+        close: () => void
+      }
+    }
+    const database = new DatabaseSync(":memory:")
+    database.exec(
+      "CREATE TABLE session_message (" +
+        "id TEXT, session_id TEXT, type TEXT, seq INTEGER, " +
+        "time_created REAL, time_updated REAL, data TEXT)",
+    )
+    const insertCompactionRow = database.prepare(
+      "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) " +
+        "VALUES (?, ?, 'compaction', 0, 1000, 1000, ?)",
+    )
+    for (const [rowIndex, compactionRow] of compactionRows.entries()) {
+      insertCompactionRow.run(`msg_weird_${rowIndex}`, compactionRow.sessionId, compactionRow.data)
+    }
+    // The connection exposes run() statements the read interface never
+    // needs — the structural cast is safe because queryCompactionStats
+    // only calls prepare().all() on SELECTs.
+    return database as unknown as SqliteReadConnection
+  } catch {
+    return null
+  }
+}
+
+test("queryCompactionStats follows real SQLite json_extract semantics for weird reason shapes", () => {
+  const inMemoryDatabase = createInMemoryCompactionDatabase([
+    { sessionId: "ses_weird_reasons", data: '{"status":"completed","reason":"auto","summary":"x"}' },
+    { sessionId: "ses_weird_reasons", data: '{"reason":false}' },
+    { sessionId: "ses_weird_reasons", data: '{"reason":true}' },
+    { sessionId: "ses_weird_reasons", data: '{"reason":5}' },
+    { sessionId: "ses_weird_reasons", data: '{"reason":""}' },
+    { sessionId: "ses_weird_reasons", data: '{"reason":{"a":1}}' },
+    { sessionId: "ses_weird_reasons", data: "not valid json {{" },
+    { sessionId: "ses_weird_reasons", data: null },
+    { sessionId: "ses_weird_reasons", data: '{"status":"completed","summary":"no reason key"}' },
+  ])
+  if (inMemoryDatabase === null) {
+    assert.ok(true, "node:sqlite unavailable on this machine — skipping the in-memory semantics test")
+    return
+  }
+
+  try {
+    const compactionStats = queryCompactionStats(inMemoryDatabase)!
+
+    // auto + the five shaped keys + four "unknown" folds
+    // ("" / invalid JSON / NULL data / missing reason).
+    assert.deepEqual(compactionStats.byReason, {
+      auto: 1,
+      ...WEIRD_REASON_BY_REASON_EXPECTED,
+      unknown: WEIRD_REASON_BY_REASON_EXPECTED.unknown + 1,
+    })
+    assert.equal(compactionStats.total, 9)
+    assert.deepEqual(compactionStats.topSessions, [
+      { sessionId: "ses_weird_reasons", count: 9 },
+    ])
+  } finally {
+    inMemoryDatabase.close()
+  }
 })

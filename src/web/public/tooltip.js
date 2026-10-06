@@ -18,6 +18,23 @@ function ensureTooltip() {
 }
 
 /**
+ * swatch 颜色白名单：只接受 var(--标识符) 或 #hex（3/4/6/8 位）。
+ * 现有调用方（replay-turn-bar / todo-card 传常量、trend-chart 传 cssVar 的
+ * #hex 解析值）全部在白名单内；其他任何值不渲染色块——swatch 直接进
+ * style 属性，白名单外的值一律视为不可信，静默降级而非转义。
+ */
+const SWATCH_COLOR_PATTERN = /^(?:var\(--[a-z0-9-]+\)|#[0-9a-f]{3,8})$/i;
+
+function swatchHtml(swatch) {
+  if (typeof swatch !== "string") return "";
+  const normalizedSwatch = swatch.trim().replace(/;\s*$/, "");
+  if (!SWATCH_COLOR_PATTERN.test(normalizedSwatch)) return "";
+  // var(...) 形态统一补分号，保证 style 属性闭合；#hex 无需分号
+  const colorValue = normalizedSwatch.startsWith("#") ? normalizedSwatch : normalizedSwatch + ";";
+  return `<span class="swatch" style="background:${colorValue}"></span>`;
+}
+
+/**
  * 显示提示。rows: [{ swatch?, label, value }]，title 为小标题行。
  */
 export function showTooltip({ title, rows, clientX, clientY }) {
@@ -29,9 +46,7 @@ export function showTooltip({ title, rows, clientX, clientY }) {
     : "";
   const rowsHtml = rows
     .map((row) => {
-      const swatch = row.swatch
-        ? `<span class="swatch" style="background:${row.swatch}"></span>`
-        : "";
+      const swatch = swatchHtml(row.swatch);
       return `<div class="tooltip-row">${swatch}<span>${escapeHtml(row.label)}</span><span class="row-value num">${escapeHtml(row.value)}</span></div>`;
     })
     .join("");

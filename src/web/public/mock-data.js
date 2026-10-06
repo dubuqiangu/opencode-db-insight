@@ -10,7 +10,8 @@
  *   GET /api/agents    → buildAgentStats()（stats/agent-fingerprint.ts AgentStat）
  *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）
  *   GET /api/hour-heatmap?days=90  → buildHourHeatmap()（168 项零填充，
- *                        {weekday 0=周日..6, hour 0-23, steps}，weekday-major）
+ *                        {weekday 0=周日..6, hour 0-23, steps}，weekday-major；
+ *                        步数从逐日序列按作息权重重分摊，与 trend 口径一致）
  *   GET /api/session-survival → buildSessionSurvival()（{totalSessions,
  *                        medianDurationSeconds, shortLivedShare, idleOutcomeCounts}）
  *   GET /api/compaction → buildCompaction()（{total, byReason,
@@ -375,29 +376,66 @@ function buildSessionSummaries() {
  * ------------------------------------------------------------ */
 /* ------------------------------------------------------------
  * GET /api/hour-heatmap?days=90 —— 168 项零填充（weekday-major）
- * weekday 0=周日..6=周六；作息与 sessions mock 一致：深夜 21~03 高峰，
- * 工作日白天零散，清晨 4~8 点低谷（部分格为零）。
+ * 从统一随机源的逐日序列推导（与本文件头部自述一致）：取近 N 天
+ * simulated.points 的每日 steps，按「该周几的 24 小时作息权重」重分摊——
+ * 最大余数法保证每日分摊精确守恒，因此 168 格 steps 总和与
+ * getMockTrend(同天数) 的 steps 总和严格相等（口径一致）。
+ * 作息权重为确定性 profile（深夜 21~03 高峰，工作日白天次之，
+ * 清晨 4~5 点权重为零——该时段恒为 0 格，6~7 点近零）。
  * ------------------------------------------------------------
  */
-function buildHourHeatmap() {
+const HOUR_HEATMAP_WINDOW_DAYS = 90;
+
+/** 某周几某小时的作息权重（0 = 该时段恒零；权重越小越常分到 0）。 */
+function hourProfileWeight(weekday, hour) {
+  const isWeekend = weekday === 0 || weekday === 6;
+  const isNightOwl = hour >= 21 || hour <= 3;
+  const isWorkHour = hour >= 10 && hour <= 18 && !isWeekend;
+  const isSleepTrough = hour >= 4 && hour <= 5;
+  const isLateNight = hour >= 6 && hour <= 7;
+  if (isSleepTrough) return 0;
+  if (isNightOwl) return isWeekend ? 3.4 : 3.0;
+  if (isWorkHour) return 1.0;
+  if (isLateNight) return 0.15;
+  return 0.5;
+}
+
+/** 最大余数法：daySteps 精确分摊到 24 个小时（份额按权重比例）。 */
+function distributeStepsAcrossHours(daySteps, hourWeights) {
+  const weightSum = hourWeights.reduce((sum, weight) => sum + weight, 0);
+  if (weightSum <= 0 || daySteps <= 0) return new Array(24).fill(0);
+  const exactShares = hourWeights.map((weight) => (daySteps * weight) / weightSum);
+  const allocations = exactShares.map((share) => Math.floor(share));
+  const fractionalOrder = exactShares
+    .map((share, hour) => ({ hour, fraction: share - Math.floor(share) }))
+    .sort((left, right) => right.fraction - left.fraction || left.hour - right.hour);
+  let remainder = daySteps - allocations.reduce((sum, value) => sum + value, 0);
+  for (let orderIndex = 0; remainder > 0; orderIndex += 1) {
+    allocations[fractionalOrder[orderIndex % fractionalOrder.length].hour] += 1;
+    remainder -= 1;
+  }
+  return allocations;
+}
+
+function buildHourHeatmap(days = HOUR_HEATMAP_WINDOW_DAYS) {
+  const boundedDays = Math.min(Math.max(days, 1), DAY_COUNT);
+  const stepCountGrid = new Array(168).fill(0);
+  const recentPoints = simulated.points.slice(DAY_COUNT - boundedDays);
+
+  for (const dayPoint of recentPoints) {
+    // 契约口径：weekday 0=周日..6=周六，与 Date#getDay() 一致
+    const weekday = new Date(dateKeyToEpochLocal(dayPoint.date)).getDay();
+    const hourWeights = Array.from({ length: 24 }, (_, hour) => hourProfileWeight(weekday, hour));
+    const hourAllocations = distributeStepsAcrossHours(dayPoint.steps, hourWeights);
+    for (let hour = 0; hour <= 23; hour += 1) {
+      stepCountGrid[weekday * 24 + hour] += hourAllocations[hour];
+    }
+  }
+
   const cells = [];
   for (let weekday = 0; weekday <= 6; weekday += 1) {
-    const isWeekend = weekday === 0 || weekday === 6;
     for (let hour = 0; hour <= 23; hour += 1) {
-      let steps = 0;
-      const isNightOwl = hour >= 21 || hour <= 3;
-      const isWorkHour = hour >= 10 && hour <= 18 && !isWeekend;
-      const isEarlyMorning = hour >= 4 && hour <= 8;
-      if (isNightOwl) {
-        steps = Math.round(randomInRange(900, 4200) * (isWeekend ? 1.15 : 1));
-      } else if (isWorkHour) {
-        steps = Math.round(randomInRange(120, 900));
-      } else if (isEarlyMorning) {
-        steps = random() < 0.35 ? Math.round(randomInRange(10, 160)) : 0;
-      } else {
-        steps = random() < 0.6 ? Math.round(randomInRange(20, 420)) : 0;
-      }
-      cells.push({ weekday, hour, steps });
+      cells.push({ weekday, hour, steps: stepCountGrid[weekday * 24 + hour] });
     }
   }
   return cells;
@@ -406,35 +444,37 @@ function buildHourHeatmap() {
 /* ------------------------------------------------------------
  * GET /api/session-survival —— 中位存活 / 短命占比 / idle 结局
  * totalSessions 与 /api/sessions 的 total 同源（口径一致）；
- * idleOutcomeCounts 各结局加和 = totalSessions（无 idle 的会话归 "none"）。
+ * idleOutcomeCounts 键名对齐真实库 idle_outcome 实测值：
+ * succeeded / failed / interrupted，NULL 结局归 none（比例仅演示性）。
  * ------------------------------------------------------------
  */
 function buildSessionSurvival() {
   const totalSessions = sessionsPayload.total;
-  const clearedCount = Math.round(totalSessions * 0.42);
-  const compactedCount = Math.round(totalSessions * 0.18);
-  const clearedOnNewMessageCount = Math.round(totalSessions * 0.08);
+  const succeededCount = Math.round(totalSessions * 0.62);
+  const failedCount = Math.round(totalSessions * 0.11);
+  const interruptedCount = Math.round(totalSessions * 0.09);
   return {
     totalSessions,
     medianDurationSeconds: 2_730, // 45.5 分钟
     shortLivedShare: 0.312,
     idleOutcomeCounts: {
-      cleared: clearedCount,
-      compacted: compactedCount,
-      "cleared-on-new-message": clearedOnNewMessageCount,
-      none: totalSessions - clearedCount - compactedCount - clearedOnNewMessageCount,
+      succeeded: succeededCount,
+      failed: failedCount,
+      interrupted: interruptedCount,
+      none: totalSessions - succeededCount - failedCount - interruptedCount,
     },
   };
 }
 
 /* ------------------------------------------------------------
  * GET /api/compaction —— 总数 / 按原因 / 近 30 日趋势 / Top 会话
+ * byReason 键名对齐真实库实测值：auto / manual（unknown 兜底）；
  * total = byReason 求和（口径自洽）；recentDaily 30 天升序零填充；
  * topSessions 取 sessions mock 的真实 id，次数降序（前 10）。
  * ------------------------------------------------------------
  */
 function buildCompaction() {
-  const byReason = { "token budget": 1_104, auto: 596, manual: 242 };
+  const byReason = { auto: 1_596, manual: 296, unknown: 50 };
   const total = Object.values(byReason).reduce((sum, count) => sum + count, 0);
 
   const recentDaily = [];
@@ -468,7 +508,6 @@ const overviewPayload = buildOverview();
 const modelMetricsPayload = buildModelMetrics();
 const agentStatsPayload = buildAgentStats();
 const sessionsPayload = buildSessionSummaries();
-const hourHeatmapPayload = buildHourHeatmap();
 const sessionSurvivalPayload = buildSessionSurvival();
 const compactionPayload = buildCompaction();
 const todoStatsPayload = buildTodoStats();
@@ -478,7 +517,8 @@ export function getMockTrend(days) { return buildTrend(days); }
 export function getMockModelMetrics() { return modelMetricsPayload; }
 export function getMockAgentStats() { return agentStatsPayload; }
 export function getMockSessions() { return sessionsPayload; }
-export function getMockHourHeatmap() { return hourHeatmapPayload; }
+// 按需构建（同 getMockTrend）：热力窗口必须与 trend 同 days 才守恒
+export function getMockHourHeatmap(days) { return buildHourHeatmap(days); }
 export function getMockSessionSurvival() { return sessionSurvivalPayload; }
 export function getMockCompaction() { return compactionPayload; }
 export function getMockTodoStats() { return todoStatsPayload; }

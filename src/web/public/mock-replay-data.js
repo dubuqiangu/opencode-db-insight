@@ -119,7 +119,7 @@ function buildReplayMessageRecords(sessionId) {
     // 每 45 条消息插一次压缩事件 + 少量 idle 噪声
     if (messageIndex > 0 && messageIndex % 45 === 0) {
       pushRecord("compaction",
-        { status: "completed", reason: "token budget", summary: "上下文压缩：保留了最近 12 轮对话与结论清单。" },
+        { status: "completed", reason: "auto", summary: "上下文压缩：保留了最近 12 轮对话与结论清单。" },
         timeCreated - 20_000);
     }
     if (messageIndex > 0 && messageIndex % 17 === 0) {

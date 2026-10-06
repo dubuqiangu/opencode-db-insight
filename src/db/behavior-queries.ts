@@ -25,17 +25,11 @@ import {
   type SessionSurvivalStats,
 } from "../stats/session-survival.ts"
 import { MAX_TREND_DAYS, toLocalDateKey } from "../stats/daily-buckets.ts"
-
-/** One day in milliseconds; only used for scan-window floors. */
-const DAY_MS = 24 * 60 * 60 * 1000
-
-/**
- * Same assistant-step predicate as aggregate-queries.ts (kept in sync
- * deliberately, see the parity note there): a "step" is one assistant
- * message whose `data` is a valid JSON object.
- */
-const ASSISTANT_OBJECT_DATA_PREDICATE =
-  "type = 'assistant' AND json_valid(data) AND json_type(data) = 'object'"
+import {
+  ASSISTANT_OBJECT_DATA_PREDICATE,
+  buildScanFloorEpochMs,
+  buildWindowStartEpochMs,
+} from "./scan-conventions.ts"
 
 /** Bucket key for compaction rows whose data carries no usable reason. */
 const UNKNOWN_COMPACTION_REASON = "unknown"
@@ -48,9 +42,12 @@ const COMPACTION_TOP_SESSION_LIMIT = 10
 
 /**
  * Heatmap cells for GET /api/hour-heatmap?days=90. SQL selects only the
- * epoch-ms time_created of assistant steps inside the window (days
- * pushdown, same +1-day DST slack floor as queryDailyTrend); the 7×24
- * local-time bucketing itself happens in bucketStepsByHourAndWeekday.
+ * epoch-ms time_created of assistant steps above the scan floor (days
+ * pushdown with the shared +1-day DST slack); the 7×24 local-time
+ * bucketing itself happens in bucketStepsByHourAndWeekday, which also
+ * enforces the window lower bound (local midnight of the oldest day) so
+ * the slack rows above the floor but below the window never land in a
+ * cell — otherwise the heatmap would silently count days+1 (P1-1).
  * days is clamped to 1..MAX_TREND_DAYS like the trend route; a window of
  * days <= 0 skips the database and yields the zero-filled 168-cell grid.
  */
@@ -61,9 +58,8 @@ export function queryHourHeatmap(
   if (db === null) return null
   if (!Number.isFinite(days) || days <= 0) return bucketStepsByHourAndWeekday([])
   const boundedDays = Math.min(Math.floor(days), MAX_TREND_DAYS)
-  // One extra day of slack so the floor is always below the window start
-  // even across DST transitions; bucketing is local-time in JS anyway.
-  const scanFloorMs = Date.now() - (boundedDays + 1) * DAY_MS
+  const scanFloorMs = buildScanFloorEpochMs(boundedDays)
+  const windowStartEpochMs = buildWindowStartEpochMs(boundedDays)
 
   const rawRows = db
     .prepare(
@@ -79,7 +75,7 @@ export function queryHourHeatmap(
     if (rowRecord === null) continue
     stepSamples.push({ timeCreated: coerceNumber(rowRecord["time_created"]) })
   }
-  return bucketStepsByHourAndWeekday(stepSamples)
+  return bucketStepsByHourAndWeekday(stepSamples, windowStartEpochMs)
 }
 
 /**
@@ -180,8 +176,7 @@ export function queryCompactionStats(db: SqliteReadConnection | null): Compactio
     total += reasonCount
   }
 
-  const recentDailyFloorMs =
-    Date.now() - (COMPACTION_RECENT_DAILY_WINDOW_DAYS + 1) * DAY_MS
+  const recentDailyFloorMs = buildScanFloorEpochMs(COMPACTION_RECENT_DAILY_WINDOW_DAYS)
   const timestampRows = db
     .prepare(
       `SELECT time_created

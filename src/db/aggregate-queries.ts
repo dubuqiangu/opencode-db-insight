@@ -26,6 +26,10 @@ import {
   readRowNumber,
   UNKNOWN_MODEL_ID,
 } from "./rows.ts"
+import {
+  ASSISTANT_OBJECT_DATA_PREDICATE,
+  buildScanFloorEpochMs,
+} from "./scan-conventions.ts"
 import { hitRate } from "../stats/hit-rate.ts"
 import {
   bucketDailyTrend,
@@ -41,18 +45,6 @@ import {
   type AgentStat,
   type AgentStepUsageSample,
 } from "../stats/agent-fingerprint.ts"
-
-/** One day in milliseconds; only used for the trend scan floor. */
-const DAY_MS = 24 * 60 * 60 * 1000
-
-/**
- * Shared SQL predicate selecting exactly the rows the old JS pipeline
- * accepted as steps: assistant messages whose `data` is a valid JSON
- * object. Rows failing it were skipped by parseAssistantStepRow, so every
- * aggregate here must apply the same filter to stay comparable.
- */
-const ASSISTANT_OBJECT_DATA_PREDICATE =
-  "type = 'assistant' AND json_valid(data) AND json_type(data) = 'object'"
 
 /**
  * Parse the JSON array text produced by the multi-path json_extract()
@@ -201,10 +193,7 @@ export function queryDailyTrend(
   if (db === null) return null
   if (!Number.isFinite(days) || days <= 0) return []
   const boundedDays = Math.min(Math.floor(days), MAX_TREND_DAYS)
-  // One extra day of slack so the floor is always below the window start
-  // even across DST transitions; rows outside the window are dropped by
-  // the bucket date-key map anyway.
-  const scanFloorMs = Date.now() - (boundedDays + 1) * DAY_MS
+  const scanFloorMs = buildScanFloorEpochMs(boundedDays)
 
   const rawRows = db
     .prepare(

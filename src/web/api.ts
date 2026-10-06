@@ -31,6 +31,7 @@ import {
 } from "../db/behavior-queries.ts"
 import { renderSessionMarkdown } from "../export/markdown.ts"
 import { buildCacheKey, cachedResult } from "../stats/cache.ts"
+import { MAX_TREND_DAYS } from "../stats/daily-buckets.ts"
 import {
   parseNonNegativeIntegerParam,
   parsePositiveIntegerParam,
@@ -38,7 +39,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.2.0"
+export const INSIGHT_VERSION = "0.2.1"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -220,8 +221,12 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
       }
       case "trend": {
         const trendDays = parsePositiveIntegerParam(requestContext.searchParams, "days", 30)
-        const trendPoints = cachedResult(buildCacheKey("queryDailyTrend", [trendDays]), () =>
-          queryDailyTrend(database, trendDays),
+        // Clamp before keying: both the cache key and the query see the
+        // same bounded window, so ?days=1000 and ?days=366 share one entry
+        // instead of spraying near-duplicates across the cache (P2-6).
+        const boundedTrendDays = Math.min(trendDays, MAX_TREND_DAYS)
+        const trendPoints = cachedResult(buildCacheKey("queryDailyTrend", [boundedTrendDays]), () =>
+          queryDailyTrend(database, boundedTrendDays),
         )
         return { statusCode: 200, body: trendPoints }
       }
@@ -254,8 +259,13 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
       }
       case "hour-heatmap": {
         const heatmapDays = parsePositiveIntegerParam(requestContext.searchParams, "days", 90)
-        const heatmapCells = cachedResult(buildCacheKey("queryHourHeatmap", [heatmapDays]), () =>
-          queryHourHeatmap(database, heatmapDays),
+        // Same clamp-before-key discipline as the trend route (P2-6):
+        // the query clamps internally, so the key must clamp too or
+        // ?days=1000 and ?days=366 would cache the same result twice.
+        const boundedHeatmapDays = Math.min(heatmapDays, MAX_TREND_DAYS)
+        const heatmapCells = cachedResult(
+          buildCacheKey("queryHourHeatmap", [boundedHeatmapDays]),
+          () => queryHourHeatmap(database, boundedHeatmapDays),
         )
         return { statusCode: 200, body: heatmapCells }
       }

@@ -99,3 +99,16 @@
 - [x] P2-3 删除 _probe*.ts 调试残留（3 文件）
 - [x] P2-4 verify-install.ps1 upstream 推导 + cwd 保护——✅ 冒烟通过（exit 2 首装引导、cwd 不变）
 - [x] 版本 0.1.1 → 0.1.2（package.json / lock / INSIGHT_VERSION 三处同步）；测试 194/194
+
+## v0.2.1 增量审查修复（push #12，2026-10-06）
+
+- [x] @oracle 增量审查 v0.2.0 代码（P0 零 / P1×2 / P2×6，含真实库探针）
+- [x] P1-1 heatmap 窗口回收 + 跨路由守恒测试（先红后绿：days=1 复现 actual 2 expected 1）——✅ 真实库复测 16/16
+- [x] P1-2 前端组件 DOM 垫片测试入库（10 用例）+ strictHitRate 镜像对拍锁——✅ 后端口径变更将触发测试红
+- [x] P2-2 fake SQLite reason 语义修正 + node:sqlite 内存库权威联测
+- [x] P2-3 scan-conventions.ts 单点化（谓词/floor/回收窗口）
+- [x] P2-6 trend+heatmap 缓存键钳位
+- [x] P2-1 fetchTodo 死代码删除（前端轨道）
+- [x] P2-4 mock 保真度对齐真实库 + heatmap mock 统一随机源分摊（前端轨道，顺带修 days 参数透传 bug）
+- [x] P2-5 tooltip swatch 白名单防注入（前端轨道）
+- [x] 版本 0.2.0 → 0.2.1；测试 208 → 222 全绿

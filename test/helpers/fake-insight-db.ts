@@ -32,6 +32,35 @@ export interface FakeCompactionMessageFixture {
   data: unknown
 }
 
+/** Reason bucket the SQL CASE emits for unusable json_extract results. */
+const UNKNOWN_FAKE_REASON_KEY = "unknown"
+
+/**
+ * Mirror the compaction query's SQL CASE (json_valid(data) AND
+ * json_extract(data,'$.reason') IS NOT NULL) with real SQLite json_extract
+ * semantics instead of JS stringification: booleans come back as 0/1,
+ * objects/arrays as their JSON text, numbers as numbers; a missing key,
+ * JSON null, or a non-object document yields NULL → 'unknown'. An
+ * empty-string reason stays '' — the query layer maps it to 'unknown',
+ * exactly like the SQL-side '' key coerces there.
+ */
+function fakeSqliteReasonKey(rawData: unknown): string {
+  let parsedData: unknown
+  try {
+    parsedData = JSON.parse(String(rawData))
+  } catch {
+    return UNKNOWN_FAKE_REASON_KEY
+  }
+  if (typeof parsedData !== "object" || parsedData === null || Array.isArray(parsedData)) {
+    return UNKNOWN_FAKE_REASON_KEY // '$.reason' on a non-object document is NULL
+  }
+  const reasonValue = (parsedData as Record<string, unknown>)["reason"]
+  if (reasonValue === undefined || reasonValue === null) return UNKNOWN_FAKE_REASON_KEY
+  if (typeof reasonValue === "boolean") return reasonValue ? "1" : "0"
+  if (typeof reasonValue === "object") return JSON.stringify(reasonValue)
+  return String(reasonValue)
+}
+
 /** Everything the fake database serves, grouped per table. */
 export interface FakeInsightDatabaseScenario {
   /** Session summaries; the fake keeps this order (time_updated desc). */
@@ -121,18 +150,7 @@ export function createFakeInsightDatabase(
       if (sql.includes("GROUP BY") && sql.includes("reason")) {
         const reasonCountByKey = new Map<string, number>()
         for (const compactionRow of compactionRows) {
-          let parsedData: unknown = null
-          try {
-            parsedData = JSON.parse(String(compactionRow.data))
-          } catch {
-            parsedData = null
-          }
-          const reasonValue =
-            typeof parsedData === "object" && parsedData !== null
-              ? (parsedData as Record<string, unknown>)["reason"]
-              : null
-          const reasonKey =
-            reasonValue === null || reasonValue === undefined ? "unknown" : String(reasonValue)
+          const reasonKey = fakeSqliteReasonKey(compactionRow.data)
           reasonCountByKey.set(reasonKey, (reasonCountByKey.get(reasonKey) ?? 0) + 1)
         }
         return {
