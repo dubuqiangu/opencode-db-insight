@@ -21,6 +21,7 @@ import {
   queryTodoStats,
   resolveOpencodeDbPath,
 } from "../src/db/queries.ts"
+import { queryDirectoryStats } from "../src/db/directory-queries.ts"
 
 const liveDatabase = openOpencodeDb()
 const skipReason: string | false =
@@ -170,4 +171,45 @@ test("querySessionSystemPrompt returns null or string-valued instruction entries
 
 test("querySessionSystemPrompt returns null for an unknown session id", { skip: skipReason }, () => {
   assert.equal(querySessionSystemPrompt(liveDatabase, "ses_does_not_exist_anywhere"), null)
+})
+
+test("queryDirectoryStats serves the live contract: non-empty paths, conservation, clamped length", {
+  skip: skipReason,
+}, () => {
+  const directoryStats = queryDirectoryStats(liveDatabase, 50)
+  assert.ok(directoryStats !== null)
+  // The live db's exact shape (directory count, how many rows it
+  // excludes as NULL/empty-directory) drifts as opencode writes
+  // sessions — only drift-safe invariants are asserted: non-empty
+  // totals, conservation, and the ordering contract.
+  assert.ok(directoryStats!.totalDirectories >= 1)
+  assert.ok(directoryStats!.totalSessions >= 1)
+  assert.ok(directoryStats!.directories.length <= 50)
+
+  let listedSessionSum = 0
+  for (const directoryRow of directoryStats!.directories) {
+    assert.ok(directoryRow.directory !== "", "NULL/empty directories never reach the list")
+    assert.ok(directoryRow.name !== "", "display names are never empty")
+    assert.ok(directoryRow.sessions >= 1)
+    assert.ok(directoryRow.steps >= 0)
+    assert.ok(directoryRow.lastActiveMs === null || directoryRow.lastActiveMs > 0)
+    listedSessionSum += directoryRow.sessions
+  }
+  assert.equal(listedSessionSum, directoryStats!.totalSessions, "Σ sessions === totalSessions")
+
+  // Deterministic ordering: steps desc → sessions desc → directory asc
+  // (the exact comparator queryDirectoryStats applies).
+  const contractComparator = (
+    leftRow: { steps: number; sessions: number; directory: string },
+    rightRow: { steps: number; sessions: number; directory: string },
+  ) =>
+    rightRow.steps - leftRow.steps ||
+    rightRow.sessions - leftRow.sessions ||
+    (leftRow.directory < rightRow.directory ? -1 : leftRow.directory > rightRow.directory ? 1 : 0)
+  for (let index = 1; index < directoryStats!.directories.length; index += 1) {
+    assert.ok(
+      contractComparator(directoryStats!.directories[index - 1], directoryStats!.directories[index]) <= 0,
+      "rows must be non-increasing along the contract sort key",
+    )
+  }
 })

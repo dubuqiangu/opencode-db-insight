@@ -18,6 +18,9 @@
  *   GET /api/compaction                  → {total, byReason, recentDaily,
  *                                          topSessions}
  *   GET /api/todo                        → queryTodoStats（db 不可用统一 503）
+ *   GET /api/directories?limit=10        → {totalDirectories, totalSessions,
+ *                                          directories[{directory, name,
+ *                                          sessions, steps, lastActiveMs}]}
  *   GET /api/health              → { status, version, port, dbStatus, dbPath }
  *
  * 真实/裸形状 → 组件所需形状的适配函数（normalizeTrendPayload 等）单独导出，
@@ -34,6 +37,7 @@ import {
   getMockSessionSurvival,
   getMockCompaction,
   getMockTodoStats,
+  getMockDirectoryStats,
 } from "./mock-data.js";
 import { getMockSessionMessages, getMockSessionSystemPrompt } from "./mock-replay-data.js";
 
@@ -251,6 +255,19 @@ export async function fetchTodo() {
     throw new Error("/api/todo 返回空数据");
   }
   return todoStats;
+}
+
+/**
+ * GET /api/directories?limit=10 —— 项目目录用量聚合（长尾排行）。
+ * db 不可用统一 503 → 错误态；非对象 body 视为契约破坏，同样走错误态。
+ */
+export async function fetchDirectoryStats(limit = 10) {
+  if (USE_MOCK) return resolveWithLatency(getMockDirectoryStats(limit));
+  const directoryStats = await fetchJson(`/directories?limit=${limit}`);
+  if (directoryStats === null || typeof directoryStats !== "object" || Array.isArray(directoryStats)) {
+    throw new Error("/api/directories 返回空数据");
+  }
+  return directoryStats;
 }
 
 /* ---------------- 会话回放数据 ---------------- */

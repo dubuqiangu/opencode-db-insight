@@ -17,6 +17,9 @@
  *   GET /api/compaction → buildCompaction()（{total, byReason,
  *                        recentDaily 30 天升序零填充, topSessions 前 10 降序}）
  *   GET /api/todo      → buildTodoStats()（queries.ts queryTodoStats 返回形状）
+ *   GET /api/directories?limit=10 → buildDirectoryStats()（{totalDirectories,
+ *                        totalSessions, directories[{directory, name, sessions,
+ *                        steps, lastActiveMs|null}]}，长尾形态、trend 守恒）
  *   GET /api/session/:id/* → 回放 fixtures 见 mock-replay-data.js
  *
  * 全部数据由同一个确定性随机源在模块加载时生成一次，
@@ -26,6 +29,8 @@
  * 量级参考真实重度用户：今日 ~5 亿 token、命中率 ~97%、月活跃模型 20+、
  * 深夜活跃为主。
  */
+
+import { pathLastSegment } from "./format.js";
 
 /** 趋势窗口上限 = 后端 MAX_TREND_DAYS（stats/daily-buckets.ts，366）。 */
 export const CALENDAR_DAYS = 366;
@@ -372,9 +377,6 @@ function buildSessionSummaries() {
 }
 
 /* ------------------------------------------------------------
- * 导出（data-source.js 以带延迟的 Promise 包装这些同步结果）
- * ------------------------------------------------------------ */
-/* ------------------------------------------------------------
  * GET /api/hour-heatmap?days=90 —— 168 项零填充（weekday-major）
  * 从统一随机源的逐日序列推导（与本文件头部自述一致）：取近 N 天
  * simulated.points 的每日 steps，按「该周几的 24 小时作息权重」重分摊——
@@ -400,18 +402,31 @@ function hourProfileWeight(weekday, hour) {
   return 0.5;
 }
 
-/** 最大余数法：daySteps 精确分摊到 24 个小时（份额按权重比例）。 */
-function distributeStepsAcrossHours(daySteps, hourWeights) {
-  const weightSum = hourWeights.reduce((sum, weight) => sum + weight, 0);
-  if (weightSum <= 0 || daySteps <= 0) return new Array(24).fill(0);
-  const exactShares = hourWeights.map((weight) => (daySteps * weight) / weightSum);
+/**
+ * 最大余数法：totalValue 按权重比例精确分摊（Σ 结果 === totalValue）。
+ * 热力图的逐日小时分摊与目录统计的 steps/会话数分摊共用此函数。
+ *
+ * 守恒契约：totalValue > 0 时 Σ 结果 === totalValue。因此 weights 全零
+ * 或为空数组时无法满足契约，属调用方错误，直接 throw（当前两个调用方
+ * 的权重都保证有非零槽位，正常路径不可达）。totalValue <= 0 时返回
+ * 全零数组（Σ = 0 = totalValue，契约自洽）。
+ *
+ * 导出仅为冒烟脚本可对退化分支下断言，data-source 不消费它。
+ */
+export function distributeByLargestRemainder(totalValue, weights) {
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
+  if (weightSum <= 0 && totalValue > 0) {
+    throw new Error(`distributeByLargestRemainder: 权重全零（${weights.length} 个槽位）无法守恒分摊 ${totalValue}`);
+  }
+  if (totalValue <= 0) return new Array(weights.length).fill(0);
+  const exactShares = weights.map((weight) => (totalValue * weight) / weightSum);
   const allocations = exactShares.map((share) => Math.floor(share));
   const fractionalOrder = exactShares
-    .map((share, hour) => ({ hour, fraction: share - Math.floor(share) }))
-    .sort((left, right) => right.fraction - left.fraction || left.hour - right.hour);
-  let remainder = daySteps - allocations.reduce((sum, value) => sum + value, 0);
+    .map((share, slotIndex) => ({ slotIndex, fraction: share - Math.floor(share) }))
+    .sort((left, right) => right.fraction - left.fraction || left.slotIndex - right.slotIndex);
+  let remainder = totalValue - allocations.reduce((sum, value) => sum + value, 0);
   for (let orderIndex = 0; remainder > 0; orderIndex += 1) {
-    allocations[fractionalOrder[orderIndex % fractionalOrder.length].hour] += 1;
+    allocations[fractionalOrder[orderIndex % fractionalOrder.length].slotIndex] += 1;
     remainder -= 1;
   }
   return allocations;
@@ -426,7 +441,7 @@ function buildHourHeatmap(days = HOUR_HEATMAP_WINDOW_DAYS) {
     // 契约口径：weekday 0=周日..6=周六，与 Date#getDay() 一致
     const weekday = new Date(dateKeyToEpochLocal(dayPoint.date)).getDay();
     const hourWeights = Array.from({ length: 24 }, (_, hour) => hourProfileWeight(weekday, hour));
-    const hourAllocations = distributeStepsAcrossHours(dayPoint.steps, hourWeights);
+    const hourAllocations = distributeByLargestRemainder(dayPoint.steps, hourWeights);
     for (let hour = 0; hour <= 23; hour += 1) {
       stepCountGrid[weekday * 24 + hour] += hourAllocations[hour];
     }
@@ -504,6 +519,83 @@ function buildTodoStats() {
   return { total: completed + pending + inProgress + otherStatusCount, completed, pending, inProgress };
 }
 
+/* ------------------------------------------------------------
+ * GET /api/directories?limit=10 —— 按项目目录聚合（长尾形态）
+ * 从统一逐日序列推导（与 hour-heatmap 同款纪律）：
+ *  - steps：逐日按「目录权重」最大余数法分摊 → 各目录求和与
+ *    getMockTrend(366) 的 steps 总和精确守恒（口径一致）。
+ *  - sessions：与 overview/survival 同源（真实后端是同一条 COUNT(*)，
+ *    三个视图恒等）——取 buildOverview().sessionCount 一次性按
+ *    「权重 × 活跃天数」分摊，不做逐日取整，杜绝跨视图漂移。
+ * 权重参考真实探针的长尾形态（主目录占大头 ~69%）；
+ * ~/scratch（最后一个目录）在 DORMANT_AFTER_DAY_INDEX 后停用，
+ * 其 lastActiveMs 停在旧日期，验证「最近活跃」的相对时间显示。
+ * ------------------------------------------------------------ */
+/** 与 SESSION_DIRECTORIES 下标一一对应的目录权重（Σ = 1）。 */
+const DIRECTORY_SESSION_WEIGHTS = [0.69, 0.17, 0.10, 0.04];
+/** 停用的目录下标（SESSION_DIRECTORIES 最后一个：~/scratch）。 */
+const DORMANT_DIRECTORY_INDEX = 3;
+/** 该目录在此下标之后不再活跃（约 60 天前）。 */
+const DORMANT_AFTER_DAY_INDEX = DAY_COUNT - 61;
+
+function buildDirectoryStats() {
+  // 会话数同源链：overview.sessionCount === sessions.total === survival.totalSessions
+  //（真实后端三者同一条 COUNT(*)）。目录 mock 挂同一源头一次性分摊，
+  // Σ 各目录 sessions === 该值——目录面板 meta 与生存卡片恒等。
+  const lifetimeSessionWeights = SESSION_DIRECTORIES.map(
+    (_, directoryIndex) => DIRECTORY_SESSION_WEIGHTS[directoryIndex] *
+      (directoryIndex === DORMANT_DIRECTORY_INDEX ? DORMANT_AFTER_DAY_INDEX + 1 : DAY_COUNT),
+  );
+  const sessionAllocations = distributeByLargestRemainder(
+    buildOverview().sessionCount,
+    lifetimeSessionWeights,
+  );
+
+  const directoryTotals = SESSION_DIRECTORIES.map((_, directoryIndex) => ({
+    steps: 0,
+    sessions: sessionAllocations[directoryIndex],
+    lastActiveDayIndex: -1,
+  }));
+
+  for (let dayIndex = 0; dayIndex < DAY_COUNT; dayIndex += 1) {
+    const dayPoint = simulated.points[dayIndex];
+    const dayDirectoryWeights = SESSION_DIRECTORIES.map((_, directoryIndex) => {
+      const isDormant = directoryIndex === DORMANT_DIRECTORY_INDEX && dayIndex > DORMANT_AFTER_DAY_INDEX;
+      return isDormant ? 0 : DIRECTORY_SESSION_WEIGHTS[directoryIndex];
+    });
+    const stepAllocations = distributeByLargestRemainder(dayPoint.steps, dayDirectoryWeights);
+    for (let directoryIndex = 0; directoryIndex < SESSION_DIRECTORIES.length; directoryIndex += 1) {
+      directoryTotals[directoryIndex].steps += stepAllocations[directoryIndex];
+      if (stepAllocations[directoryIndex] > 0) directoryTotals[directoryIndex].lastActiveDayIndex = dayIndex;
+    }
+  }
+
+  const directories = SESSION_DIRECTORIES.map((directoryPath, directoryIndex) => ({
+    directory: directoryPath,
+    name: pathLastSegment(directoryPath),
+    sessions: directoryTotals[directoryIndex].sessions,
+    steps: directoryTotals[directoryIndex].steps,
+    lastActiveMs: directoryTotals[directoryIndex].lastActiveDayIndex < 0
+      ? null
+      : dateKeyToEpochLocal(simulated.dateKeys[directoryTotals[directoryIndex].lastActiveDayIndex]),
+  }));
+
+  // 契约排序：steps desc → sessions desc → directory asc
+  directories.sort((left, right) =>
+    right.steps - left.steps ||
+    right.sessions - left.sessions ||
+    (left.directory < right.directory ? -1 : left.directory > right.directory ? 1 : 0));
+
+  return {
+    totalDirectories: directories.length,
+    totalSessions: directories.reduce((sum, entry) => sum + entry.sessions, 0),
+    directories,
+  };
+}
+
+/* ------------------------------------------------------------
+ * 导出（data-source.js 以带延迟的 Promise 包装这些同步结果）
+ * ------------------------------------------------------------ */
 const overviewPayload = buildOverview();
 const modelMetricsPayload = buildModelMetrics();
 const agentStatsPayload = buildAgentStats();
@@ -511,6 +603,7 @@ const sessionsPayload = buildSessionSummaries();
 const sessionSurvivalPayload = buildSessionSurvival();
 const compactionPayload = buildCompaction();
 const todoStatsPayload = buildTodoStats();
+const directoryStatsPayload = buildDirectoryStats();
 
 export function getMockOverview() { return overviewPayload; }
 export function getMockTrend(days) { return buildTrend(days); }
@@ -522,3 +615,11 @@ export function getMockHourHeatmap(days) { return buildHourHeatmap(days); }
 export function getMockSessionSurvival() { return sessionSurvivalPayload; }
 export function getMockCompaction() { return compactionPayload; }
 export function getMockTodoStats() { return todoStatsPayload; }
+/** limit 只截取 directories 列表，totalDirectories/totalSessions 仍是全量口径。 */
+export function getMockDirectoryStats(limit = 10) {
+  const boundedLimit = Math.max(1, Math.floor(limit));
+  return {
+    ...directoryStatsPayload,
+    directories: directoryStatsPayload.directories.slice(0, boundedLimit),
+  };
+}

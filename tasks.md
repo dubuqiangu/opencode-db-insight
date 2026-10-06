@@ -120,3 +120,32 @@
 - 历次审查抓的漂移类别已全部有入库回归锁：SQL 口径（sql-aggregation-parity + 跨路由守恒测试）、前端镜像（strictHitRate 对拍锁）、组件渲染/转义（web-components.test.ts）、谓词单点（scan-conventions.ts）
 - 0.2.1 修复为 oracle 处方 + 红绿复现 + 活实例（127.0.0.1:18789/18790）端到端实证
 - 残余风险由 TUI 三命令冒烟（用户侧）与上述回归网承担；下次 src/ 运行时变更时按版本纪律正常走实现→审查→修复
+
+## v0.3-A 按项目目录统计（push #13，2026-10-06）
+
+- [x] 真实库探针定契约：804 会话 / 16 非空目录 / 1 NULL 排除 / 无大小写变体 / 无孤儿消息 / 长尾形态（top1 占 ~69% 会话）
+- [x] 后端（fix-14）：src/db/directory-queries.ts（共享谓词单点 + COUNT(DISTINCT) 防扇出 + JS 确定性排序）+ /api/directories 路由（limit 钳位、缓存键用钳位值、503/500 同构）+ router.ts 注册 + 版本 0.3.0——233/233 全绿，check 0
+- [x] 前端（des-12）：directory-panel.js（全插入点 escapeHtml、榜首基准条形、.span-both 全宽）+ loader + mock 统一随机源分摊（steps 求和 === trend 精确守恒）——23 断言冒烟全绿
+- [x] 收敛复核：233/233 独立复跑 + 独立服务真机联测 14/14（含与裸 SQL 逐值对拍 16 目录 / 804 会话 / top1 554 会话 26276 步、limit 钳位、totals 不截、前端资产接线）
+- [x] 文档：DESIGN §3.1 树（+3 文件、测试数 233）、§5 目录维度行、§6 路由表 +/api/directories、CHANGELOG 0.3.0
+- [ ] oracle 增量审查 0.3.0 delta → 有 P0/P1 则修后推 0.3.1
+
+## v0.3.0 增量审查修复（v0.3.1，2026-10-07）
+
+- [x] @oracle 审 v0.3.0 delta：P0 零 / P1×3 / P2×5；核心链路（LEFT JOIN 谓词位置、扇出防护、守恒、钳位缓存、XSS 链）真实库探针实证通过
+- [x] P1-1 隐私残留清零（硬红线）：真实目录路径全部换虚构占位——该问题是 v0.3.0 发布扫描的正则盲点（只查了反斜杠形态，漏了正斜杠同形态），已修流程（见发布清单）
+- [x] P1-3 真实 SQLite 结构回归锁：directory-stats-sql-parity.test.ts 5 用例（零步目录在列 / 排除语义 / 非法形状不计步 / 守恒 / 排序）——LEFT→INNER 退化现在会红
+- [x] P1-2 目录面板入库测试：恶意 directory 双插入点转义锁 + null/空列表降级占位
+- [x] P2-1 fake 步数谓词补 json_valid+object 镜像
+- [x] P2-2 mock 会话数同源恒等（目录/生存/overview/sessions 四视图恒等）
+- [x] P2-3 distributeByLargestRemainder 全零权重 throw 契约
+- [x] P2-4 过期注释三处；P2-5 pathLastSegment↔directoryDisplayName 对拍锁
+- [x] 版本 0.3.1；测试 233 → 241 全绿
+- [x] 历史清理：c3c1c0d..HEAD 压合为单一干净提交发布（原 0.3.0 提交含真实路径，force-push 移除，tag v0.3.0 删除并以 v0.3.1 取代）
+
+## 发布清单（oracle 建议采纳，v0.3.1 起生效）
+
+1. **新增前端面板** → 必须同时进 test/web-components.test.ts（转义双插入点 + 降级占位用例）
+2. **新增 SQL 聚合** → 必须进真实 node:sqlite :memory: 受控夹具测试（锁 SQL 结构语义，不能只靠 fake JS 镜像）
+3. **推送前隐私扫描** → 路径形态正则必须同时覆盖正斜杠与反斜杠两种写法（本版教训：只查反斜杠漏掉了正斜杠形态才放走真实路径）、裸词（本机盘根目录名）与精确用户名双查；测试夹具/docstring 示例一律用虚构占位（example-a / example-user 级），不用活库真实值
+4. 契约钉死 → 双轨并行 → 收敛复核（独立复跑测试 + 真实库探针）→ 扫描 → 推送 → oracle 增量审查 → 修复闭环

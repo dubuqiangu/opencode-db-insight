@@ -47,6 +47,7 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/hour-heatmap",
     "/api/session-survival",
     "/api/compaction",
+    "/api/directories",
     "/api/session/ses_example/messages",
     "/api/session/ses_example/system-prompt",
   ]
@@ -314,6 +315,126 @@ test("trend and hour-heatmap cache keys clamp days to the 366-day bound (P2-6)",
     // A genuinely different window still gets its own entry.
     handleApiRequest(contextWithDays(heatmapRoute, "90"))
     assert.equal(resultCacheSize(), 3)
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("v0.3-A directories route is registered and answers 200 with the contract body", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_directory_route",
+          directory: "D:/projects/example-alpha",
+          timeCreated: 1000,
+          timeUpdated: 2000,
+        }),
+        // NULL directory: excluded from the list and both totals.
+        buildFakeSessionSummary({
+          id: "ses_directory_route_null",
+          directory: "D:/overridden",
+          timeCreated: 1000,
+          timeUpdated: 2000,
+        }),
+      ],
+      messagesBySessionId: {
+        ses_directory_route: [
+          { type: "assistant", data: {}, timeCreated: Date.now() - 60_000 },
+          { type: "assistant", data: {}, timeCreated: Date.now() - 30_000 },
+        ],
+        ses_directory_route_null: [
+          { type: "assistant", data: {}, timeCreated: Date.now() - 60_000 },
+        ],
+      },
+      systemPromptBySessionId: {},
+      directoryColumnBySessionId: { ses_directory_route_null: null },
+    })
+
+    const directoriesResponse = handleApiRequest(apiContextFor("/api/directories", fakeDatabase))
+    assert.equal(directoriesResponse.statusCode, 200)
+    assert.deepEqual(directoriesResponse.body, {
+      totalDirectories: 1,
+      totalSessions: 1,
+      directories: [
+        {
+          directory: "D:/projects/example-alpha",
+          name: "example-alpha",
+          sessions: 1,
+          steps: 2,
+          lastActiveMs: 2000,
+        },
+      ],
+    })
+
+    // ?limit=<garbage> keeps the default 10; ?limit=1 truncates the list
+    // while the totals stay full (they are never clamped).
+    const directoriesRoute = matchApiRoute("/api/directories")!
+    const garbageLimitResponse = handleApiRequest({
+      route: directoriesRoute,
+      searchParams: new URLSearchParams("limit=not-a-number"),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+    assert.equal(garbageLimitResponse.statusCode, 200)
+    assert.equal(
+      ((garbageLimitResponse.body as Record<string, unknown>)["directories"] as unknown[]).length,
+      1,
+    )
+
+    const singleLimitResponse = handleApiRequest({
+      route: directoriesRoute,
+      searchParams: new URLSearchParams("limit=1"),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+    assert.equal(singleLimitResponse.statusCode, 200)
+    const singleLimitBody = singleLimitResponse.body as Record<string, unknown>
+    assert.equal((singleLimitBody["directories"] as unknown[]).length, 1)
+    assert.equal(singleLimitBody["totalDirectories"], 1)
+    assert.equal(singleLimitBody["totalSessions"], 1)
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("directories cache keys clamp limit to the 50-row bound (P2-6 discipline)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({ id: "ses_directory_cache", directory: "D:/cache-clamp" }),
+      ],
+      messagesBySessionId: {
+        ses_directory_cache: [{ type: "assistant", data: {}, timeCreated: Date.now() - 60_000 }],
+      },
+      systemPromptBySessionId: {},
+    })
+
+    const directoriesRoute = matchApiRoute("/api/directories")!
+    const contextWithLimit = (limit: string): ApiRequestContext => ({
+      route: directoriesRoute,
+      searchParams: new URLSearchParams(`limit=${limit}`),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+
+    // Warm with the absurd value, then hit the clamp bound: the key must
+    // collide (one entry), and the responses agree.
+    const absurdLimitResponse = handleApiRequest(contextWithLimit("999"))
+    const boundedLimitResponse = handleApiRequest(contextWithLimit("50"))
+    assert.equal(absurdLimitResponse.statusCode, 200)
+    assert.equal(boundedLimitResponse.statusCode, 200)
+    assert.deepEqual(boundedLimitResponse.body, absurdLimitResponse.body)
+    assert.equal(resultCacheSize(), 1, "?limit=999 and ?limit=50 share one clamped entry")
+
+    // A genuinely different limit gets its own entry.
+    handleApiRequest(contextWithLimit("10"))
+    assert.equal(resultCacheSize(), 2)
   } finally {
     clearResultCache()
   }

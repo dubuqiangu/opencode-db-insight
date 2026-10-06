@@ -29,6 +29,11 @@ import {
   queryHourHeatmap,
   querySessionSurvival,
 } from "../db/behavior-queries.ts"
+import {
+  DEFAULT_DIRECTORY_LIMIT,
+  MAX_DIRECTORY_LIMIT,
+  queryDirectoryStats,
+} from "../db/directory-queries.ts"
 import { renderSessionMarkdown } from "../export/markdown.ts"
 import { buildCacheKey, cachedResult } from "../stats/cache.ts"
 import { MAX_TREND_DAYS } from "../stats/daily-buckets.ts"
@@ -39,7 +44,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.2.1"
+export const INSIGHT_VERSION = "0.3.1"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -280,6 +285,24 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
           queryCompactionStats(database),
         )
         return { statusCode: 200, body: compactionStats }
+      }
+      case "directories": {
+        const directoryLimit = parsePositiveIntegerParam(
+          requestContext.searchParams,
+          "limit",
+          DEFAULT_DIRECTORY_LIMIT,
+        )
+        // Clamp before keying (P2-6 discipline): the query clamps
+        // internally, so the cache key must carry the clamped value too
+        // or ?limit=999 and ?limit=50 would cache the same result twice.
+        // Key prefix "directory-stats" (not "queryDirectoryStats") is a
+        // deliberate, CHANGELOG-documented naming choice for this route.
+        const boundedDirectoryLimit = Math.min(directoryLimit, MAX_DIRECTORY_LIMIT)
+        const directoryStats = cachedResult(
+          buildCacheKey("directory-stats", [boundedDirectoryLimit]),
+          () => queryDirectoryStats(database, boundedDirectoryLimit),
+        )
+        return { statusCode: 200, body: directoryStats }
       }
       case "sessionMessages": {
         const messageRecords = cachedResult(

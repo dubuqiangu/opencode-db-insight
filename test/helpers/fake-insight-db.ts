@@ -74,6 +74,13 @@ export interface FakeInsightDatabaseScenario {
    * absent here serve SQL NULL, which the stats layer buckets as "none".
    */
   idleOutcomeBySessionId?: Record<string, string | null>
+  /**
+   * Raw session_v2.directory column per session id (v0.3-A directory
+   * stats); overrides the summary's directory so fixtures can express
+   * SQL NULL and empty strings, which the SessionSummary type cannot.
+   * Ids absent here keep the summary's directory.
+   */
+  directoryColumnBySessionId?: Record<string, string | null>
   /** Compaction message fixtures served to the /api/compaction scans. */
   compactionMessages?: FakeCompactionMessageFixture[]
 }
@@ -106,6 +113,10 @@ export function createFakeInsightDatabase(
   const sessionRows = scenario.sessions.map((sessionSummary) => ({
     ...toSessionV2Row(sessionSummary),
     idle_outcome: scenario.idleOutcomeBySessionId?.[sessionSummary.id] ?? null,
+    directory:
+      scenario.directoryColumnBySessionId?.[sessionSummary.id] !== undefined
+        ? scenario.directoryColumnBySessionId[sessionSummary.id]
+        : sessionSummary.directory,
   }))
   const compactionRows = (scenario.compactionMessages ?? []).map(
     (compactionFixture) => ({
@@ -134,6 +145,65 @@ export function createFakeInsightDatabase(
       if (sql.includes("idle_outcome")) {
         // The session-survival scan reads every session row (v0.2-A).
         return { all: () => sessionRows, get: () => undefined }
+      }
+      if (sql.includes("LEFT JOIN") && sql.includes("directory")) {
+        // The /api/directories grouped scan (v0.3-A): session_v2 LEFT
+        // JOIN of the assistant-step subquery, grouped per non-empty
+        // directory. Sessions with NULL/empty directories drop out of
+        // every bucket; steps mirror the assistant-object subquery by
+        // counting only assistant messages. Groups come back UNSORTED —
+        // the query's JS comparator owns the wire ordering, and serving
+        // insertion order here proves exactly that.
+        const assistantStepCountBySessionId = new Map<string, number>()
+        for (const [sessionId, messageFixtures] of Object.entries(scenario.messagesBySessionId)) {
+          assistantStepCountBySessionId.set(
+            sessionId,
+            messageFixtures.filter(
+              (messageFixture) =>
+                messageFixture.type === "assistant" &&
+                // Mirror json_valid(data) AND json_type(data) = 'object'
+                // from the shared predicate: the fake stores data as
+                // JSON.stringify(fixture.data), which is always valid
+                // JSON, so only non-null, non-array objects qualify —
+                // string/number/boolean/null data shapes are not steps.
+                typeof messageFixture.data === "object" &&
+                messageFixture.data !== null &&
+                !Array.isArray(messageFixture.data),
+            ).length,
+          )
+        }
+        const statsByDirectoryName = new Map<
+          string,
+          { session_count: number; step_count: number; last_active_ms: number | null }
+        >()
+        for (const sessionRow of sessionRows) {
+          const directoryColumn = sessionRow.directory
+          if (typeof directoryColumn !== "string" || directoryColumn === "") continue
+          const statsRecord =
+            statsByDirectoryName.get(directoryColumn) ?? {
+              session_count: 0,
+              step_count: 0,
+              last_active_ms: null,
+            }
+          statsRecord.session_count += 1
+          statsRecord.step_count += assistantStepCountBySessionId.get(String(sessionRow.id)) ?? 0
+          const timeUpdated = Number(sessionRow.time_updated)
+          statsRecord.last_active_ms =
+            statsRecord.last_active_ms === null
+              ? timeUpdated
+              : Math.max(statsRecord.last_active_ms, timeUpdated)
+          statsByDirectoryName.set(directoryColumn, statsRecord)
+        }
+        return {
+          all: () =>
+            [...statsByDirectoryName.entries()].map(([directoryName, statsRecord]) => ({
+              directory_name: directoryName,
+              session_count: statsRecord.session_count,
+              step_count: statsRecord.step_count,
+              last_active_ms: statsRecord.last_active_ms,
+            })),
+          get: () => undefined,
+        }
       }
       return {
         all: (...parameters: unknown[]) => {

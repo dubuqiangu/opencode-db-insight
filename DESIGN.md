@@ -87,11 +87,14 @@ opencode-db-insight/
 │  ├─ db/                        # 只读取数层
 │  │  ├─ queries.ts              #   SQL 收敛处（会话列表 / 回放步骤 / todo）
 │  │  ├─ aggregate-queries.ts    #   SQL 侧聚合（overview / trend / models / agents，与旧 JS 口径逐字段对账）
+│  │  ├─ behavior-queries.ts     #   v0.2 行为统计（小时热力 / 会话存活 / 压缩事件）
+│  │  ├─ scan-conventions.ts     #   扫描口径单点（assistant 谓词 / DAY_MS / 下推 floor 与回收窗口成对导出，0.2.1 起）
+│  │  ├─ directory-queries.ts    #   v0.3 按项目目录统计（会话数 / 步数 / 最近活跃，全量口径）
 │  │  ├─ rows.ts                 #   行记录解析与类型强制（coerceNumber / coerceText）
 │  │  └─ types.ts                 #   数据面类型定义（SessionSummary / AssistantStepRow / ...）
 │  ├─ stats/                     # 纯聚合函数层（无 IO，可单测）
 │  │  ├─ daily-buckets.ts / model-metrics.ts / agent-fingerprint.ts / hit-rate.ts
-│  │  ├─ hour-heatmap.ts / session-survival.ts    # v0.2 预置纯函数（待接线路由）
+│  │  └─ hour-heatmap.ts / session-survival.ts    # v0.2 纯函数（热力分桶带窗口回收下界）
 │  │  └─ cache.ts                #   60s TTL + 64 条上限的结果缓存
 │  ├─ web/                       # HTTP 服务层（node:http，仅绑定 127.0.0.1）
 │  │  ├─ server.ts               #   生命周期（listen / shutdown / 端口重试）
@@ -102,7 +105,8 @@ opencode-db-insight/
 │  │  └─ public/                 #   前端看板（原生 ESM，零构建）
 │  │     ├─ app.js / data-source.js / format.js / theme.js / tooltip.js
 │  │     ├─ components/          #     KPI 卡 / 趋势图 / 日历热力 / token 漏斗 / 模型表 /
-│  │     │                       #     会话列表 / 回放时间线与成本条 / 空态与加载态
+│  │     │                       #     会话列表 / 回放时间线与成本条 / 压缩面板 / 存活卡片 /
+│  │     │                       #     目录统计面板（v0.3）/ 空态与加载态
 │  │     └─ vendor/uplot/        #     uPlot 本地化（无 CDN 依赖）
 │  ├─ export/                    # Markdown 导出渲染（角色分节 / 格式化辅助）
 │  └─ tui/                       # TUI 命令实现
@@ -110,7 +114,7 @@ opencode-db-insight/
 │     ├─ status-panel-{data,text,controller}.ts  #   /insight-status 面板三件套
 │     ├─ open-dashboard-command.ts / export-command.ts
 │     └─ tui-context.ts         #   storage 读取（端口 / 数据库路径）
-├─ test/                         # 208 用例：模块测试 + 集成 / 韧性 / SQL 对账 + v0.2 行为查询
+├─ test/                         # 233 用例：模块测试 + 集成 / 韧性 / SQL 对账 + v0.2 行为查询 + v0.3 目录查询
 │  └─ helpers/                   # fake-insight-db / step 工厂
 ├─ DESIGN.md / tasks.md / CHANGELOG.md / README.md
 └─ package.json / LICENSE
@@ -133,9 +137,10 @@ opencode-db-insight/
 | 模型单点指标 | 步数、总量、命中率、步均输出、步均上下文、中位/p95 上下文、推理占比、活跃区间 | 排行榜核心 |
 | agent 指纹 | Σ 各工具调用次数 / 该 agent 总调用 | 工具偏好分布 |
 | 逐日趋势 | 按本地时区分桶：步骤、input、read、output、命中率 | 折线/面积图数据 |
-| 小时热力 | 历史步骤数按 小时×星期 分桶（纯函数已备） | 作息画像；API 路由与前端区块排 v0.2 |
-| 会话存活 | time_created→time_updated 时长分布、idle_outcome 计数（纯函数已备） | 短命会话占比；API 路由与前端区块排 v0.2 |
-| 压缩事件 | compaction 消息计数（按会话/按日） | 马拉松会话信号；统计实现排 v0.2（当前仅导出 Markdown 渲染压缩通知行） |
+| 小时热力 | 历史步骤数按 小时×星期 分桶（窗口回收下界与 trend 同构） | 作息画像（v0.2 已接线） |
+| 会话存活 | time_created→time_updated 时长分布、idle_outcome 计数 | 短命会话占比（v0.2 已接线） |
+| 压缩事件 | compaction 消息计数（按会话/按日/按 reason） | 马拉松会话信号（v0.2 已接线） |
+| 目录维度 | 会话数 / assistant 步数 / 最近活跃（MAX time_updated）按 session_v2.directory 聚合 | 全量口径，NULL/空目录排除出列表与 totals（v0.3 已接线） |
 | todo 完成率 | completed / total | `todo` 表 |
 | 数字精度标签 | cost 为 DB 实值标 🟢；tokens 换算金额标 🟡 估算 | 采纳 claude-lens 精度分级，UI 全局生效 |
 
@@ -151,6 +156,7 @@ opencode-db-insight/
 | `/api/session-survival` | 会话存活统计（中位时长 / 短命占比 / idle 结局分布） |
 | `/api/compaction` | 压缩事件统计（总数 / 按 reason / 近 30 日逐日 / Top 10 会话） |
 | `/api/todo` | todo 完成率统计（供看板卡片） |
+| `/api/directories?limit=10` | 按项目目录统计（目录排行：会话数 / 步数 / 最近活跃；limit 钳位 1..50，全量口径无 days 窗口） |
 | `/api/sessions?limit=&offset=` | 会话列表（标题/模型/agent/时间/token；服务端固定按 time_updated 倒序，客户端排序） |
 | `/api/session/:id/messages` | 单会话全部消息（角色分型，供回放） |
 | `/api/session/:id/system-prompt` | 该会话关联的 instruction_blob 内容 |

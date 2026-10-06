@@ -15,6 +15,7 @@ import {
   fetchSessionSurvival,
   fetchCompaction,
   fetchTodo,
+  fetchDirectoryStats,
   MAX_TREND_DAYS,
 } from "./data-source.js";
 import { formatTokens, formatPercent, escapeHtml } from "./format.js";
@@ -26,6 +27,7 @@ import { renderHourHeatmap } from "./components/hour-heatmap.js";
 import { renderSessionSurvivalCard } from "./components/session-survival-card.js";
 import { renderCompactionPanel } from "./components/compaction-panel.js";
 import { renderTodoCard } from "./components/todo-card.js";
+import { renderDirectoryPanel } from "./components/directory-panel.js";
 import { renderToolBars } from "./components/tool-bars.js";
 import { renderTokenFunnel } from "./components/token-funnel.js";
 import { renderModelTable } from "./components/model-table.js";
@@ -51,6 +53,7 @@ const state = {
     sessionSurvival: undefined,
     compaction: undefined,
     todo: undefined,
+    directories: undefined,
   },
   failedSections: new Set(),
   trendCleanup: () => {},
@@ -67,6 +70,7 @@ const hourHeatmapElement = document.getElementById("hour-heatmap");
 const compactionPanelElement = document.getElementById("compaction-panel");
 const sessionSurvivalElement = document.getElementById("session-survival");
 const todoCardElement = document.getElementById("todo-card");
+const directoryPanelElement = document.getElementById("directory-panel");
 const toolBarsElement = document.getElementById("tool-bars");
 const tokenFunnelElement = document.getElementById("token-funnel");
 const funnelCaptionElement = document.getElementById("funnel-caption");
@@ -245,6 +249,17 @@ async function loadTodoSection() {
   }
 }
 
+async function loadDirectorySection() {
+  try {
+    state.cache.directories = await fetchDirectoryStats(10);
+    renderDirectoryPanel(directoryPanelElement, state.cache.directories);
+    markSection("directories", true);
+  } catch (error) {
+    renderError(directoryPanelElement, error, loadDirectorySection);
+    markSection("directories", false);
+  }
+}
+
 /* ---------- 模型下钻过滤 ---------- */
 function onModelSelected(modelId) {
   state.modelFilter = modelId;
@@ -331,6 +346,7 @@ function startInitialLoad() {
   loadCompactionSection();
   loadSessionSurvivalSection();
   loadTodoSection();
+  loadDirectorySection();
 }
 
 function init() {
@@ -346,6 +362,7 @@ function init() {
     if (state.cache.compaction !== undefined) renderCompactionPanel(compactionPanelElement, state.cache.compaction);
     if (state.cache.sessionSurvival !== undefined) renderSessionSurvivalCard(sessionSurvivalElement, state.cache.sessionSurvival);
     if (state.cache.todo !== undefined) renderTodoCard(todoCardElement, state.cache.todo);
+    if (state.cache.directories !== undefined) renderDirectoryPanel(directoryPanelElement, state.cache.directories);
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
     if (state.cache.sessions !== undefined) renderSessionList(sessionListElement, state.cache.sessions, state.modelFilter);

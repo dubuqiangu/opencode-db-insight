@@ -23,6 +23,7 @@ test("matchApiRoute recognizes every static API route", () => {
   assert.deepEqual(matchApiRoute("/api/hour-heatmap"), { routeName: "hour-heatmap" })
   assert.deepEqual(matchApiRoute("/api/session-survival"), { routeName: "session-survival" })
   assert.deepEqual(matchApiRoute("/api/compaction"), { routeName: "compaction" })
+  assert.deepEqual(matchApiRoute("/api/directories"), { routeName: "directories" })
 })
 
 test("matchApiRoute matches session routes and decodes the session id", () => {

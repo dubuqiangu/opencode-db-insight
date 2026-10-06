@@ -23,6 +23,7 @@
   gap: 16px;
 }
 @media (max-width: 1100px) { .tables { grid-template-columns: 1fr; } }
+.tables .span-both { grid-column: 1 / -1; }
 
 /* ---------- 面板 ---------- */
 .panel {
@@ -423,6 +424,92 @@
 .todo-progress .seg-pending { background: var(--border-strong); }
 .todo-progress .seg-other { background: var(--purple); }
 .todo-counts { font-size: 12px; color: var(--text-dim); margin: 0; }
+
+/* ---------- 项目目录用量区块（v0.3-A） ---------- */
+.directory-head-row,
+.directory-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 230px) 1fr 64px 64px 92px;
+  gap: 12px;
+  align-items: center;
+}
+.directory-head-row {
+  font-size: 11.5px;
+  letter-spacing: 0.3px;
+  color: var(--text-faint);
+  padding: 0 8px 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.directory-head-row .num { text-align: right; }
+.directory-head-row span:last-child { text-align: right; }
+.directory-list { display: flex; flex-direction: column; gap: 6px; }
+.directory-row {
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  transition: background 0.12s;
+}
+.directory-row:hover { background: var(--panel-2); }
+.directory-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.directory-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.directory-path {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.directory-bar-track {
+  height: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.directory-bar { display: block; height: 100%; background: var(--blue); border-radius: 5px; }
+.directory-bar.top { background: var(--accent); }
+.directory-count {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.directory-last-active {
+  font-size: 11.5px;
+  text-align: right;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.directory-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  flex-wrap: wrap;
+}
+@media (max-width: 720px) {
+  .directory-head-row,
+  .directory-row { grid-template-columns: minmax(110px, 1fr) 1fr 52px 52px; }
+  .directory-head-row span:nth-child(5),
+  .directory-row .directory-last-active { display: none; }
+}
 
 /* ---------- 会话回放页 ---------- */
 .session-view { max-width: 960px; margin: 0 auto; }

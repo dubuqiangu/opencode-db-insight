@@ -115,6 +115,17 @@ export function formatDuration(seconds) {
   return remainderHours === 0 ? `${totalDays} 天` : `${totalDays} 天 ${remainderHours} 小时`;
 }
 
+/**
+ * 路径最后一段（目录展示名）：兼容 / 与 \ 分隔、末尾分隔符、
+ * 重复分隔符。全部段落皆空时原样返回。后端契约已切好 name 字段，
+ * 此函数供 mock 生成 name 与前端 name 缺失时兜底。
+ */
+export function pathLastSegment(directoryPath) {
+  const pathText = String(directoryPath);
+  const segments = pathText.split(/[\\/]+/).filter((segment) => segment !== "");
+  return segments.length > 0 ? segments[segments.length - 1] : pathText;
+}
+
 const HTML_ESCAPE_MAP = {
   "&": "&" + "amp;",
   "<": "&" + "lt;",

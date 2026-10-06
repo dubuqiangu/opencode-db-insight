@@ -8,6 +8,38 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.3.1] - 2026-10-07 · v0.3.0 增量审查修复 + 隐私加固
+
+@oracle 对 v0.3.0 增量的审查（P0 零 / P1×3 / P2×5）发现项的修复版本；测试 233 → 241。
+
+> 本版本与 0.3.0 的功能内容已合并为单一提交发布（原 0.3.0 提交因含真实目录路径示例被历史重写移除）。
+
+### Fixed
+- **隐私残留清零**（P1-1，硬红线）：docstring 示例与测试夹具中的真实机器路径全部换为虚构占位（`D:/projects/example-alpha` 等），全库按正反斜杠与真实用户名双形态 grep 零命中；此教训同步进发布清单（见下）
+- **守恒锁升级为真实 SQL 结构回归锁**（P1-3）：queryDirectoryStats 加入 `node:sqlite` `:memory:` 受控夹具测试（test/directory-stats-sql-parity.test.ts，5 用例）——零步目录在列、NULL/空串排除、非对象/非法 JSON 不计步、守恒、三键排序全部由**真实 SQL 语义**锁定，LEFT→INNER 退化现在会红
+- **目录面板入库测试**（P1-2）：renderDirectoryPanel 进 web-components.test.ts（恶意 directory 双插入点转义锁——文本节点 + title 属性；null/空列表降级占位）
+- **前后端 name 推导对拍锁**（P2-5）：6 个固定样例同时喂后端 directoryDisplayName 与前端 pathLastSegment，逐值相等 + 硬编码锚点双保险——双镜像同漂也红
+- **mock 会话数同源恒等**（P2-2）：目录面板会话数改挂 overview.sessionCount 同源链，四视图（目录/生存/overview/sessions）mock 恒等，镜像真实后端单一 COUNT(*) 同源性
+- **distributeByLargestRemainder 退化契约**（P2-3）：全零权重 + 正总量 → throw（原静默返回全零违反守恒契约）；零/负总量 → 全零数组（自洽）
+- **fake 谓词补齐**（P2-1）：fake 目录分支步数过滤补上 json_valid+object 镜像，与真实 SQL 语义一致
+- **过期注释三处**（P2-4）：router.ts 路由数表述改为不绑定数字；smoke 注释改为漂移安全表述；api.ts 缓存键补命名说明
+
+### Added
+- **发布清单**（oracle 建议采纳）：新增前端面板必须同时进 web-components.test.ts；新增 SQL 聚合必须进真实 SQLite 受控夹具测试；推送前隐私扫描必须同时覆盖正斜杠与反斜杠两种路径形态
+
+## [0.3.0] - 2026-10-06 · v0.3-A 按项目目录统计
+
+### Added
+- **`GET /api/directories?limit=10`**：按项目目录统计——目录排行（原样完整路径 + 展示名末段切分 / 会话数 / assistant 步数 / 最近活跃 MAX time_updated），全量口径无 days 窗口；limit 默认 10、钳位 1..50（查询与缓存键均用钳位值）；排序三键确定性（steps desc → sessions desc → directory asc，JS 比较器拥有 wire 顺序）；NULL/空 directory 排除出列表与 totals（真实库恰 1 条，探针实证）
+- **src/db/directory-queries.ts**：steps 复用 scan-conventions 的 ASSISTANT_OBJECT_DATA_PREDICATE 单点口径（无副本）；`COUNT(DISTINCT s.id)` 防 LEFT JOIN 扇出；totals 由全量分组结果派生（守恒由构造保证）
+- **前端目录统计面板**（components/directory-panel.js）：榜单行 = 展示名 + 完整路径次行（全插入点 escapeHtml）+ 步数条形（以榜首为基准，适配长尾形态）+ 会话/步数/最近活跃列；meta 行「共 N 目录 · M 会话」；`.span-both` 全宽区块；<720px 折叠最近活跃列
+- **mock**：getMockDirectoryStats 从 simulated.points 统一随机源按最大余数法分摊（各目录 steps 求和 === mock trend 同口径总步数，精确守恒）；distributeStepsAcrossHours 泛化为 distributeByLargestRemainder（顺修零返回硬编码长度隐患）
+- format.js 新增 pathLastSegment（双分隔符切分 / 尾分隔符 / 回退原串，前后端 mock 共用）
+- 测试 222 → **233**（+11：目录查询 8 + api-routes 2 + 真实库 smoke 1）——含守恒锁（Σ sessions === totalSessions、Σ steps === 全库 assistant 行数）与排序确定性（fake 故意无序返回反证 JS 排序）
+
+### Fixed
+- router.ts 路由注册遗漏风险补位：/api/directories 接入 InsightRoute union 与分发（实现轨道的最小必要越域改动，已复核）
+
 ## [0.2.1] - 2026-10-06 · v0.2.0 增量审查修复
 
 @oracle 对 v0.2.0 增量代码的审查（P0 零 / P1×2 / P2×6，含真实库探针验证）发现项的修复版本；测试 208 → 222。

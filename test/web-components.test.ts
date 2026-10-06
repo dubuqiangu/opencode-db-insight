@@ -21,6 +21,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import { strictHitRate } from "../src/stats/hit-rate.ts"
+import { directoryDisplayName } from "../src/db/directory-queries.ts"
 
 /* ------------------------- thin DOM shim ------------------------- */
 
@@ -481,4 +482,127 @@ test("summarizeStrictHitRate mirrors the backend strictHitRate value for value",
   // cannot silently diverge.
   assert.equal(summarizeStrictHitRate([userTextMessage()]), null)
   assert.equal(strictHitRate(0, 0, 0), 0)
+})
+
+/* --------------------- directory-panel component --------------------- */
+
+test("renderDirectoryPanel escapes the directory and display name at both the text and title insertion points", async () => {
+  const { renderDirectoryPanel } = await import(
+    "../src/web/public/components/directory-panel.js"
+  )
+  const { escapeHtml, pathLastSegment } = await import("../src/web/public/format.js")
+  const container = freshContainer()
+
+  const hostileDirectoryPath = 'D:/evil"><script>alert(1)</script>'
+  const hostileDisplayName = "<img onerror=alert(2)>"
+  renderDirectoryPanel(container, {
+    totalDirectories: 2,
+    totalSessions: 3,
+    directories: [
+      {
+        directory: hostileDirectoryPath,
+        name: hostileDisplayName,
+        sessions: 2,
+        steps: 4,
+        lastActiveMs: 1791297715295,
+      },
+      {
+        // Empty name falls back to the frontend's own pathLastSegment.
+        directory: "D:/fallback/example-fallback",
+        name: "",
+        sessions: 1,
+        steps: 0,
+        lastActiveMs: null,
+      },
+    ],
+  })
+
+  const renderedHtml = container.innerHTML
+  // title attribute insertion point: the full hostile path, escaped.
+  assert.ok(
+    renderedHtml.includes(`title="${escapeHtml(hostileDirectoryPath)}"`),
+    "the title attribute must carry the html-escaped directory path",
+  )
+  // Text insertion points: display name and full path, escaped.
+  assert.ok(
+    renderedHtml.includes(`>${escapeHtml(hostileDisplayName)}</span>`),
+    "the display-name span must carry the html-escaped name",
+  )
+  assert.ok(renderedHtml.includes(escapeHtml(hostileDirectoryPath)))
+  // Raw payloads never reach the DOM.
+  assert.ok(!renderedHtml.includes("<script>alert(1)</script>"))
+  assert.ok(!renderedHtml.includes("<img onerror=alert(2)>"))
+  // Empty name → pathLastSegment fallback, rendered in the name span.
+  assert.ok(
+    renderedHtml.includes(
+      `>${escapeHtml(pathLastSegment("D:/fallback/example-fallback"))}</span>`,
+    ),
+    "a missing name falls back to the frontend's own last-segment derivation",
+  )
+  // Bar widths: top row fills the track; the zero-step row keeps the 2% floor.
+  assert.ok(renderedHtml.includes("width:100.0%"))
+  assert.ok(renderedHtml.includes("width:2.0%"))
+  assert.match(
+    renderedHtml,
+    /共 <b class="num">2<\/b> 个目录 · <b class="num">3<\/b> 个会话/,
+  )
+})
+
+test("renderDirectoryPanel degrades null and empty listings to the empty placeholder", async () => {
+  const { renderDirectoryPanel } = await import(
+    "../src/web/public/components/directory-panel.js"
+  )
+
+  const nullContainer = freshContainer()
+  renderDirectoryPanel(nullContainer, null)
+  assert.match(nullContainer.innerHTML, /还没有目录统计/)
+
+  const emptyContainer = freshContainer()
+  renderDirectoryPanel(emptyContainer, {
+    totalDirectories: 0,
+    totalSessions: 0,
+    directories: [],
+  })
+  assert.match(emptyContainer.innerHTML, /还没有目录统计/)
+
+  // A non-zero total with an empty list still degrades — the listing
+  // drives the placeholder, not the totals.
+  const ghostTotalContainer = freshContainer()
+  renderDirectoryPanel(ghostTotalContainer, {
+    totalDirectories: 3,
+    totalSessions: 5,
+    directories: [],
+  })
+  assert.match(ghostTotalContainer.innerHTML, /还没有目录统计/)
+})
+
+test("pathLastSegment mirrors the backend directoryDisplayName value for value", async () => {
+  const { pathLastSegment } = await import("../src/web/public/format.js")
+
+  // Fixed samples spanning every derivation face: drive-root style,
+  // trailing separator, both separators mixed, backslash-only, no
+  // extractable segment (fallback to the original), and the empty path.
+  const paritySamples: Array<{ directoryPath: string; expectedName: string }> = [
+    { directoryPath: "C:/Users/example-user", expectedName: "example-user" },
+    { directoryPath: "D:/work/", expectedName: "work" },
+    { directoryPath: "D:/mixed\\path/parts", expectedName: "parts" },
+    { directoryPath: "D:\\projects\\example-beta", expectedName: "example-beta" },
+    { directoryPath: "///", expectedName: "///" },
+    { directoryPath: "", expectedName: "" },
+  ]
+
+  for (const paritySample of paritySamples) {
+    assert.equal(
+      pathLastSegment(paritySample.directoryPath),
+      directoryDisplayName(paritySample.directoryPath),
+      `frontend and backend must agree on "${paritySample.directoryPath}"`,
+    )
+    // Hardcoded anchors: a silent co-drift of both implementations
+    // still fails against the expected values.
+    assert.equal(
+      directoryDisplayName(paritySample.directoryPath),
+      paritySample.expectedName,
+      `backend derivation of "${paritySample.directoryPath}"`,
+    )
+  }
 })
