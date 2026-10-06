@@ -23,6 +23,8 @@ import {
   querySessionSummaryById,
   querySessionSystemPrompt,
   queryTodoStats,
+  resolveSessionSortKey,
+  resolveSessionSortOrder,
 } from "../db/queries.ts"
 import {
   queryCompactionStats,
@@ -44,7 +46,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.3.1"
+export const INSIGHT_VERSION = "0.4.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -250,9 +252,24 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
       case "sessions": {
         const sessionLimit = parsePositiveIntegerParam(requestContext.searchParams, "limit", 50)
         const sessionOffset = parseNonNegativeIntegerParam(requestContext.searchParams, "offset", 0)
+        // Resolve ?sort=/?order= against the whitelist before keying, so
+        // the cache entry carries the resolved values — garbage never
+        // sprays near-duplicate entries and every entry maps to exactly
+        // one whitelisted SQL shape. Key prefix "sessions" (not
+        // "querySessionList") is a deliberate, CHANGELOG-documented
+        // naming choice for this route (v0.2-B), like "directory-stats".
+        const sessionSortKey = resolveSessionSortKey(requestContext.searchParams.get("sort"))
+        const sessionSortOrder = resolveSessionSortOrder(requestContext.searchParams.get("order"))
         const sessionPage = cachedResult(
-          buildCacheKey("querySessionList", [sessionLimit, sessionOffset]),
-          () => querySessionList(database, sessionLimit, sessionOffset),
+          buildCacheKey("sessions", [sessionLimit, sessionOffset, sessionSortKey, sessionSortOrder]),
+          () =>
+            querySessionList(
+              database,
+              sessionLimit,
+              sessionOffset,
+              sessionSortKey,
+              sessionSortOrder,
+            ),
         )
         return { statusCode: 200, body: sessionPage }
       }

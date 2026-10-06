@@ -137,25 +137,93 @@ function clampPaginationValue(value: number, minimum: number, maximum: number): 
 }
 
 /**
+ * Sort whitelist for the session list (v0.2-B server-side sorting): each
+ * allowed ?sort= key maps to a fixed SQL fragment. Raw query-string text
+ * never reaches the SQL string — only these fragments do, which is what
+ * makes the ordering injection-proof by construction. `tokens` is the
+ * three-column sum the SessionSummary contract reports (not a column).
+ */
+export const SESSION_SORT_SQL_BY_SORT_KEY = {
+  time_updated: "time_updated",
+  time_created: "time_created",
+  tokens: "tokens_input + tokens_output + tokens_cache_read",
+  cost: "cost",
+  title: "title",
+} as const
+
+export type SessionSortKey = keyof typeof SESSION_SORT_SQL_BY_SORT_KEY
+
+/** Default sort key: newest activity first, exactly the pre-0.4.0 wire order. */
+export const DEFAULT_SESSION_SORT_KEY: SessionSortKey = "time_updated"
+
+export type SessionSortOrder = "asc" | "desc"
+
+export const DEFAULT_SESSION_SORT_ORDER: SessionSortOrder = "desc"
+
+/**
+ * Resolve ?sort= against the whitelist. Missing, empty, unknown or
+ * hostile values fall back to the default — the same degrade-not-reject
+ * semantics as limit/offset (no 400s). Idempotent: resolving an already
+ * resolved key returns it unchanged, so the API layer can resolve once
+ * for the cache key and pass the same value on to the query.
+ */
+export function resolveSessionSortKey(
+  sortKeyValue: string | null | undefined,
+): SessionSortKey {
+  if (
+    sortKeyValue !== null &&
+    sortKeyValue !== undefined &&
+    sortKeyValue in SESSION_SORT_SQL_BY_SORT_KEY
+  ) {
+    return sortKeyValue as SessionSortKey
+  }
+  return DEFAULT_SESSION_SORT_KEY
+}
+
+/**
+ * Resolve ?order= against the whitelist: only the exact lowercase "asc"
+ * flips the direction, everything else (missing, "DESC", garbage) falls
+ * back to the default desc.
+ */
+export function resolveSessionSortOrder(
+  sortOrderValue: string | null | undefined,
+): SessionSortOrder {
+  return sortOrderValue === "asc" ? "asc" : DEFAULT_SESSION_SORT_ORDER
+}
+
+/**
  * Session list for GET /api/sessions. `tokens` comes from the session_v2
  * summary columns (lagging for active sessions — the list is the only
  * place they are used, DESIGN §2.2).
+ *
+ * Ordering (v0.2-B): primary key from the ?sort= whitelist (default
+ * time_updated), direction from ?order= (default desc). The `id ASC`
+ * secondary key is mandatory for deterministic pagination — ties on the
+ * primary key must paginate without duplicates or gaps. Callers may pass
+ * raw query-string values; they are whitelisted here again (defense in
+ * depth next to the API layer's own resolution for the cache key).
  */
 export function querySessionList(
   db: SqliteReadConnection | null,
   limit: number = 50,
   offset: number = 0,
+  sortKeyValue: string | null | undefined = DEFAULT_SESSION_SORT_KEY,
+  sortOrderValue: string | null | undefined = DEFAULT_SESSION_SORT_ORDER,
 ): SessionSummary[] | null {
   if (db === null) return null
   const safeLimit = clampPaginationValue(limit, 1, 500)
   const safeOffset = clampPaginationValue(offset, 0, Number.MAX_SAFE_INTEGER)
+  const safeSortKey = resolveSessionSortKey(sortKeyValue)
+  const safeSortOrder = resolveSessionSortOrder(sortOrderValue)
+  const primarySortSql = SESSION_SORT_SQL_BY_SORT_KEY[safeSortKey]
+  const primaryDirectionSql = safeSortOrder === "asc" ? "ASC" : "DESC"
 
   const rawRows = db
     .prepare(
       `SELECT id, title, model, agent, directory, time_created, time_updated,
               tokens_input, tokens_output, tokens_cache_read, cost
        FROM session_v2
-       ORDER BY time_updated DESC
+       ORDER BY ${primarySortSql} ${primaryDirectionSql}, id ASC
        LIMIT ? OFFSET ?`,
     )
     .all(safeLimit, safeOffset)

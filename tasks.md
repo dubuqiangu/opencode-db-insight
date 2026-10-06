@@ -149,3 +149,14 @@
 2. **新增 SQL 聚合** → 必须进真实 node:sqlite :memory: 受控夹具测试（锁 SQL 结构语义，不能只靠 fake JS 镜像）
 3. **推送前隐私扫描** → 路径形态正则必须同时覆盖正斜杠与反斜杠两种写法（本版教训：只查反斜杠漏掉了正斜杠形态才放走真实路径）、裸词（本机盘根目录名）与精确用户名双查；测试夹具/docstring 示例一律用虚构占位（example-a / example-user 级），不用活库真实值
 4. 契约钉死 → 双轨并行 → 收敛复核（独立复跑测试 + 真实库探针）→ 扫描 → 推送 → oracle 增量审查 → 修复闭环
+
+## v0.2-B sessions 服务端排序（push #14，2026-10-07）
+
+- [x] 契约：sort 白名单（time_updated/time_created/tokens/cost/title）TS 常量 map 键→SQL 片段、order 白名单、非法回退默认、id ASC 确定性次级键、缓存键含排序维度
+- [x] 实现（fix-15）：queries.ts 白名单 + 解析函数 + querySessionList 排序参数；api.ts 路由解析 + 缓存键；版本 0.4.0 三处同步
+- [x] 测试 241 → 249：真实 SQLite 夹具对拍（10 组合/JS 重排一致/并列翻页/注入面正则锁/垃圾字节级回退）+ api-routes 缓存变体/503
+- [x] 收敛复核：249/249 独立复跑 + check 0 + 真实库路由探针 8/8（默认形状/升序/降序/垃圾 deepEqual 回退/三页无重复无跳行/time_created 端到端）
+- [x] 文档：DESIGN §6 路由表 sessions 行、CHANGELOG 0.4.0
+- [ ] oracle 增量审查 0.4.0 delta → 有 P0/P1 则修后推 0.4.1
+
+backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部落地

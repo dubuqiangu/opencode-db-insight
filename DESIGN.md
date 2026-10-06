@@ -157,7 +157,7 @@ opencode-db-insight/
 | `/api/compaction` | 压缩事件统计（总数 / 按 reason / 近 30 日逐日 / Top 10 会话） |
 | `/api/todo` | todo 完成率统计（供看板卡片） |
 | `/api/directories?limit=10` | 按项目目录统计（目录排行：会话数 / 步数 / 最近活跃；limit 钳位 1..50，全量口径无 days 窗口） |
-| `/api/sessions?limit=&offset=` | 会话列表（标题/模型/agent/时间/token；服务端固定按 time_updated 倒序，客户端排序） |
+| `/api/sessions?limit=&offset=&sort=&order=` | 会话列表（标题/模型/agent/时间/token）；服务端排序：sort 白名单 time_updated（默认）/time_created/tokens/cost/title，order 默认 desc，非法回退默认；`id ASC` 次级键保证分页确定性；缓存键含排序维度 |
 | `/api/session/:id/messages` | 单会话全部消息（角色分型，供回放） |
 | `/api/session/:id/system-prompt` | 该会话关联的 instruction_blob 内容 |
 | `/api/export/session/:id.md` | 服务端渲染的 Markdown 导出 |

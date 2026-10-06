@@ -439,3 +439,68 @@ test("directories cache keys clamp limit to the 50-row bound (P2-6 discipline)",
     clearResultCache()
   }
 })
+
+test("sessions with sort/order parameters still answers 503 while the db is missing", () => {
+  const sessionsRoute = matchApiRoute("/api/sessions")
+  assert.notEqual(sessionsRoute, null)
+  const apiResponse = handleApiRequest({
+    route: sessionsRoute!,
+    searchParams: new URLSearchParams("sort=%3B%20DROP%20TABLE&order=garbage"),
+    database: null,
+    databasePath: "test://no-database",
+    serverPort: 18789,
+  })
+  // The db-unavailable short-circuit happens before any parameter
+  // parsing — hostile sort/order text must never even reach the resolvers
+  // on the way to the 503.
+  assert.equal(apiResponse.statusCode, 503)
+  assert.deepEqual(apiResponse.body, { error: DATABASE_UNAVAILABLE_MESSAGE })
+})
+
+test("sessions cache keys carry resolved sort/order: distinct combos get entries, garbage shares the default (v0.2-B)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({ id: "ses_sort_cache_1", timeCreated: 1000, timeUpdated: 2000 }),
+        buildFakeSessionSummary({ id: "ses_sort_cache_2", timeCreated: 3000, timeUpdated: 4000 }),
+      ],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+
+    const sessionsRoute = matchApiRoute("/api/sessions")!
+    const contextWithQuery = (queryString: string): ApiRequestContext => ({
+      route: sessionsRoute,
+      searchParams: new URLSearchParams(queryString),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+
+    // The default entry (limit 50, offset 0, time_updated desc).
+    handleApiRequest(contextWithQuery(""))
+    assert.equal(resultCacheSize(), 1)
+
+    // Each distinct whitelisted combination gets its own entry.
+    handleApiRequest(contextWithQuery("sort=cost"))
+    assert.equal(resultCacheSize(), 2, "sort=cost is its own cache entry")
+    handleApiRequest(contextWithQuery("order=asc"))
+    assert.equal(resultCacheSize(), 3, "order=asc is its own cache entry")
+    handleApiRequest(contextWithQuery("sort=cost&order=asc"))
+    assert.equal(resultCacheSize(), 4, "the cost/asc combination is its own entry")
+    handleApiRequest(contextWithQuery("sort=tokens&order=asc"))
+    assert.equal(resultCacheSize(), 5)
+
+    // Explicit defaults and every garbage variant resolve onto the very
+    // same key as the no-parameter call — illegal input never sprays
+    // near-duplicate entries.
+    handleApiRequest(contextWithQuery("sort=time_updated&order=desc"))
+    handleApiRequest(contextWithQuery("sort=%3B%20DROP%20TABLE%20session_v2%20--"))
+    handleApiRequest(contextWithQuery("order=DESC%3B%20DROP%20TABLE%20session_v2"))
+    handleApiRequest(contextWithQuery("sort=unknown_sort_key&order=garbage"))
+    assert.equal(resultCacheSize(), 5, "defaults and garbage share the default key")
+  } finally {
+    clearResultCache()
+  }
+})

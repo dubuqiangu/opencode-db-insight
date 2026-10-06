@@ -8,6 +8,15 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.4.0] - 2026-10-07 · v0.2-B sessions 服务端排序
+
+### Added
+- **`GET /api/sessions?sort=&order=`**：服务端排序参数（v0.2-B，backlog 清空）——sort 白名单 `time_updated`（默认）/ `time_created` / `tokens`（三列合成）/ `cost` / `title`，TS 常量 map 键→固定 SQL 片段，原始输入永不进 SQL 文本；order 默认 desc、仅接受 `asc`/`desc`；非法/缺省回退默认（与 limit 同语义，不发 400）
+- **确定性分页**：`ORDER BY <白名单片段> <方向>, id ASC` 次级键——同键并列翻页不重复不跳行
+- **缓存键** `sessions:[limit,offset,sort,order]` 用白名单解析后的值（非法值与默认同键，不膨胀缓存）
+- 测试 241 → **249**（+8）：真实 `node:sqlite :memory:` 夹具对拍（10 种白名单组合、tokens-asc 与 JS 重排逐值一致、并列翻页确定性、垃圾回退字节级 deepEqual、注入面 SQL 白名单正则锁）+ api-routes 缓存变体/503
+- **完全向后兼容**：默认调用响应与 0.3.1 逐值一致（测试锁）；fake sessions 分支不镜像排序语义、归属真实夹具（发布清单 #2）
+
 ## [0.3.1] - 2026-10-07 · v0.3.0 增量审查修复 + 隐私加固
 
 @oracle 对 v0.3.0 增量的审查（P0 零 / P1×3 / P2×5）发现项的修复版本；测试 233 → 241。

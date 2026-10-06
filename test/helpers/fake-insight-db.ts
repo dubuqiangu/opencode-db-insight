@@ -205,6 +205,14 @@ export function createFakeInsightDatabase(
           get: () => undefined,
         }
       }
+      // The paginated session-list scan (GET /api/sessions). The fake
+      // deliberately does NOT mirror the ?sort=/?order= SQL semantics
+      // (v0.2-B): it keeps serving the scenario's insertion order, which
+      // the pre-existing tests rely on. Ordering correctness — including
+      // the deterministic `id ASC` tie-break — is owned exclusively by
+      // the real node:sqlite :memory: fixture in
+      // test/session-list-sorting.test.ts (发布清单 #2: SQL semantics
+      // must be locked against real SQLite, not a fake JS mirror).
       return {
         all: (...parameters: unknown[]) => {
           const limit = Number(parameters[0]) || 50
