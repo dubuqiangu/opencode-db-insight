@@ -157,6 +157,15 @@
 - [x] 测试 241 → 249：真实 SQLite 夹具对拍（10 组合/JS 重排一致/并列翻页/注入面正则锁/垃圾字节级回退）+ api-routes 缓存变体/503
 - [x] 收敛复核：249/249 独立复跑 + check 0 + 真实库路由探针 8/8（默认形状/升序/降序/垃圾 deepEqual 回退/三页无重复无跳行/time_created 端到端）
 - [x] 文档：DESIGN §6 路由表 sessions 行、CHANGELOG 0.4.0
-- [ ] oracle 增量审查 0.4.0 delta → 有 P0/P1 则修后推 0.4.1
+- [x] oracle 增量审查 0.4.0 delta：P0 零 / P1×1（sort 白名单原型链洞，活库复现）/ P2×2（兼容性声明失实 / collation 夹具）——P1+P2 修复后推 0.4.1
 
 backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部落地
+
+## v0.4.1 修复 0.4.0 审查发现项（push #15，2026-10-07）
+
+- [x] P1-1 sort 白名单原型链洞：Object.hasOwn 替换 in 运算符——`?sort=toString/__proto__/constructor` 从永久 500 恢复为回退默认序；三处测试 hostile 清单补键（红→绿：修复前三红含 500 断言、修复后全绿）；真机探针 5/5（三键 200 + deepEqual 默认 + tokens asc 回归）
+- [x] P2-2 title 夹具混大小写对（Date/datebook），锁 BINARY collation 假设
+- [x] P2-1 兼容性声明改写为如实描述（CHANGELOG 0.4.0 条目，orchestrator 执行）
+- [x] N-2 UTF-16/UTF-8 序一致性假设注释
+- [x] 版本 0.4.1 三处同步；249/249 全绿（清单喂入不增测试数）、check 0
+- 按"审查收敛备忘"，0.4.1 为 oracle 处方修复（红→绿 + 真机实证 + 回归锁），不再派下一代审查

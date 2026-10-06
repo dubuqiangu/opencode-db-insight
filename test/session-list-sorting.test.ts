@@ -92,14 +92,19 @@ interface SessionSortFixtureRow {
  * - cost 2.5 tie: bravo / delta;
  * - title "banana" tie: bravo / delta / foxtrot;
  * - time_created is fully distinct (the insertion order).
- * Fixture paths use fictional placeholders per the release checklist #3.
+ * Titles are deliberately MIXED-CASE to pin the BINARY collation (P2-2):
+ * "Date" (uppercase D, 0x44) sorts before every lowercase title only
+ * under SQLite's default BINARY collation — under COLLATE NOCASE it
+ * would fold to "date" and sort after "apple"/"banana", turning the
+ * expected title sequences below red. Fixture paths use fictional
+ * placeholders per the release checklist #3.
  */
 const SESSION_SORT_FIXTURE_ROWS: SessionSortFixtureRow[] = [
-  { id: "ses_sort_alpha", title: "cherry", timeCreated: 1000, timeUpdated: 5000, tokensInput: 1000, tokensOutput: 300, tokensCacheRead: 200, cost: 1.0 },
+  { id: "ses_sort_alpha", title: "datebook", timeCreated: 1000, timeUpdated: 5000, tokensInput: 1000, tokensOutput: 300, tokensCacheRead: 200, cost: 1.0 },
   { id: "ses_sort_bravo", title: "banana", timeCreated: 2000, timeUpdated: 5000, tokensInput: 300, tokensOutput: 100, tokensCacheRead: 200, cost: 2.5 },
   { id: "ses_sort_charlie", title: "apple", timeCreated: 3000, timeUpdated: 9000, tokensInput: 200, tokensOutput: 100, tokensCacheRead: 300, cost: 4.5 },
   { id: "ses_sort_delta", title: "banana", timeCreated: 4000, timeUpdated: 7000, tokensInput: 100, tokensOutput: 100, tokensCacheRead: 100, cost: 2.5 },
-  { id: "ses_sort_echo", title: "date", timeCreated: 5000, timeUpdated: 7000, tokensInput: 600, tokensOutput: 100, tokensCacheRead: 200, cost: 0.5 },
+  { id: "ses_sort_echo", title: "Date", timeCreated: 5000, timeUpdated: 7000, tokensInput: 600, tokensOutput: 100, tokensCacheRead: 200, cost: 0.5 },
   { id: "ses_sort_foxtrot", title: "banana", timeCreated: 6000, timeUpdated: 3000, tokensInput: 400, tokensOutput: 100, tokensCacheRead: 100, cost: 6.0 },
 ]
 
@@ -227,22 +232,24 @@ test(
         "ses_sort_alpha", // 1.0
         "ses_sort_echo", // 0.5
       ],
-      // TEXT ordering under SQLite BINARY collation.
+      // TEXT ordering under SQLite BINARY collation (P2-2): "Date" sorts
+      // before all lowercase titles only under BINARY — a NOCASE schema
+      // would put "apple"/"banana" first and turn this sequence red.
       "title asc": [
+        "ses_sort_echo", // Date (uppercase D sorts first in BINARY)
         "ses_sort_charlie", // apple
         "ses_sort_bravo", // banana tie → id ASC
         "ses_sort_delta",
         "ses_sort_foxtrot",
-        "ses_sort_alpha", // cherry
-        "ses_sort_echo", // date
+        "ses_sort_alpha", // datebook
       ],
       "title desc": [
-        "ses_sort_echo", // date
-        "ses_sort_alpha", // cherry
+        "ses_sort_alpha", // datebook
         "ses_sort_bravo", // banana tie → id ASC
         "ses_sort_delta",
         "ses_sort_foxtrot",
         "ses_sort_charlie", // apple
+        "ses_sort_echo", // Date last in BINARY desc
       ],
     }
 
@@ -268,6 +275,10 @@ test(
       const fetchedSummaries = querySessionList(readOnlyConnection, 500, 0, "time_created", "asc")!
       assert.equal(fetchedSummaries.length, SESSION_SORT_FIXTURE_ROWS.length)
 
+      // Note (N-2): SQLite BINARY orders TEXT by UTF-8 bytes while the JS
+      // `<` below compares UTF-16 code units — the two agree only for
+      // the ASCII fixture ids used here (no supplementary-plane chars).
+      // That assumption is deliberate and pinned by this comment.
       const jsResortedSummaries = [...fetchedSummaries].sort(
         (leftSummary, rightSummary) =>
           leftSummary.tokens - rightSummary.tokens ||
@@ -313,6 +324,16 @@ test(
       defaultOrderIds,
       "unknown values must fall back to the default order",
     )
+    // P1-1: Object.prototype own-property keys pass the `in` operator
+    // via the prototype chain — they must fall back to the default like
+    // every other non-whitelisted value, never reach the SQL text.
+    for (const prototypePropertyKey of ["toString", "__proto__", "constructor"]) {
+      assert.deepEqual(
+        sessionIdsFromFreshFixture(500, 0, prototypePropertyKey, "desc"),
+        defaultOrderIds,
+        `Object.prototype key ${prototypePropertyKey} must fall back to the default order`,
+      )
+    }
   },
 )
 
@@ -342,6 +363,12 @@ test(
         "order=%3B%20DROP%20TABLE%20session_v2",
         "order=garbage",
         "sort=unknown_sort_key&order=garbage",
+        // P1-1: Object.prototype keys — must degrade to the default
+        // response, not trip a permanent 500 on the stringified
+        // inherited function landing in the SQL text.
+        "sort=toString",
+        "sort=__proto__",
+        "sort=constructor",
       ]
       for (const garbageQueryString of garbageQueryStrings) {
         // Clear the cache so each call computes independently — a leaked
@@ -400,6 +427,12 @@ test("injection face: hostile sort/order values never reach the SQL text", () =>
     "tokens_input + tokens_output + tokens_cache_read) ASC, (SELECT 1) --",
     "' OR '1'='1",
     "unknown_sort_key",
+    // P1-1: prototype-chain keys — the whitelist check must be own-
+    // property-based, otherwise these resolve to inherited functions
+    // whose stringification lands in the SQL text.
+    "toString",
+    "__proto__",
+    "constructor",
   ]
   const hostileOrderValues = [
     "DESC; DROP TABLE session_v2",

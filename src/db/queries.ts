@@ -170,10 +170,15 @@ export const DEFAULT_SESSION_SORT_ORDER: SessionSortOrder = "desc"
 export function resolveSessionSortKey(
   sortKeyValue: string | null | undefined,
 ): SessionSortKey {
+  // Own-property check, deliberately not `in`: Object.prototype keys
+  // ("toString" / "__proto__" / "constructor" / ...) pass `in` via the
+  // prototype chain and would then resolve to an inherited function
+  // whose stringification lands in the SQL text → a permanent 500
+  // instead of the contractual fallback (P1-1, v0.4.1).
   if (
     sortKeyValue !== null &&
     sortKeyValue !== undefined &&
-    sortKeyValue in SESSION_SORT_SQL_BY_SORT_KEY
+    Object.hasOwn(SESSION_SORT_SQL_BY_SORT_KEY, sortKeyValue)
   ) {
     return sortKeyValue as SessionSortKey
   }
