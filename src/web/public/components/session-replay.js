@@ -120,8 +120,14 @@ function computeTimeSpan(messageRecords) {
     .map((record) => record.timeCreated)
     .filter((time) => Number.isFinite(time) && time > 0);
   if (validTimes.length === 0) return null;
-  const firstTime = Math.min(...validTimes);
-  const lastTime = Math.max(...validTimes);
+  // for 循环求 min/max：大会话几万条消息，spread 进 Math.min/max 会撑爆调用栈
+  let firstTime = validTimes[0];
+  let lastTime = validTimes[0];
+  for (let index = 1; index < validTimes.length; index += 1) {
+    const time = validTimes[index];
+    if (time < firstTime) firstTime = time;
+    if (time > lastTime) lastTime = time;
+  }
   return `${formatDateTime(firstTime)} → ${formatDateTime(lastTime)}`;
 }
 

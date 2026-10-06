@@ -9,6 +9,7 @@ import assert from "node:assert/strict"
 
 import type { SessionMessageRecord, SessionSummary } from "../src/db/types.ts"
 import { renderSessionMarkdown } from "../src/export/markdown.ts"
+import { truncateNoticeText, truncateToolOutput } from "../src/export/format-helpers.ts"
 
 function buildSessionSummaryFixture(overrides: Partial<SessionSummary> = {}): SessionSummary {
   return {
@@ -278,4 +279,47 @@ test("费用为正数时头部包含费用行，为零时省略", () => {
     null,
   )
   assert.ok(exportWithCost.includes("- **费用**: $0.42"))
+})
+
+test("标题中的换行折叠成空格，文档始终只有一个一级标题（P2-3）", () => {
+  const renderedExport = renderSessionMarkdown(
+    buildSessionSummaryFixture({ title: "第一行\n第二行\r\n第三行" }),
+    [],
+    null,
+  )
+
+  assert.ok(renderedExport.includes("# 第一行 第二行 第三行"))
+  const headingLineCount = (renderedExport.match(/^# /gm) ?? []).length
+  assert.equal(headingLineCount, 1, "标题里的换行不能拆出第二行标题")
+})
+
+test("notice 行内的星号被转义，不能吞掉斜体定界符（P2-3）", () => {
+  const renderedExport = renderSessionMarkdown(
+    buildSessionSummaryFixture(),
+    [buildMessageFixture("system", { text: "前缀 *强调* 中缀 **粗体** 后缀" })],
+    null,
+  )
+
+  assert.ok(renderedExport.includes("系统指令更新: 前缀 \\*强调\\* 中缀 \\*\\*粗体\\*\\* 后缀"))
+  assert.ok(!renderedExport.includes("*强调*"))
+  assert.ok(!renderedExport.includes("**粗体**"))
+})
+
+test("truncateToolOutput 截在高代理位时回退一个码元，不留半个 emoji（P2-1）", () => {
+  // "x" + 2000 个 emoji：长度 4001，4000 处的截断点落在最后一对代理中间。
+  const surrogateHeavyOutput = "x" + "😀".repeat(2000)
+  assert.equal(surrogateHeavyOutput.length, 4001)
+
+  const truncatedOutput = truncateToolOutput(surrogateHeavyOutput)
+  assert.equal(truncatedOutput, "x" + "😀".repeat(1999) + "\n...（截断，完整 4001 字符）")
+  // 回退后的结尾必须是完整的 emoji（一个低位代理），不是孤立的高代理。
+  assert.ok(!/[\ud800-\udbff]$/.test(truncatedOutput))
+})
+
+test("truncateNoticeText 截在高代理位时同样回退一个码元（P2-1）", () => {
+  // "x" + 150 个 emoji：长度 301，200 处的截断点落在代理对中间。
+  const surrogateHeavyNotice = "x" + "😀".repeat(150)
+  assert.equal(surrogateHeavyNotice.length, 301)
+
+  assert.equal(truncateNoticeText(surrogateHeavyNotice), "x" + "😀".repeat(99) + "...")
 })

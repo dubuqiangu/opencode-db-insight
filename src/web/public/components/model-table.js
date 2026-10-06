@@ -39,9 +39,12 @@ function compareMetric(left, right, key) {
 }
 
 function sortModels(modelMetrics) {
-  const sorted = [...modelMetrics].sort((left, right) => compareMetric(left, right, sortKey));
-  if (sortDirection === "desc") sorted.reverse();
-  return sorted;
+  // 比较器直接带方向，不 sort 后 reverse：reverse 会把并列项次序整个翻转
+  // （并列项本应保持原始次序，即 token 排名序）。Array#sort 在 ES2019+ 稳定。
+  const directionSign = sortDirection === "desc" ? -1 : 1;
+  return [...modelMetrics].sort(
+    (left, right) => compareMetric(left, right, sortKey) * directionSign,
+  );
 }
 
 function hitRateCell(metric) {

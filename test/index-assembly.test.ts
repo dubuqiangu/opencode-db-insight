@@ -7,8 +7,31 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { createServer } from "node:http"
 
 const SERVER_PORT_STORAGE_KEY = "insight-server-port"
+/** Default listen range of the insight server (18789 + up to 10 retries). */
+const DEFAULT_PORT_RANGE = Array.from({ length: 12 }, (_unused, index) => 18789 + index)
+
+/**
+ * Which of the candidate ports can be bound right now — the observable
+ * for "no insight server leaked": a leaked server keeps its port out of
+ * the bindable set.
+ */
+async function findBindablePorts(candidatePorts: number[]): Promise<Set<number>> {
+  const bindablePorts = new Set<number>()
+  for (const candidatePort of candidatePorts) {
+    const isBindable = await new Promise<boolean>((resolve) => {
+      const probeServer = createServer()
+      probeServer.once("error", () => resolve(false))
+      probeServer.listen(candidatePort, "127.0.0.1", () => {
+        probeServer.close(() => resolve(true))
+      })
+    })
+    if (isBindable) bindablePorts.add(candidatePort)
+  }
+  return bindablePorts
+}
 
 test("plugin setup starts the server, publishes the port, and teardown stops it", async () => {
   const pluginModule = await import("../src/index.ts")
@@ -87,4 +110,61 @@ test("setup honors a stored database path override and still starts", async () =
   } finally {
     await cleanup!()
   }
+})
+
+test("setup closes the server when publishing the port fails (P1-2)", async () => {
+  const pluginModule = await import("../src/index.ts")
+  const insightPlugin = pluginModule.default
+
+  const storageEntries = new Map<string, unknown>()
+  const failingStorageDomain = {
+    get: async (storageKey: string): Promise<unknown> => storageEntries.get(storageKey),
+    set: async (): Promise<void> => {
+      throw new Error("storage is broken")
+    },
+    remove: async (storageKey: string): Promise<void> => {
+      storageEntries.delete(storageKey)
+    },
+  }
+
+  const bindablePortsBefore = await findBindablePorts(DEFAULT_PORT_RANGE)
+  await assert.rejects(
+    insightPlugin.setup({ storage: failingStorageDomain } as unknown as Parameters<typeof insightPlugin.setup>[0]),
+    /storage is broken/,
+  )
+  // The server that started for this setup must be gone again: every port
+  // that was bindable before must be bindable after (no leaked listener).
+  const bindablePortsAfter = await findBindablePorts(DEFAULT_PORT_RANGE)
+  assert.deepEqual(
+    [...bindablePortsAfter].sort((left, right) => left - right),
+    [...bindablePortsBefore].sort((left, right) => left - right),
+    "a failed setup must not leave a server bound",
+  )
+})
+
+test("teardown closes the server even when storage.remove fails (P1-2)", async () => {
+  const pluginModule = await import("../src/index.ts")
+  const insightPlugin = pluginModule.default
+
+  const storageEntries = new Map<string, unknown>()
+  const removeFailingStorageDomain = {
+    get: async (storageKey: string): Promise<unknown> => storageEntries.get(storageKey),
+    set: async (storageKey: string, storageValue: unknown): Promise<void> => {
+      storageEntries.set(storageKey, storageValue)
+    },
+    remove: async (): Promise<void> => {
+      throw new Error("remove is broken")
+    },
+  }
+
+  const cleanup = await insightPlugin.setup({
+    storage: removeFailingStorageDomain,
+  } as unknown as Parameters<typeof insightPlugin.setup>[0])
+  const publishedPort = storageEntries.get(SERVER_PORT_STORAGE_KEY)
+
+  // The failing remove must not swallow the close: teardown resolves and
+  // the server is down afterwards (and the error only surfaces on the
+  // console, not to the plugin host).
+  await cleanup!()
+  await assert.rejects(fetch(`http://127.0.0.1:${publishedPort}/api/health`))
 })

@@ -3,7 +3,7 @@
  * Pure functions, zero IO; input is the parsed assistant step rows.
  */
 
-import type { AssistantStepRow } from "../db/types.ts"
+import type { TokenUsage } from "../db/types.ts"
 import { hitRate, totalUsageTokens } from "./hit-rate.ts"
 
 /** One model row of GET /api/models. */
@@ -26,6 +26,18 @@ export interface ModelMetric {
 }
 
 /**
+ * Minimal per-step shape the model metrics need. Deliberately structural:
+ * the SQL-side lightweight model rows satisfy it without carrying the full
+ * AssistantStepRow, and full step rows keep satisfying it too.
+ */
+export interface ModelUsageSample {
+  timeCreated: number
+  modelId: string
+  providerId: string
+  tokens: TokenUsage
+}
+
+/**
  * Nearest-rank percentile over an ascending-sorted sample.
  * Empty input yields 0; rank is clamped into [1, length].
  */
@@ -38,16 +50,17 @@ export function nearestRankPercentile(sortedAscending: number[], fraction: numbe
 
 /**
  * Aggregate assistant steps into per-model metrics, sorted by total tokens
- * descending. Each model's providerId comes from its first step.
+ * descending. Each model's providerId comes from its first step that
+ * actually carries one (empty providerIds are skipped, P2-17).
  */
-export function computeModelMetrics(stepRows: AssistantStepRow[]): ModelMetric[] {
-  const stepRowsByModel = new Map<string, AssistantStepRow[]>()
-  for (const stepRow of stepRows) {
-    const existingRows = stepRowsByModel.get(stepRow.modelId)
+export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric[] {
+  const stepRowsByModel = new Map<string, ModelUsageSample[]>()
+  for (const sampleRow of sampleRows) {
+    const existingRows = stepRowsByModel.get(sampleRow.modelId)
     if (existingRows === undefined) {
-      stepRowsByModel.set(stepRow.modelId, [stepRow])
+      stepRowsByModel.set(sampleRow.modelId, [sampleRow])
     } else {
-      existingRows.push(stepRow)
+      existingRows.push(sampleRow)
     }
   }
 
@@ -77,10 +90,12 @@ export function computeModelMetrics(stepRows: AssistantStepRow[]): ModelMetric[]
     const stepCount = modelStepRows.length
     contextsPerStep.sort((left: number, right: number) => left - right)
     const reasoningDenominator = reasoningSum + outputSum
+    const firstNonEmptyProviderId =
+      modelStepRows.find((stepRow) => stepRow.providerId !== "")?.providerId ?? ""
 
     modelMetrics.push({
       modelId,
-      providerId: modelStepRows[0].providerId,
+      providerId: firstNonEmptyProviderId,
       steps: stepCount,
       tokens: tokenSum,
       hitRate: hitRate(cacheReadSum, inputSum),

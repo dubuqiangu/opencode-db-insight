@@ -27,7 +27,13 @@ export default Plugin.define({
       },
     })
 
-    const commandsDispose = registerInsightTuiCommands(context)
+    const commandsDispose = registerInsightTuiCommands(context, {
+      // The refresh loop only starts once the panel is actually opened
+      // (P2-13) — plugin startup itself stays scan-free.
+      onStatusPanelOpened: () => {
+        statusPanelController.beginAutoRefresh()
+      },
+    })
     const slotDispose = registerStatusPanelSlot(context, (slotInput) =>
       shouldRenderStatusPanel(slotInput) ? (
         <box>

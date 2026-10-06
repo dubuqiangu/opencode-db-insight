@@ -4,7 +4,7 @@
  * 日期与数值。数据复用 trend 接口（日总量 = input + read + output）。
  */
 
-import { formatTokens, formatCount, dateKeyToEpoch, escapeHtml } from "../format.js";
+import { formatTokens, formatCount, dateKeyToEpoch, epochToDateKey, escapeHtml } from "../format.js";
 import { cssVar } from "../theme.js";
 import { bindHoverTooltip } from "../tooltip.js";
 import { renderEmpty } from "./state-views.js";
@@ -32,9 +32,19 @@ function levelOfValue(value, thresholds) {
   return 4;
 }
 
+/** 'YYYY-MM-DD' → UTC 零点毫秒（仅用于计算两个日历日之间隔几天，DST 不影响 UTC）。 */
+function dateKeyToUtcEpoch(dateKey) {
+  const [year, month, dayOfMonth] = dateKey.split("-").map(Number);
+  return Date.UTC(year, month - 1, dayOfMonth);
+}
+
 /**
  * 渲染日历热力图。trendData 为 { points } 或 null。
- * points 需覆盖约 53 周（app.js 用 fetchTrend(371)）。
+ * points 需覆盖约 53 周（app.js 用 fetchTrend(366)）。
+ *
+ * 步进口径：全部走「日历日」（Date#setDate 递进 / dateKey 匹配），
+ * 不用 86_400_000 毫秒步进——DST 切换日一年有两天不是 24 小时，
+ * 固定毫秒步进会让格子与日期错位（与 daily-buckets 的日期 key 口径对齐）。
  */
 export function renderCalendarHeatmap(container, trendData) {
   if (trendData === null || trendData.points.length === 0) {
@@ -47,11 +57,16 @@ export function renderCalendarHeatmap(container, trendData) {
     total: point.input + point.read + point.output,
     steps: point.steps,
   }));
+  const dayIndexByDateKey = new Map(dayEntries.map((entry, index) => [entry.date, index]));
 
   // 对齐到周一：第一列从首个日期所在周的周一开始，前面补空白
-  const firstEpoch = dateKeyToEpoch(dayEntries[0].date);
-  const firstMondayEpoch = firstEpoch - ((new Date(firstEpoch).getDay() + 6) % 7) * 86_400_000;
-  const totalWeeks = Math.ceil((dateKeyToEpoch(dayEntries[dayEntries.length - 1].date) - firstMondayEpoch) / 86_400_000 / 7) + 1;
+  const firstDate = new Date(dateKeyToEpoch(dayEntries[0].date));
+  const firstMondayDate = new Date(firstDate);
+  firstMondayDate.setDate(firstMondayDate.getDate() - (firstDate.getDay() + 6) % 7);
+  const lastDateKey = dayEntries[dayEntries.length - 1].date;
+  const totalWeeks = Math.ceil(
+    (dateKeyToUtcEpoch(lastDateKey) - dateKeyToUtcEpoch(epochToDateKey(firstMondayDate.getTime()))) / (7 * 86_400_000),
+  ) + 1;
 
   const dailyTotals = dayEntries.map((entry) => entry.total);
   const thresholds = computeLevelThresholds(dailyTotals);
@@ -72,14 +87,15 @@ export function renderCalendarHeatmap(container, trendData) {
 
   // 月份标签：该月第一次出现在新的一列时标注
   let lastLabeledMonth = -1;
-  let dayCursorEpoch = firstMondayEpoch;
+  const cellDate = new Date(firstMondayDate);
   for (let weekIndex = 0; weekIndex < totalWeeks; weekIndex += 1) {
     for (let dayOfWeek = 0; dayOfWeek < 7; dayOfWeek += 1) {
-      const cellEpoch = dayCursorEpoch;
-      dayCursorEpoch += 86_400_000;
+      const cellMonth = cellDate.getMonth();
+      const cellDateKey = epochToDateKey(cellDate.getTime());
+      cellDate.setDate(cellDate.getDate() + 1); // 日历日递进，DST 天数天然正确
 
-      const dayIndex = Math.round((cellEpoch - firstEpoch) / 86_400_000);
-      if (dayIndex < 0 || dayIndex >= dayEntries.length) continue; // 对齐补白
+      const dayIndex = dayIndexByDateKey.get(cellDateKey);
+      if (dayIndex === undefined) continue; // 对齐补白（周一之前）或超出数据范围
 
       const entry = dayEntries[dayIndex];
       const cellLevel = levelOfValue(entry.total, thresholds);
@@ -91,7 +107,6 @@ export function renderCalendarHeatmap(container, trendData) {
         `<rect class="heatmap-cell" data-date-index="${dayIndex}" x="${x}" y="${y}" width="${CELL_SIZE}" height="${CELL_SIZE}" rx="2.5" fill="${fillColor}"/>`,
       );
 
-      const cellMonth = new Date(cellEpoch).getMonth();
       if (dayOfWeek === 0 && cellMonth !== lastLabeledMonth) {
         lastLabeledMonth = cellMonth;
         const monthLabel = `${cellMonth + 1}月`;

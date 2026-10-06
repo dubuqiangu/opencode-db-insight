@@ -4,9 +4,12 @@
  *
  * Status conventions (DESIGN.md §6/§9/§10):
  * - db unavailable (node:sqlite missing or file absent) → 503 {error};
- * - session absent from session_message (legacy pre-2026-09-23 tables) →
+ * - session absent from session_v2 (legacy pre-2026-09-23 or unknown) →
  *   404 {error: "session not found in current tables"};
- * - /api/health always answers 200 and carries dbStatus for probing.
+ * - session present in session_v2 but without messages →
+ *   404 {error: "session exists but has no messages"} (P2-7);
+ * - /api/health always answers 200 and carries dbStatus, derived from a
+ *   live SELECT 1 probe rather than connection-null-ness (P1-4).
  */
 
 import type { SessionMessageRecord, SessionSummary, SqliteReadConnection } from "../db/types.ts"
@@ -17,6 +20,7 @@ import {
   queryOverview,
   querySessionList,
   querySessionMessages,
+  querySessionSummaryById,
   querySessionSystemPrompt,
   queryTodoStats,
 } from "../db/queries.ts"
@@ -29,12 +33,19 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.1.0"
+export const INSIGHT_VERSION = "0.1.1"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
 
+/** 404 for sessions absent from the current tables (legacy or unknown). */
 export const SESSION_NOT_FOUND_MESSAGE = "session not found in current tables"
+
+/** 404 for sessions that exist in session_v2 but carry no messages (P2-7). */
+export const SESSION_EMPTY_MESSAGE = "session exists but has no messages"
+
+/** Opaque 500 error body; the real cause is logged, never sent (P2-11). */
+export const INTERNAL_ERROR_MESSAGE = "internal error"
 
 /** What one API exchange produced, before touching node:http. */
 export interface ApiResponsePayload {
@@ -111,25 +122,17 @@ function asciiFilenameFallback(downloadFilename: string): string {
   return asciiOnly === "" ? "session-export.md" : asciiOnly
 }
 
-/** Page size for the session-id lookup scan below (session_v2 only). */
-const SESSION_LOOKUP_PAGE_SIZE = 500
-
 /**
- * Find one session's summary by id via the paginated session list. Returns
- * null for unknown ids — which is exactly how legacy pre-2026-09-23 sessions
+ * Find one session's summary by id. A direct `WHERE id = ?` lookup on
+ * session_v2 (P2-2 — no paginated list scan any more). Returns null for
+ * unknown ids — which is exactly how legacy pre-2026-09-23 sessions
  * (absent from session_v2) surface as 404 to callers.
  */
 export function findSessionSummaryById(
   database: SqliteReadConnection,
   sessionId: string,
 ): SessionSummary | null {
-  for (let pageOffset = 0; ; pageOffset += SESSION_LOOKUP_PAGE_SIZE) {
-    const sessionPage = querySessionList(database, SESSION_LOOKUP_PAGE_SIZE, pageOffset)
-    if (sessionPage === null) return null
-    const foundSession = sessionPage.find((sessionSummary) => sessionSummary.id === sessionId)
-    if (foundSession !== undefined) return foundSession
-    if (sessionPage.length < SESSION_LOOKUP_PAGE_SIZE) return null
-  }
+  return querySessionSummaryById(database, sessionId)
 }
 
 /**
@@ -157,22 +160,34 @@ export interface ApiRequestContext {
   serverPort: number
 }
 
+/**
+ * Light liveness probe for /api/health (P1-4): "non-null connection" is
+ * not enough — the file may have been deleted or corrupted after the
+ * server started, which only shows up when a statement actually runs.
+ */
+function probeDatabaseAlive(database: SqliteReadConnection): boolean {
+  try {
+    database.prepare("SELECT 1").get()
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Health probe always succeeds; dbStatus tells the real story. */
 function healthResponse(requestContext: ApiRequestContext): ApiResponsePayload {
+  const databaseAlive =
+    requestContext.database !== null && probeDatabaseAlive(requestContext.database)
   return {
     statusCode: 200,
     body: {
       status: "ok",
       version: INSIGHT_VERSION,
       port: requestContext.serverPort,
-      dbStatus: requestContext.database === null ? "unavailable" : "ok",
+      dbStatus: databaseAlive ? "ok" : "unavailable",
       dbPath: requestContext.databasePath,
     },
   }
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /**
@@ -237,8 +252,19 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
           buildCacheKey("querySessionMessages", [route.sessionId]),
           () => querySessionMessages(database, route.sessionId),
         )
-        if (messageRecords === null || messageRecords.length === 0) {
+        if (messageRecords === null) {
           return { statusCode: 404, body: { error: SESSION_NOT_FOUND_MESSAGE } }
+        }
+        if (messageRecords.length === 0) {
+          // Distinguish "no such session" from "exists but has no messages"
+          // (P2-7) — legacy pre-2026-09-23 sessions only ever hit the first.
+          const sessionSummary = querySessionSummaryById(database, route.sessionId)
+          return {
+            statusCode: 404,
+            body: {
+              error: sessionSummary === null ? SESSION_NOT_FOUND_MESSAGE : SESSION_EMPTY_MESSAGE,
+            },
+          }
         }
         return { statusCode: 200, body: messageRecords }
       }
@@ -255,9 +281,12 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
       case "sessionExport": {
         // Low-frequency full export: fetch + render directly, no TTL cache.
         const sessionSummary = findSessionSummaryById(database, route.sessionId)
-        const messageRecords = querySessionMessages(database, route.sessionId)
-        if (sessionSummary === null || messageRecords === null || messageRecords.length === 0) {
+        if (sessionSummary === null) {
           return { statusCode: 404, body: { error: SESSION_NOT_FOUND_MESSAGE } }
+        }
+        const messageRecords = querySessionMessages(database, route.sessionId)
+        if (messageRecords === null || messageRecords.length === 0) {
+          return { statusCode: 404, body: { error: SESSION_EMPTY_MESSAGE } }
         }
         const systemPrompt = querySessionSystemPrompt(database, route.sessionId)
         const markdownDocument = renderSessionMarkdown(
@@ -282,6 +311,8 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         return { statusCode: 404, body: { error: "not found" } }
     }
   } catch (queryError) {
-    return { statusCode: 500, body: { error: `internal error: ${describeError(queryError)}` } }
+    // The response body stays opaque (P2-11); the real cause is logged.
+    console.error("opencode-db-insight: api query failed", queryError)
+    return { statusCode: 500, body: { error: INTERNAL_ERROR_MESSAGE } }
   }
 }

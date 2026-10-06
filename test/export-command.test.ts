@@ -243,6 +243,46 @@ test("runExportCommand survives a broken export directory with an error toast", 
   }
 })
 
+test("runExportCommand treats non-string explicit ids as no id and opens the picker (P2-8)", async () => {
+  const exportRoot = await mkdtemp(join(tmpdir(), "insight-export-non-string-id-"))
+  try {
+    const fakeDatabase = createFakeInsightDatabase(buildExportScenario(1))
+    let dialogCallCount = 0
+    const context = {
+      ui: {
+        dialog: {
+          select: async () => {
+            dialogCallCount += 1
+            return "ses_pick_0"
+          },
+        },
+        toast: { show: () => {} },
+      },
+    }
+
+    // The host may pass anything as the command argument; only real
+    // non-empty strings count as explicit session ids.
+    const nonStringIdArguments: unknown[] = [123, null, true, { id: "ses_pick_0" }, "   "]
+    for (const nonStringIdArgument of nonStringIdArguments) {
+      const exportedPath = await runExportCommand(
+        context,
+        nonStringIdArgument as string,
+        {
+          databaseConnection: fakeDatabase,
+          exportDirectory: exportRoot,
+        },
+      )
+      assert.ok(
+        exportedPath !== null,
+        `argument ${JSON.stringify(nonStringIdArgument)} must fall back to the picker`,
+      )
+    }
+    assert.equal(dialogCallCount, nonStringIdArguments.length)
+  } finally {
+    await rm(exportRoot, { recursive: true, force: true })
+  }
+})
+
 test("runExportCommand degrades silently when the context has no ui API at all", async () => {
   const exportRoot = await mkdtemp(join(tmpdir(), "insight-export-no-ui-"))
   try {

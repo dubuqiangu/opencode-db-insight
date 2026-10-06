@@ -151,6 +151,36 @@ test("insight-status opens the panel and toasts when the host refuses it", () =>
   commandsDispose?.()
 })
 
+test("insight-status notifies onStatusPanelOpened only when the panel actually opened (P2-13)", () => {
+  // Successful open → the panel controller's lazy loop is armed.
+  const openedContext = buildFakeTuiContext({ panelOpenResult: true })
+  let openedCallbackRuns = 0
+  const openedDispose = registerInsightTuiCommands(openedContext.context, {
+    runOpenDashboard: async () => true,
+    runExport: async () => null,
+    onStatusPanelOpened: () => {
+      openedCallbackRuns += 1
+    },
+  })
+  ;(openedContext.recordedLayerSpecs[0] as { commands: Array<{ run: () => void }> }).commands[1].run()
+  assert.equal(openedCallbackRuns, 1)
+  openedDispose?.()
+
+  // Refused open → no callback (and no stray refresh loop).
+  const refusedContext = buildFakeTuiContext({ panelOpenResult: false })
+  let refusedCallbackRuns = 0
+  const refusedDispose = registerInsightTuiCommands(refusedContext.context, {
+    runOpenDashboard: async () => true,
+    runExport: async () => null,
+    onStatusPanelOpened: () => {
+      refusedCallbackRuns += 1
+    },
+  })
+  ;(refusedContext.recordedLayerSpecs[0] as { commands: Array<{ run: () => void }> }).commands[1].run()
+  assert.equal(refusedCallbackRuns, 0)
+  refusedDispose?.()
+})
+
 test("registerInsightTuiCommands degrades silently without a keymap", () => {
   const keymaplessContext = buildFakeTuiContext({ includeKeymap: false })
   const commandsDispose = registerInsightTuiCommands(keymaplessContext.context)

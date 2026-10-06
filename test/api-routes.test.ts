@@ -5,14 +5,24 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { mock } from "node:test"
 
 import {
   DATABASE_UNAVAILABLE_MESSAGE,
   handleApiRequest,
   INSIGHT_VERSION,
+  INTERNAL_ERROR_MESSAGE,
+  SESSION_EMPTY_MESSAGE,
+  SESSION_NOT_FOUND_MESSAGE,
   type ApiRequestContext,
 } from "../src/web/api.ts"
+import type { SqliteReadConnection } from "../src/db/types.ts"
 import { matchApiRoute } from "../src/web/router.ts"
+import { clearResultCache } from "../src/stats/cache.ts"
+import {
+  buildFakeSessionSummary,
+  createFakeInsightDatabase,
+} from "./helpers/fake-insight-db.ts"
 
 function requestContextFor(pathname: string): ApiRequestContext | null {
   const route = matchApiRoute(pathname)
@@ -77,4 +87,118 @@ test("trend keeps the 30-day default when the days parameter is garbage", () => 
   // db unavailable short-circuits before parsing — the point here is that
   // bad parameters never throw on the way to the 503.
   assert.equal(apiResponse.statusCode, 503)
+})
+
+function apiContextFor(
+  pathname: string,
+  database: SqliteReadConnection,
+): ApiRequestContext {
+  const route = matchApiRoute(pathname)
+  assert.notEqual(route, null, `route failed to match: ${pathname}`)
+  return {
+    route: route!,
+    searchParams: new URLSearchParams(),
+    database,
+    databasePath: "test://wired-database",
+    serverPort: 18789,
+  }
+}
+
+test("health reports dbStatus ok when the live SELECT 1 probe succeeds (P1-4)", () => {
+  const liveDatabase = createFakeInsightDatabase({
+    sessions: [],
+    messagesBySessionId: {},
+    systemPromptBySessionId: {},
+  })
+
+  const apiResponse = handleApiRequest(apiContextFor("/api/health", liveDatabase))
+
+  assert.equal(apiResponse.statusCode, 200)
+  assert.deepEqual(apiResponse.body, {
+    status: "ok",
+    version: INSIGHT_VERSION,
+    port: 18789,
+    dbStatus: "ok",
+    dbPath: "test://wired-database",
+  })
+})
+
+test("health stays 200 but reports dbStatus unavailable when the probe fails (P1-4)", () => {
+  // A non-null connection whose statements all fail — e.g. the db file was
+  // deleted or corrupted after the server started.
+  const deadDatabase: SqliteReadConnection = {
+    prepare: () => {
+      throw new Error("database is not open")
+    },
+    close: () => {},
+  }
+
+  const apiResponse = handleApiRequest(apiContextFor("/api/health", deadDatabase))
+
+  assert.equal(apiResponse.statusCode, 200)
+  assert.deepEqual(apiResponse.body, {
+    status: "ok",
+    version: INSIGHT_VERSION,
+    port: 18789,
+    dbStatus: "unavailable",
+    dbPath: "test://wired-database",
+  })
+})
+
+test("sessionMessages distinguishes empty sessions from unknown ids (P2-7)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [buildFakeSessionSummary({ id: "ses_exists_but_empty" })],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+
+    // Session row exists in session_v2, yet carries zero messages.
+    const emptySessionResponse = handleApiRequest(
+      apiContextFor("/api/session/ses_exists_but_empty/messages", fakeDatabase),
+    )
+    assert.equal(emptySessionResponse.statusCode, 404)
+    assert.deepEqual(emptySessionResponse.body, { error: SESSION_EMPTY_MESSAGE })
+
+    // Unknown id: neither a session row nor messages.
+    const unknownSessionResponse = handleApiRequest(
+      apiContextFor("/api/session/ses_never_heard_of/messages", fakeDatabase),
+    )
+    assert.equal(unknownSessionResponse.statusCode, 404)
+    assert.deepEqual(unknownSessionResponse.body, { error: SESSION_NOT_FOUND_MESSAGE })
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("unexpected query errors answer an opaque 500 and only log the cause (P2-11)", () => {
+  clearResultCache()
+  const consoleErrorMock = mock.method(console, "error", () => {})
+  try {
+    const failingDatabase: SqliteReadConnection = {
+      prepare: (sql: string) => {
+        if (sql.includes("FROM session_message")) {
+          throw new Error("fake db: corrupt b-tree page in session_message")
+        }
+        throw new Error(`fake db: unexpected SQL: ${sql}`)
+      },
+      close: () => {},
+    }
+
+    const apiResponse = handleApiRequest(
+      apiContextFor("/api/session/ses_probe/messages", failingDatabase),
+    )
+
+    assert.equal(apiResponse.statusCode, 500)
+    assert.deepEqual(apiResponse.body, { error: INTERNAL_ERROR_MESSAGE })
+    assert.ok(consoleErrorMock.mock.calls.length >= 1, "the real cause must be logged")
+    assert.match(
+      String(consoleErrorMock.mock.calls[0].arguments[0]),
+      /api query failed/,
+    )
+  } finally {
+    consoleErrorMock.mock.restore()
+    clearResultCache()
+  }
 })

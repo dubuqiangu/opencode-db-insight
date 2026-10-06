@@ -1,6 +1,9 @@
 /**
- * db read layer: path resolution, read-only connection and every SQL query
- * of the insight API (DESIGN.md §4/§6). All SQL lives in this single file.
+ * db read layer: path resolution, read-only connection and the row-level
+ * SQL queries of the insight API (DESIGN.md §4/§6). Row-level SQL lives in
+ * this file; the SQL-side statistics aggregations live in
+ * aggregate-queries.ts (P0-1) and are re-exported below so callers keep a
+ * single import surface.
  *
  * Conventions:
  * - Statistics always come from `session_message` (the old `part`/`message`
@@ -20,7 +23,6 @@ import { join } from "node:path"
 
 import type {
   AssistantStepRow,
-  OverviewStats,
   SessionMessageRecord,
   SessionSummary,
   SqliteReadConnection,
@@ -35,13 +37,14 @@ import {
   readAgentName,
   readRowNumber,
 } from "./rows.ts"
-import { hitRate } from "../stats/hit-rate.ts"
-import { bucketDailyTrend, toLocalDateKey } from "../stats/daily-buckets.ts"
-import { computeModelMetrics } from "../stats/model-metrics.ts"
-import { computeAgentStats } from "../stats/agent-fingerprint.ts"
-import type { AgentStat } from "../stats/agent-fingerprint.ts"
-import type { DailyTrendPoint } from "../stats/daily-buckets.ts"
-import type { ModelMetric } from "../stats/model-metrics.ts"
+
+// SQL-side statistics aggregations (P0-1); re-exported for the API layer.
+export {
+  queryOverview,
+  queryDailyTrend,
+  queryModelMetrics,
+  queryAgentStats,
+} from "./aggregate-queries.ts"
 
 type SqliteDatabaseConstructor = new (
   databasePath: string,
@@ -133,76 +136,6 @@ function clampPaginationValue(value: number, minimum: number, maximum: number): 
   return Math.min(Math.max(Math.floor(value), minimum), maximum)
 }
 
-/** KPI overview for GET /api/overview. A "step" is one assistant message. */
-export function queryOverview(db: SqliteReadConnection | null): OverviewStats | null {
-  if (db === null) return null
-  const stepRows = queryAssistantStepRows(db) ?? []
-
-  const todayDateKey = toLocalDateKey(Date.now())
-  let todayTokens = 0
-  let totalTokens = 0
-  let todayCacheRead = 0
-  let todayInput = 0
-
-  for (const stepRow of stepRows) {
-    const stepTokens =
-      stepRow.tokens.input + stepRow.tokens.output + stepRow.tokens.cacheRead
-    totalTokens += stepTokens
-    if (toLocalDateKey(stepRow.timeCreated) === todayDateKey) {
-      todayTokens += stepTokens
-      todayCacheRead += stepRow.tokens.cacheRead
-      todayInput += stepRow.tokens.input
-    }
-  }
-
-  const sessionCountRow = db.prepare("SELECT COUNT(*) AS sessionCount FROM session_v2").get()
-  const totalCostRow = db.prepare("SELECT SUM(cost) AS totalCost FROM session_v2").get()
-
-  return {
-    todayTokens,
-    totalTokens,
-    todayHitRate: hitRate(todayCacheRead, todayInput),
-    sessionCount: readRowNumber(sessionCountRow, "sessionCount"),
-    stepCount: stepRows.length,
-    totalCost: readRowNumber(totalCostRow, "totalCost"),
-  }
-}
-
-/**
- * Daily trend series for GET /api/trend?days=30: local-timezone buckets,
- * zero-filled, oldest first. days <= 0 yields an empty series.
- */
-export function queryDailyTrend(
-  db: SqliteReadConnection | null,
-  days: number = 30,
-): DailyTrendPoint[] | null {
-  if (db === null) return null
-  const stepRows = queryAssistantStepRows(db) ?? []
-  return bucketDailyTrend(stepRows, days)
-}
-
-/** Per-model leaderboard for GET /api/models, sorted by total tokens. */
-export function queryModelMetrics(db: SqliteReadConnection | null): ModelMetric[] | null {
-  if (db === null) return null
-  const stepRows = queryAssistantStepRows(db) ?? []
-  return computeModelMetrics(stepRows)
-}
-
-/** Per-agent usage and tool fingerprint for GET /api/agents. */
-export function queryAgentStats(db: SqliteReadConnection | null): AgentStat[] | null {
-  if (db === null) return null
-
-  const rawSessionRows = db.prepare("SELECT id, agent FROM session_v2").all()
-  const memberships = rawSessionRows.flatMap((rawRow): { agent: string; sessionId: string }[] => {
-    const rowRecord = asRecord(rawRow)
-    if (rowRecord === null) return []
-    return [{ agent: readAgentName(rowRecord["agent"]), sessionId: coerceText(rowRecord["id"]) }]
-  })
-
-  const stepRows = queryAssistantStepRows(db) ?? []
-  return computeAgentStats(memberships, stepRows)
-}
-
 /**
  * Session list for GET /api/sessions. `tokens` comes from the session_v2
  * summary columns (lagging for active sessions — the list is the only
@@ -231,23 +164,52 @@ export function querySessionList(
   for (const rawRow of rawRows) {
     const rowRecord = asRecord(rawRow)
     if (rowRecord === null) continue
-    const { modelId } = parseSessionModelColumn(rowRecord["model"])
-    sessionSummaries.push({
-      id: coerceText(rowRecord["id"]),
-      title: coerceText(rowRecord["title"]),
-      modelId,
-      agent: readAgentName(rowRecord["agent"]),
-      directory: coerceText(rowRecord["directory"]),
-      timeCreated: coerceNumber(rowRecord["time_created"]),
-      timeUpdated: coerceNumber(rowRecord["time_updated"]),
-      tokens:
-        coerceNumber(rowRecord["tokens_input"]) +
-        coerceNumber(rowRecord["tokens_output"]) +
-        coerceNumber(rowRecord["tokens_cache_read"]),
-      cost: coerceNumber(rowRecord["cost"]),
-    })
+    sessionSummaries.push(parseSessionSummaryRow(rowRecord))
   }
   return sessionSummaries
+}
+
+/**
+ * One session's summary by id via a direct `WHERE id = ?` lookup (P2-2 —
+ * replaced the old paginated full-list scan). Returns null for unknown
+ * ids, which is exactly how legacy pre-2026-09-23 sessions (absent from
+ * session_v2) surface as 404 to callers.
+ */
+export function querySessionSummaryById(
+  db: SqliteReadConnection | null,
+  sessionId: string,
+): SessionSummary | null {
+  if (db === null) return null
+  const rawRow = db
+    .prepare(
+      `SELECT id, title, model, agent, directory, time_created, time_updated,
+              tokens_input, tokens_output, tokens_cache_read, cost
+       FROM session_v2
+       WHERE id = ?`,
+    )
+    .get(sessionId)
+  const rowRecord = asRecord(rawRow)
+  if (rowRecord === null) return null
+  return parseSessionSummaryRow(rowRecord)
+}
+
+/** Shared column mapping of one session_v2 row into a SessionSummary. */
+function parseSessionSummaryRow(rowRecord: Record<string, unknown>): SessionSummary {
+  const { modelId } = parseSessionModelColumn(rowRecord["model"])
+  return {
+    id: coerceText(rowRecord["id"]),
+    title: coerceText(rowRecord["title"]),
+    modelId,
+    agent: readAgentName(rowRecord["agent"]),
+    directory: coerceText(rowRecord["directory"]),
+    timeCreated: coerceNumber(rowRecord["time_created"]),
+    timeUpdated: coerceNumber(rowRecord["time_updated"]),
+    tokens:
+      coerceNumber(rowRecord["tokens_input"]) +
+      coerceNumber(rowRecord["tokens_output"]) +
+      coerceNumber(rowRecord["tokens_cache_read"]),
+    cost: coerceNumber(rowRecord["cost"]),
+  }
 }
 
 /**

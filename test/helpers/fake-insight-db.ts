@@ -48,8 +48,9 @@ function toSessionV2Row(sessionSummary: SessionSummary): Record<string, unknown>
 }
 
 /**
- * Build a fake connection. Only the SQL statements the export paths issue
- * are understood; anything else throws so tests notice unexpected queries.
+ * Build a fake connection. Only the SQL statements the export / panel /
+ * command paths issue are understood; anything else throws so tests
+ * notice unexpected queries.
  */
 export function createFakeInsightDatabase(
   scenario: FakeInsightDatabaseScenario,
@@ -57,7 +58,20 @@ export function createFakeInsightDatabase(
   const sessionRows = scenario.sessions.map(toSessionV2Row)
 
   const prepareStatement = (sql: string): SqliteStatement => {
+    if (sql.trim() === "SELECT 1") {
+      // Liveness probe of /api/health (P1-4).
+      return { all: () => [], get: () => ({ probe: 1 }) }
+    }
     if (sql.includes("FROM session_v2")) {
+      if (sql.includes("WHERE id = ?")) {
+        // Direct by-id lookup (P2-2).
+        return {
+          all: () => [],
+          get: (...parameters: unknown[]) =>
+            sessionRows.find((sessionRow) => sessionRow.id === String(parameters[0] ?? "")) ??
+            undefined,
+        }
+      }
       return {
         all: (...parameters: unknown[]) => {
           const limit = Number(parameters[0]) || 50

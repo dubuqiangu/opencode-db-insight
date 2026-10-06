@@ -29,7 +29,7 @@ export function renderSessionList(container, sessionPayload, modelFilter) {
   if (sessions.length === 0) {
     renderEmpty(
       container,
-      modelFilter === null ? "没有会话记录" : `没有 ${modelFilter} 的会话`,
+      modelFilter === null ? "没有会话记录" : `没有 ${escapeHtml(modelFilter)} 的会话`,
       modelFilter === null ? "数据库里还没有 session_v2 记录" : "这个模型在最近的会话里没出现过，试试取消过滤",
     );
     return;
@@ -54,7 +54,7 @@ export function renderSessionList(container, sessionPayload, modelFilter) {
   const hiddenAfterFilterCount = allSessions.length - sessions.length;
   const remainingCount = Math.max(0, sessions.length - VISIBLE_ROWS);
   const footNoteParts = [];
-  if (modelFilter !== null) footNoteParts.push(`已过滤掉 ${hiddenAfterFilterCount} 条非 ${modelFilter} 会话`);
+  if (modelFilter !== null) footNoteParts.push(`已过滤掉 ${hiddenAfterFilterCount} 条非 ${escapeHtml(modelFilter)} 会话`);
   if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);
   if (sessionPayload.total === null || sessionPayload.total === undefined) {
     footNoteParts.push("按最近更新时间倒序");
@@ -76,7 +76,9 @@ export function renderSessionList(container, sessionPayload, modelFilter) {
 
   for (const row of container.querySelectorAll("tr.session-row")) {
     row.addEventListener("click", () => {
-      window.location.hash = `/session/${row.dataset.sessionId}`;
+      // id 里若出现 URL 保留字符（/、?、#、%…）必须编码，否则 hash 会被截断或误解析；
+      // 读取端 app.js routeByHash 用 decodeURIComponent 还原，往返一致。
+      window.location.hash = `/session/${encodeURIComponent(row.dataset.sessionId)}`;
     });
   }
 }

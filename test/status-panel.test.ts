@@ -281,7 +281,27 @@ function buildConnectionClosingSpy(connection: SqliteReadConnection) {
   return { spiedConnection, closeCallCount }
 }
 
-test("controller computes the first text eagerly and notifies its subscriber", () => {
+test("controller computes nothing until beginAutoRefresh starts the loop", () => {
+  const fakeDatabase = createFakeInsightDatabase(buildPanelScenario())
+  const providerCallCount = { value: 0 }
+  const controller = createStatusPanelController({
+    databaseProvider: () => {
+      providerCallCount.value += 1
+      return fakeDatabase
+    },
+    nowMs: () => pinnedNowMs,
+    refreshIntervalMs: 60_000,
+  })
+  try {
+    // Lazy start (P2-13): creating the controller must not scan yet.
+    assert.equal(providerCallCount.value, 0)
+    assert.equal(controller.currentPanelText(), "")
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("controller computes the first text on beginAutoRefresh and notifies its subscriber", () => {
   const fakeDatabase = createFakeInsightDatabase(buildPanelScenario())
   const notifiedTexts: string[] = []
   const controller = createStatusPanelController({
@@ -293,8 +313,13 @@ test("controller computes the first text eagerly and notifies its subscriber", (
     },
   })
   try {
+    controller.beginAutoRefresh()
     assert.ok(controller.currentPanelText().includes("今日"))
     assert.ok(controller.currentPanelText().includes("1.4K"))
+    assert.equal(notifiedTexts.length, 1)
+
+    // Idempotent: a second beginAutoRefresh (panel re-opened) is a no-op.
+    controller.beginAutoRefresh()
     assert.equal(notifiedTexts.length, 1)
   } finally {
     controller.dispose()
@@ -310,6 +335,7 @@ test("controller closes the connection after every refresh", () => {
     refreshIntervalMs: 0,
   })
   try {
+    controller.beginAutoRefresh()
     assert.equal(closeCallCount.value, 1)
     controller.refresh()
     assert.equal(closeCallCount.value, 2)
@@ -324,6 +350,7 @@ test("controller degrades missing databases and throwing providers to the unavai
     refreshIntervalMs: 0,
   })
   try {
+    unavailableController.beginAutoRefresh()
     assert.equal(unavailableController.currentPanelText(), UNAVAILABLE_STATUS_PANEL_TEXT)
   } finally {
     unavailableController.dispose()
@@ -336,6 +363,7 @@ test("controller degrades missing databases and throwing providers to the unavai
     refreshIntervalMs: 0,
   })
   try {
+    explodingController.beginAutoRefresh()
     assert.equal(explodingController.currentPanelText(), UNAVAILABLE_STATUS_PANEL_TEXT)
     explodingController.refresh() // must not throw
     assert.equal(explodingController.currentPanelText(), UNAVAILABLE_STATUS_PANEL_TEXT)
@@ -344,7 +372,7 @@ test("controller degrades missing databases and throwing providers to the unavai
   }
 })
 
-test("controller refreshes on the interval and stops after dispose", (testContext) => {
+test("controller refreshes on the interval after beginAutoRefresh and stops after dispose", (testContext) => {
   // Node's mock timers support setInterval; clearInterval is covered by it.
   testContext.mock.timers.enable({ apis: ["setInterval"] })
 
@@ -357,7 +385,12 @@ test("controller refreshes on the interval and stops after dispose", (testContex
     refreshIntervalMs: 60_000,
   })
   try {
-    assert.equal(providerCallCount.value, 1, "eager first refresh")
+    // Before the panel opens nothing is scheduled (P2-13).
+    testContext.mock.timers.tick(120_000)
+    assert.equal(providerCallCount.value, 0, "no refresh before beginAutoRefresh")
+
+    controller.beginAutoRefresh()
+    assert.equal(providerCallCount.value, 1, "first refresh on beginAutoRefresh")
     testContext.mock.timers.tick(60_000)
     assert.equal(providerCallCount.value, 2, "interval refresh")
     testContext.mock.timers.tick(120_000)
@@ -370,7 +403,7 @@ test("controller refreshes on the interval and stops after dispose", (testContex
   assert.equal(providerCallCount.value, 4, "no refresh after dispose")
 })
 
-test("controller with a zero interval never schedules a refresh", (testContext) => {
+test("controller with a zero interval only ever runs the beginAutoRefresh refresh", (testContext) => {
   testContext.mock.timers.enable({ apis: ["setInterval"] })
 
   const providerCallCount = { value: 0 }
@@ -381,7 +414,25 @@ test("controller with a zero interval never schedules a refresh", (testContext) 
     },
     refreshIntervalMs: 0,
   })
+  controller.beginAutoRefresh()
   controller.dispose()
   testContext.mock.timers.tick(600_000)
-  assert.equal(providerCallCount.value, 1, "only the eager refresh ever ran")
+  assert.equal(providerCallCount.value, 1, "only the beginAutoRefresh refresh ever ran")
+})
+
+test("controller never starts a stray interval after dispose", (testContext) => {
+  testContext.mock.timers.enable({ apis: ["setInterval"] })
+
+  const providerCallCount = { value: 0 }
+  const controller = createStatusPanelController({
+    databaseProvider: () => {
+      providerCallCount.value += 1
+      return null
+    },
+    refreshIntervalMs: 60_000,
+  })
+  controller.dispose()
+  controller.beginAutoRefresh() // disposed controllers ignore late panel-open callbacks
+  testContext.mock.timers.tick(600_000)
+  assert.equal(providerCallCount.value, 0, "a disposed controller must never refresh or schedule")
 })

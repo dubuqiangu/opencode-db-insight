@@ -107,6 +107,24 @@ test("computeModelMetrics tracks firstSeen/lastSeen across the model's steps", (
   assert.equal(modelMetric.lastSeen, latestTime)
 })
 
+test("computeModelMetrics takes the model's first non-empty providerId (P2-17)", () => {
+  // Some steps carry no providerId at all; the metric must not adopt the
+  // empty value but keep scanning for the first step that has one.
+  const mixedProviderRows = [
+    makeAssistantStepRow({ modelId: "model/sample", providerId: "" }),
+    makeAssistantStepRow({ modelId: "model/sample", providerId: "provider-second" }),
+    makeAssistantStepRow({ modelId: "model/sample", providerId: "provider-third" }),
+  ]
+  assert.equal(computeModelMetrics(mixedProviderRows)[0].providerId, "provider-second")
+
+  // All steps empty → the metric degrades to "" rather than inventing a name.
+  const emptyProviderRows = [
+    makeAssistantStepRow({ modelId: "model/sample", providerId: "" }),
+    makeAssistantStepRow({ modelId: "model/sample", providerId: "" }),
+  ]
+  assert.equal(computeModelMetrics(emptyProviderRows)[0].providerId, "")
+})
+
 test("nearestRankPercentile clamps the rank into the sample for extreme fractions", () => {
   assert.equal(nearestRankPercentile([], 0.95), 0)
   assert.equal(nearestRankPercentile([10], 0.95), 10)

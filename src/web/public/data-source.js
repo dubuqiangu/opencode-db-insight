@@ -57,8 +57,36 @@ function resolveWithLatency(payload) {
   });
 }
 
+/** 单请求超时：15 秒（比任何正常本地查询都宽裕，只兜底挂死场景）。 */
+const REQUEST_TIMEOUT_MILLISECONDS = 15_000;
+
+/**
+ * 超时信号（特性探测）：AbortSignal.timeout 在旧浏览器不可用时
+ * 降级为不超时——宁可慢，也不因 API 缺失直接炸掉所有区块。
+ */
+function buildTimeoutSignal() {
+  return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+    ? AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS)
+    : undefined;
+}
+
+/**
+ * 带超时的 fetch。超时抛带路径说明的 Error，走各区块现有的错误态
+ * （重试按钮），不给用户一个干巴巴的 "signal timed out"。
+ */
+async function fetchWithTimeout(path) {
+  try {
+    return await fetch(API_BASE + path, { signal: buildTimeoutSignal() });
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.name === "TimeoutError") {
+      throw new Error(`API ${path} 请求超时（${REQUEST_TIMEOUT_MILLISECONDS / 1000} 秒），请重试`);
+    }
+    throw error;
+  }
+}
+
 async function fetchJson(path) {
-  const response = await fetch(API_BASE + path);
+  const response = await fetchWithTimeout(path);
   if (!response.ok) {
     throw new Error(`API ${path} 返回 ${response.status}`);
   }
@@ -67,7 +95,7 @@ async function fetchJson(path) {
 
 /** 拿到原始 Response（需要区分 404 语义时用），非 2xx 抛错。 */
 async function fetchResponse(path) {
-  const response = await fetch(API_BASE + path);
+  const response = await fetchWithTimeout(path);
   if (!response.ok && response.status !== 404) {
     throw new Error(`API ${path} 返回 ${response.status}`);
   }

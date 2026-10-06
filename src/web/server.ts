@@ -13,7 +13,12 @@ import { fileURLToPath } from "node:url"
 
 import type { SqliteReadConnection } from "../db/types.ts"
 import { openOpencodeDb, resolveOpencodeDbPath } from "../db/queries.ts"
-import { createInsightRequestHandler } from "./request-handler.ts"
+import { guardDatabaseConnection } from "./db-connection-guard.ts"
+import { createInsightRequestHandler, isAllowedInsightHost } from "./request-handler.ts"
+
+// Server-facade re-export (P1-6): the Host-header allow list lives with
+// request handling, but server.ts is the module's public import surface.
+export { isAllowedInsightHost }
 
 export const DEFAULT_INSIGHT_HOST = "127.0.0.1"
 export const DEFAULT_INSIGHT_PORT = 18_789
@@ -53,11 +58,21 @@ export interface InsightServerOptions {
   publicDirectory?: string
   /** Injection point for tests; defaults to node:http.createServer. */
   serverFactory?: InsightServerFactory
+  /**
+   * Injection point for tests; defaults to openOpencodeDb. Lets lifecycle
+   * tests observe opened/closed connections without touching real files.
+   */
+  databaseOpener?: (databasePath: string) => SqliteReadConnection | null
 }
 
 export interface InsightServerHandle {
   host: string
   port: number
+  /**
+   * Current live connection provider (exposed for teardown-race tests):
+   * returns null without reopening once close() has been called.
+   */
+  databaseProvider: () => SqliteReadConnection | null
   /** Stop accepting connections, drop keep-alive sockets, close the db. */
   close(): Promise<void>
 }
@@ -111,14 +126,38 @@ export async function startInsightServer(
   const databasePath = options.databasePath ?? resolveOpencodeDbPath()
   const publicDirectory = options.publicDirectory ?? resolveDefaultPublicDirectory()
   const serverFactory = options.serverFactory ?? defaultServerFactory
+  const openDatabase = options.databaseOpener ?? openOpencodeDb
 
   // Read-only connection kept for the server lifetime; if the db is absent
   // at startup (or node:sqlite unavailable) each request re-probes so the
-  // API recovers once the file appears, without a plugin restart.
-  let liveDatabase: SqliteReadConnection | null = openOpencodeDb(databasePath)
+  // API recovers once the file appears, without a plugin restart. A
+  // connection that dies at runtime (file deleted / corrupted) is dropped
+  // by the fault guard and likewise reopened on the next request (P1-4).
+  const guardLiveConnection = (connection: SqliteReadConnection): SqliteReadConnection =>
+    guardDatabaseConnection(connection, (brokenConnection) => {
+      if (shuttingDown || liveDatabase === null) return
+      liveDatabase = null
+      try {
+        brokenConnection.close()
+      } catch {
+        // The connection was already broken — closing it may throw.
+      }
+    })
+
+  let shuttingDown = false
+  let liveDatabase: SqliteReadConnection | null = null
+  const openGuardedDatabase = (): SqliteReadConnection | null => {
+    const openedConnection = openDatabase(databasePath)
+    if (openedConnection === null) return null
+    return guardLiveConnection(openedConnection)
+  }
+  liveDatabase = openGuardedDatabase()
+
   const databaseProvider = (): SqliteReadConnection | null => {
+    // After close() no request may reopen a connection (P1-5).
+    if (shuttingDown) return null
     if (liveDatabase !== null) return liveDatabase
-    liveDatabase = openOpencodeDb(databasePath)
+    liveDatabase = openGuardedDatabase()
     return liveDatabase
   }
 
@@ -138,7 +177,13 @@ export async function startInsightServer(
       await listenOnPort(httpServer, host, chosenPort)
       break
     } catch (listenError) {
-      if (!isAddressInUseError(listenError) || remainingAttempts <= 1) throw listenError
+      if (!isAddressInUseError(listenError) || remainingAttempts <= 1) {
+        // Listen failed for good (retry chain exhausted or fatal error):
+        // release the db connection before propagating (P1-1).
+        liveDatabase?.close()
+        liveDatabase = null
+        throw listenError
+      }
       remainingAttempts -= 1
       chosenPort += 1
     }
@@ -154,9 +199,12 @@ export async function startInsightServer(
   return {
     host,
     port: boundPort,
+    databaseProvider,
     close: async () => {
-      // Keep-alive sockets (fetch reuses them) would otherwise keep
-      // server.close() pending until they time out.
+      // Stop reopening connections for any in-flight request first (P1-5),
+      // then drop keep-alive sockets (fetch reuses them) which would
+      // otherwise keep server.close() pending until they time out.
+      shuttingDown = true
       httpServer.closeAllConnections?.()
       liveDatabase?.close()
       liveDatabase = null

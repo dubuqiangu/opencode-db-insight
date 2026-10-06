@@ -67,3 +67,13 @@
 - [ ] strictHitRate 接线到回放页并注明口径
 - [ ] /api/sessions 服务端排序参数（当前客户端排序够用）
 - [ ] 前端消费 /api/todo（todo 完成率卡片）
+
+## v0.1.1 审查修复（push #9，2026-10-06）
+
+- [x] @oracle 全项目审查（2 P0 / 7 P1 / 17 P2 + 测试盲区清单）
+- [x] P0-1 SQL 侧聚合 + days 下推 + agents 快路径优化——✅ 实测：overview/trend/models 350-570ms、agents 3940→630ms；对账测试快照去竞态后全绿
+- [x] P0-2 tooltip XSS + P1-7 空态/脚注转义——✅ 前端冒烟 147/147（smoke-xss 14 断言：恶意工具名/modelId 按文本呈现）
+- [x] P1-1/2/4/5/6 生命周期、自愈、Host 校验、缓存上限——✅ 各配针对性测试（server-resilience 6 用例）
+- [x] P2 全部 17 项（含前端 fetch 超时/竞态、DST 安全、稳定排序、hash 往返）——✅ smoke-dst 子进程跨 America/New_York 两次 DST 切换验证
+- [x] scripts/verify-install.ps1 推送验证脚本——✅ 首装引导分支冒烟通过；完整链路待 plugin add 后实测
+- [x] 版本 0.1.0 → 0.1.1（package.json / lock / INSIGHT_VERSION 三处同步）

@@ -75,8 +75,11 @@ function renderHeaderSection(sessionSummary: SessionSummary): string {
       : {}
 
   const sessionTitle = coerceText(summaryRecord["title"])
+  // Newlines would break the `# ` heading into extra lines (P2-3):
+  // collapse them into spaces before the markdown escaping pass.
+  const singleLineTitle = sessionTitle.replace(/[\r\n]+/g, " ")
   const headerLines = [
-    `# ${sessionTitle === "" ? "（无标题会话）" : escapeMarkdownSpecialCharacters(sessionTitle)}`,
+    `# ${singleLineTitle === "" ? "（无标题会话）" : escapeMarkdownSpecialCharacters(singleLineTitle)}`,
     `- **会话 ID**: ${coerceText(summaryRecord["id"]) || "未知"}`,
     `- **模型**: ${coerceText(summaryRecord["modelId"]) || "未知"}`,
     `- **Agent**: ${coerceText(summaryRecord["agent"]) || "未知"}`,

@@ -3,7 +3,6 @@
  * Pure functions, zero IO.
  */
 
-import type { AssistantStepRow } from "../db/types.ts"
 import { totalUsageTokens } from "./hit-rate.ts"
 
 /** One agent row of GET /api/agents. */
@@ -27,6 +26,21 @@ export interface AgentSessionMembershipSample {
 }
 
 /**
+ * Minimal per-step shape computeAgentStats needs. Deliberately structural:
+ * the SQL-side lightweight rows satisfy it without carrying the full
+ * AssistantStepRow, and full step rows keep satisfying it too — both the
+ * old scan pipeline and the SQL-side aggregation (P0-1) share this one
+ * aggregation function, which is what keeps their 口径 identical.
+ */
+export interface AgentStepUsageSample {
+  agent: string
+  sessionId: string
+  tokens: { input: number; output: number; cacheRead: number }
+  /** Name of every tool call part contained in this message. */
+  toolNames: string[]
+}
+
+/**
  * Aggregate per-agent stats:
  * - sessions: distinct session ids attributed to the agent (from the
  *   membership samples, plus any session that appears in step rows but has
@@ -37,7 +51,7 @@ export interface AgentSessionMembershipSample {
  */
 export function computeAgentStats(
   sessionMemberships: AgentSessionMembershipSample[],
-  stepRows: AssistantStepRow[],
+  stepRows: AgentStepUsageSample[],
 ): AgentStat[] {
   const sessionIdsByAgent = new Map<string, Set<string>>()
   const addSessionToAgent = (agent: string, sessionId: string): void => {

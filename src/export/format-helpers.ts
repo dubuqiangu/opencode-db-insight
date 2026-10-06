@@ -77,18 +77,30 @@ export function wrapTextAsBlockquote(text: string): string {
 }
 
 /**
+ * Truncate at a code-unit limit without leaving a lone high surrogate at
+ * the cut (a split emoji pair would render as a broken character and can
+ * break downstream consumers), mirroring the panel text truncation.
+ */
+function truncateWithoutSplittingSurrogate(text: string, characterLimit: number): string {
+  const truncatedText = text.slice(0, characterLimit)
+  if (/[\ud800-\udbff]$/.test(truncatedText)) return truncatedText.slice(0, -1)
+  return truncatedText
+}
+
+/**
  * Truncate a tool output at the character limit, marking the truncation
  * with the original full length (T5.1: `...（截断，完整 N 字符）`).
  */
 export function truncateToolOutput(toolOutput: string, characterLimit: number = TOOL_OUTPUT_CHARACTER_LIMIT): string {
   if (toolOutput.length <= characterLimit) return toolOutput
-  return `${toolOutput.slice(0, characterLimit)}\n...（截断，完整 ${toolOutput.length} 字符）`
+  const truncatedOutput = truncateWithoutSplittingSurrogate(toolOutput, characterLimit)
+  return `${truncatedOutput}\n...（截断，完整 ${toolOutput.length} 字符）`
 }
 
 /** Truncate a notice text with a plain ellipsis marker. */
 export function truncateNoticeText(noticeText: string, characterLimit: number = NOTICE_TEXT_CHARACTER_LIMIT): string {
   if (noticeText.length <= characterLimit) return noticeText
-  return `${noticeText.slice(0, characterLimit)}...`
+  return `${truncateWithoutSplittingSurrogate(noticeText, characterLimit)}...`
 }
 
 /**

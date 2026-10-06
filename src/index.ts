@@ -24,11 +24,31 @@ export default Plugin.define({
         : undefined
 
     const insightServer = await startInsightServer({ databasePath: databasePathOverride })
-    await context.storage.set(SERVER_PORT_STORAGE_KEY, insightServer.port)
+    try {
+      await context.storage.set(SERVER_PORT_STORAGE_KEY, insightServer.port)
+    } catch (storageSetError) {
+      // Never leak a running server when the port could not be published.
+      try {
+        await insightServer.close()
+      } catch (serverCloseError) {
+        console.error("opencode-db-insight: closing server after storage.set failed", serverCloseError)
+      }
+      throw storageSetError
+    }
 
     return async () => {
-      await context.storage.remove(SERVER_PORT_STORAGE_KEY)
-      await insightServer.close()
+      // Server first, then the storage key: a failing remove() must never
+      // prevent the close (and vice versa) — both are best-effort here.
+      try {
+        await insightServer.close()
+      } catch (serverCloseError) {
+        console.error("opencode-db-insight: server close failed during teardown", serverCloseError)
+      }
+      try {
+        await context.storage.remove(SERVER_PORT_STORAGE_KEY)
+      } catch (storageRemoveError) {
+        console.error("opencode-db-insight: removing published port failed", storageRemoveError)
+      }
     }
   },
 })

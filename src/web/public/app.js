@@ -103,14 +103,27 @@ async function loadOverviewSection() {
   }
 }
 
+/**
+ * 范围切换渲染序列守卫（同 session-replay 的 renderSequence 模式）：
+ * 慢响应晚到不得覆盖当前 range——只有「最新一次请求 且 仍针对当前范围」
+ * 的结果才允许落 DOM。结果仍按它自己的请求范围入缓存，晚到不浪费。
+ */
+let trendLoadSequence = 0;
+
 async function loadTrendSection() {
+  const requestToken = ++trendLoadSequence;
+  const requestRange = state.range;
   try {
     state.trendCleanup();
-    const rangeTrend = await fetchTrend(rangeToDays(state.range));
-    state.cache.rangeTrend[state.range] = rangeTrend;
+    const rangeTrend = await fetchTrend(rangeToDays(requestRange));
+    state.cache.rangeTrend[requestRange] = rangeTrend;
+    if (requestToken !== trendLoadSequence || requestRange !== state.range) return;
     renderTrendSectionFromCache();
     markSection("trend", true);
   } catch (error) {
+    // 与成功路径对称：晚到的错误同样不得覆盖当前范围（例如挂起请求失败前
+    // 用户已切到缓存命中的其他范围——此时它仍是最新 token，但范围已过期）
+    if (requestToken !== trendLoadSequence || requestRange !== state.range) return;
     renderError(trendChartElement, error, loadTrendSection);
     trendLegendElement.innerHTML = "";
     renderError(tokenFunnelElement, error, loadTrendSection);
@@ -219,12 +232,25 @@ function bindRangeSwitch() {
 }
 
 /* ---------- hash 路由 ---------- */
+
+/**
+ * #/session/:id 的 id 段解码（写入端 session-list.js 用 encodeURIComponent）。
+ * 手输/损坏的非法 % 序列降级为原文传下去，不让路由抛错。
+ */
+function decodeSessionIdFromHash(encodedSessionId) {
+  try {
+    return decodeURIComponent(encodedSessionId);
+  } catch {
+    return encodedSessionId;
+  }
+}
+
 function routeByHash() {
   const sessionMatch = /^#\/session\/(.+)$/.exec(window.location.hash);
   if (sessionMatch !== null) {
     dashboardElement.hidden = true;
     sessionViewElement.hidden = false;
-    renderSessionReplay(sessionViewElement, sessionMatch[1]);
+    renderSessionReplay(sessionViewElement, decodeSessionIdFromHash(sessionMatch[1]));
     return;
   }
   dashboardElement.hidden = false;

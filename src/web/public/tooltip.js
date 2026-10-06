@@ -1,7 +1,12 @@
 /**
  * 全局共享悬浮提示：SVG 图表（日历 / 条形 / 漏斗）hover 时使用。
  * 单例 DOM，随鼠标移动，自动防出屏。
+ *
+ * 安全：title / label / value 都可能携带外部数据（第三方 MCP 工具名、
+ * modelId 等），进 innerHTML 前统一 escapeHtml，HTML 一律按文本呈现。
  */
+
+import { escapeHtml } from "./format.js";
 
 let tooltipElement = null;
 
@@ -20,14 +25,14 @@ export function showTooltip({ title, rows, clientX, clientY }) {
   if (tooltip === null) return;
 
   const titleHtml = title
-    ? `<div class="tooltip-title">${title}</div>`
+    ? `<div class="tooltip-title">${escapeHtml(title)}</div>`
     : "";
   const rowsHtml = rows
     .map((row) => {
       const swatch = row.swatch
         ? `<span class="swatch" style="background:${row.swatch}"></span>`
         : "";
-      return `<div class="tooltip-row">${swatch}<span>${row.label}</span><span class="row-value num">${row.value}</span></div>`;
+      return `<div class="tooltip-row">${swatch}<span>${escapeHtml(row.label)}</span><span class="row-value num">${escapeHtml(row.value)}</span></div>`;
     })
     .join("");
   tooltip.innerHTML = titleHtml + rowsHtml;

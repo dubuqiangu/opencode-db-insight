@@ -17,6 +17,23 @@ import { contentTypeForFilePath, resolveStaticFilePath } from "./static-files.ts
 export const DASHBOARD_NOT_DEPLOYED_MESSAGE =
   "dashboard not deployed yet: src/web/public/index.html is missing (frontend arrives in M3)"
 
+/** Error body of the opaque 500 answers (details go to console.error only). */
+export const INTERNAL_ERROR_MESSAGE = "internal error"
+
+/**
+ * Allowed Host header values (P1-6): the loopback literal or localhost,
+ * each optionally with a port. Anything else (including a missing Host)
+ * is a DNS-rebinding attempt against this localhost-only server and gets
+ * a 403. Hostnames are case-insensitive per RFC 3986.
+ */
+const ALLOWED_HOST_HEADER_PATTERN = /^(127\.0\.0\.1|localhost)(:\d+)?$/i
+
+/** Pure: may this request reach the server, judging by its Host header? */
+export function isAllowedInsightHost(hostHeaderValue: string | undefined): boolean {
+  if (typeof hostHeaderValue !== "string") return false
+  return ALLOWED_HOST_HEADER_PATTERN.test(hostHeaderValue)
+}
+
 /** Everything the request handler needs, injected for testability. */
 export interface InsightRequestHandlerDependencies {
   /** Current read-only db connection, or null while unavailable. */
@@ -100,6 +117,13 @@ async function handleInsightExchange(
   response: ServerResponse,
   dependencies: InsightRequestHandlerDependencies,
 ): Promise<void> {
+  // The server binds to 127.0.0.1 only; a foreign Host header means a
+  // cross-origin/DNS-rebinding attempt and must never be served (P1-6).
+  if (!isAllowedInsightHost(request.headers.host)) {
+    respondWithJson(response, 403, { error: "forbidden host" })
+    return
+  }
+
   const requestMethod = request.method ?? "GET"
   if (requestMethod !== "GET" && requestMethod !== "HEAD") {
     respondWithJson(response, 405, { error: "method not allowed" })
@@ -145,9 +169,11 @@ export function createInsightRequestHandler(
 ): RequestListener {
   return (request, response) => {
     handleInsightExchange(request, response, dependencies).catch((handlerError: unknown) => {
+      // The response body stays opaque (P2-11); the real cause only goes
+      // to the console so nothing leaks to the client.
+      console.error("opencode-db-insight: request handler failed", handlerError)
       if (!response.headersSent) {
-        const errorMessage = handlerError instanceof Error ? handlerError.message : String(handlerError)
-        respondWithJson(response, 500, { error: `internal error: ${errorMessage}` })
+        respondWithJson(response, 500, { error: INTERNAL_ERROR_MESSAGE })
       } else {
         response.end()
       }

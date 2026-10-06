@@ -1,7 +1,7 @@
 /**
  * Tests for the export API route (T5.1): router matching, the
  * handleApiRequest sessionExport handler (against a fake database), the
- * session-id lookup scan, and one live-server fetch of the real route.
+ * by-id session lookup, and one live-server fetch of the real route.
  */
 
 import { test } from "node:test"
@@ -14,6 +14,7 @@ import {
   handleApiRequest,
   findSessionSummaryById,
   SESSION_NOT_FOUND_MESSAGE,
+  SESSION_EMPTY_MESSAGE,
   DATABASE_UNAVAILABLE_MESSAGE,
 } from "../src/web/api.ts"
 import { openOpencodeDb, querySessionList, querySessionMessages } from "../src/db/queries.ts"
@@ -109,9 +110,11 @@ test("sessionExport handler 404s unknown ids and sessions without messages", () 
   assert.deepEqual(unknownResponse.body, { error: SESSION_NOT_FOUND_MESSAGE })
   assert.equal(unknownResponse.rawText, undefined)
 
+  // The session exists in session_v2 but has no messages: a different 404
+  // message so callers can tell it apart from unknown ids (P2-7).
   const noMessagesResponse = handleApiRequest(buildExportRequestContext(fakeDatabase))
   assert.equal(noMessagesResponse.statusCode, 404)
-  assert.deepEqual(noMessagesResponse.body, { error: SESSION_NOT_FOUND_MESSAGE })
+  assert.deepEqual(noMessagesResponse.body, { error: SESSION_EMPTY_MESSAGE })
 })
 
 test("sessionExport handler answers 503 while the database is unavailable", () => {
@@ -120,8 +123,8 @@ test("sessionExport handler answers 503 while the database is unavailable", () =
   assert.deepEqual(apiResponse.body, { error: DATABASE_UNAVAILABLE_MESSAGE })
 })
 
-test("findSessionSummaryById scans pages until the session appears", () => {
-  // 600 sessions: the target sits past the first 500-row page.
+test("findSessionSummaryById answers by direct id lookup, however many sessions exist", () => {
+  // 600 sessions: the target sits past the first page of the old scan.
   const manySessions = Array.from({ length: 600 }, (_unused, sessionIndex) =>
     buildFakeSessionSummary({ id: `ses_scan_${sessionIndex}` }),
   )
@@ -137,7 +140,7 @@ test("findSessionSummaryById scans pages until the session appears", () => {
   assert.equal(
     findSessionSummaryById(fakeDatabase, "ses_scan_0")?.id,
     "ses_scan_0",
-    "sessions on the first page must be found too",
+    "the first session is found too",
   )
 })
 

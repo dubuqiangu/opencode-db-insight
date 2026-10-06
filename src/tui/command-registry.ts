@@ -35,6 +35,12 @@ export function shouldRenderStatusPanel(slotInput: unknown): boolean {
 export interface InsightTuiCommandDependencies {
   runOpenDashboard?: (context: unknown) => Promise<boolean>
   runExport?: (context: unknown, explicitSessionId?: string) => Promise<string | null>
+  /**
+   * Notified when /insight-status successfully opened the panel — the
+   * status-panel controller uses this to start its lazy refresh loop
+   * (P2-13). Not called when the host refuses the panel.
+   */
+  onStatusPanelOpened?: () => void
 }
 
 /**
@@ -48,6 +54,7 @@ export function registerInsightTuiCommands(
 ): (() => void) | undefined {
   const openDashboardRunner = dependencies.runOpenDashboard ?? runOpenDashboardCommand
   const exportRunner = dependencies.runExport ?? runExportCommand
+  const onStatusPanelOpened = dependencies.onStatusPanelOpened
 
   try {
     const contextRecord = context as
@@ -77,7 +84,7 @@ export function registerInsightTuiCommands(
           palette: true,
           slash: { name: "insight-status", aliases: [] },
           run: () => {
-            openStatusPanel(context)
+            openStatusPanel(context, onStatusPanelOpened)
           },
         },
         {
@@ -102,8 +109,12 @@ export function registerInsightTuiCommands(
   }
 }
 
-/** Open (or complain about) the insight status panel; never throws. */
-function openStatusPanel(context: unknown): void {
+/**
+ * Open (or complain about) the insight status panel; never throws. On a
+ * successful open the optional onStatusPanelOpened callback fires so the
+ * panel controller can begin its lazy refresh loop (P2-13).
+ */
+function openStatusPanel(context: unknown, onStatusPanelOpened?: () => void): void {
   try {
     const contextRecord = context as
       | { ui?: { panel?: { open?: (panelName: string) => boolean } } }
@@ -117,6 +128,12 @@ function openStatusPanel(context: unknown): void {
     const openedPanel = panelOpener.call(contextRecord?.ui?.panel, INSIGHT_STATUS_PANEL_NAME)
     if (openedPanel === false) {
       showInsightToast(context, "db-insight: 当前界面不支持面板", "error")
+      return
+    }
+    try {
+      onStatusPanelOpened?.()
+    } catch {
+      // A broken controller callback must never break the command.
     }
   } catch {
     showInsightToast(context, "db-insight: 当前界面不支持面板", "error")

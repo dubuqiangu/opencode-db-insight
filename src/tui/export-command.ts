@@ -168,7 +168,10 @@ export async function runExportCommand(
     }
 
     let sessionSummary: SessionSummary | null = null
-    const requestedSessionId = explicitSessionId?.trim() ?? ""
+    // The host may pass a non-string argument (or undefined); only a real
+    // string counts as an explicit session id (P2-8).
+    const requestedSessionId =
+      typeof explicitSessionId === "string" ? explicitSessionId.trim() : ""
     if (requestedSessionId !== "") {
       sessionSummary = findSessionSummaryById(databaseConnection, requestedSessionId)
       if (sessionSummary === null) {

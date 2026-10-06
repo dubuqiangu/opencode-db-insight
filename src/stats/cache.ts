@@ -8,6 +8,14 @@
 /** Default TTL per DESIGN.md §10. */
 export const DEFAULT_CACHE_TTL_MS = 60_000
 
+/**
+ * Hard cap on stored entries (P1-6): without one, a hostile or chatty
+ * caller could grow the process-local cache without bound (e.g. via
+ * unlimited distinct ?days= / limit / offset combinations). Oldest entry
+ * (Map insertion order) is evicted once the cap is reached.
+ */
+export const MAX_CACHE_ENTRIES = 64
+
 interface CacheEntry {
   value: unknown
   expiresAtEpochMs: number
@@ -20,10 +28,17 @@ export function buildCacheKey(functionName: string, parameters: unknown[]): stri
   return `${functionName}:${JSON.stringify(parameters)}`
 }
 
+/** Drop the oldest stored entry (Map insertion order = oldest first). */
+function evictOldestCacheEntry(): void {
+  const oldestCacheKey = entriesByCacheKey.keys().next().value
+  if (oldestCacheKey !== undefined) entriesByCacheKey.delete(oldestCacheKey)
+}
+
 /**
  * Return the cached result for `cacheKey` when it exists and has not
  * expired; otherwise call `compute`, store and return its result.
- * Expired entries are overwritten by the fresh computation.
+ * Expired entries are overwritten by the fresh computation, and the store
+ * never exceeds MAX_CACHE_ENTRIES (oldest evicted first).
  */
 export function cachedResult<T>(cacheKey: string, compute: () => T, ttlMs: number = DEFAULT_CACHE_TTL_MS): T {
   const nowEpochMs = Date.now()
@@ -32,6 +47,9 @@ export function cachedResult<T>(cacheKey: string, compute: () => T, ttlMs: numbe
     return entry.value as T
   }
   const value = compute()
+  if (!entriesByCacheKey.has(cacheKey) && entriesByCacheKey.size >= MAX_CACHE_ENTRIES) {
+    evictOldestCacheEntry()
+  }
   entriesByCacheKey.set(cacheKey, { value, expiresAtEpochMs: nowEpochMs + ttlMs })
   return value
 }

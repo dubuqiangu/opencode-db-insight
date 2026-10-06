@@ -8,6 +8,27 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.1.1] - 2026-10-06 · 发布前全项目审查修复
+
+@oracle 全项目审查（2 P0 / 7 P1 / 17 P2）后的修复版本；测试 191 用例全绿，前端离线冒烟 147 断言全绿。
+
+### Fixed — P0
+- **P0-1 大库同步全表扫描**：四统计路由改 SQL 侧聚合（json_extract 只取 token 数值与 model id，不物化 data 全文）+ days 下推 time_created；实测冷缓存 overview/trend/models ~350-570ms、**agents 3940ms → 630ms**（工具指纹改 content 数组快路径直取 + 长数组 json_each 回退，只抽小字段三元组）
+- **P0-2 tooltip XSS**：showTooltip 的 title/label/value 全部经 escapeHtml（注入源：MCP 工具名、modelId）
+
+### Fixed — P1
+- listen 失败路径先关 db 再抛出；teardown 先 close server 再 best-effort 清 storage；setup 失败先 close 再抛
+- db 运行中失效自愈（致命错误签名守卫置 null 重开）+ /api/health 改真实探活（SELECT 1）
+- close 竞态：shuttingDown 标志，关闭后不再重开连接
+- Host 头校验：仅 127.0.0.1/localhost[:port]，否则 403（防 DNS rebinding 读走会话内容）
+- TTL 缓存加 64 条上限（防无界增长）；session-list 空态/脚注/renderError 转义
+
+### Fixed — P2（节选）
+- 导出层截断代理对安全、标题折叠换行、notice `*` 转义；findSessionSummaryById 改直接 WHERE id=；空消息会话 404 文案与"不存在"区分；500 只回 internal error；面板 interval 惰性启动；providerId 取首个非空；explicitSessionId typeof 守卫；前端 fetch 15s 超时 + 范围切换竞态守卫、20 万条消息 min/max 循环化、排序稳定化、hash 编解码往返、日历 DST 安全步进
+
+### Added
+- scripts/verify-install.ps1：推送后一键安装自验证（HEAD 已推送 → plugin update → registry commit 一致 → 落盘版本/文件树镜像 → opencode.json 注册；未安装时引导 plugin add，退出码区分）
+
 ## [0.1.0] - 2026-10-06 · 首个可用版本（M0~M7）
 
 ### 发布摘要

@@ -90,9 +90,16 @@ export function renderAssistantMessageSection(message: SessionMessageRecord): st
 /**
  * Render a non-conversation message (system / model-switched / compaction /
  * anything unknown) as a `---` divider followed by one italic notice line.
+ * Asterisks in the content are escaped (P2-3) so a stray `*` can never
+ * toggle the surrounding italic markers or swallow the line break.
  */
 export function renderNoticeSection(message: SessionMessageRecord): string {
-  return `---\n\n*${buildNoticeLine(message)}*`
+  return `---\n\n*${escapeNoticeAsterisks(buildNoticeLine(message))}*`
+}
+
+/** Escape `*` only: the notice line's single emphasis delimiter pair. */
+function escapeNoticeAsterisks(noticeText: string): string {
+  return noticeText.replace(/\*/g, "\\*")
 }
 
 /**
