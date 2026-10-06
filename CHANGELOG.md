@@ -6,11 +6,30 @@
 
 ## [Unreleased]
 
+（暂无——下一批变更记录于此）
+
+## [0.2.0] - 2026-10-06 · v0.2-A 统计补全
+
 ### Added
-- DESIGN.md §3.1：仓库目录树章节（模块职责逐目录标注，填补文档空缺）
+- **GET /api/hour-heatmap?days=90**：7×24 时段习惯热力（168 格零填充，本地时间分桶，assistant 步骤计数）；看板新增 7×24 SVG 热力区块（复用日历热力分档配色，hover 单层转义提示）
+- **GET /api/session-survival**：会话存活统计（中位存活时长 / 短命占比（<5 分钟）/ idle 结局分布）；看板新增存活卡片
+- **GET /api/compaction**：压缩事件统计（总数 / 按 reason SQL 聚合（缺失归 unknown）/ 近 30 日零填充升序 / Top 10 会话）；看板新增压缩面板（30 柱迷你趋势 + Top 会话点击进回放）
+- **GET /api/todo 前端消费**：todo 完成率卡片（完成率 + 分状态 4 段进度条）
+- **回放页严格命中率**：回放头部新增 strictHitRate 指标（前端复刻 hit-rate.ts 公式并逐位对拍一致），旁注口径"cache.write 计入分母"
+- 新查询文件 src/db/behavior-queries.ts（SQL 侧聚合，不物化 data 全文，沿用 aggregate-queries 口径纪律）
+- 测试 194 → 208（behavior-queries 13 + 路由注册 1 + api-routes 扩展）
 
 ### Changed
-- verify-install.ps1 升级为真"一键安装自验证"：未注册时脚本自跑 `opencode plugin add`（首装），已注册走 `plugin update`，后续验证链完全复用；注册检查改为事后重读（plugin add 会重写 opencode.json）——首装实测一次通过（VERIFY OK，v0.1.2 @ eaf5902 五项检查全 PASS）
+- 日历热力组件导出分档配色函数供热力区块复用；format.js 新增 formatDuration（秒 → 人类可读时长）
+- verify-install.ps1 升级为真"一键安装自验证"：未注册时脚本自跑 `opencode plugin add`（首装），已注册走 `plugin update`，验证链完全复用；注册检查改为事后重读——首装实测 VERIFY OK（v0.1.2 @ eaf5902 五项全 PASS，update 路径 654c6fd 亦过）
+
+### Docs
+- DESIGN.md 新增 §3.1 仓库目录树章节（模块职责逐目录标注）；§6 路由表补齐 v0.2-A 三条新路由与此前遗漏的 /api/todo
+
+### 真机验证（T7.3 服务侧，v0.1.2 阶段完成）
+- 插件经宿主重启后加载：双实例 127.0.0.1:18789/18790（端口重试按设计工作），health 均 `{"status":"ok","version":"0.1.2","dbStatus":"ok"}`
+- `insight-server-port` storage 键实证持久化于 opencode.db（OpenCode V2 插件 storage 落库）；看板 HTML 在线
+- TUI 三命令冒烟待用户在终端实测
 
 ## [0.1.2] - 2026-10-06 · 增量审查修复
 

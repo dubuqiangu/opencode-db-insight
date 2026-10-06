@@ -20,6 +20,18 @@ export interface FakeMessageFixture {
   timeCreated?: number
 }
 
+/**
+ * One fake session_message row with type = 'compaction' (v0.2-A): `data`
+ * keeps the real wire shape, e.g. {"status":"completed","reason":"auto",
+ * "summary":"..."} — a missing/NULL reason exercises the "unknown" bucket.
+ */
+export interface FakeCompactionMessageFixture {
+  sessionId: string
+  /** epoch-ms of the row; recentDaily tests pin this. */
+  timeCreated?: number
+  data: unknown
+}
+
 /** Everything the fake database serves, grouped per table. */
 export interface FakeInsightDatabaseScenario {
   /** Session summaries; the fake keeps this order (time_updated desc). */
@@ -28,6 +40,13 @@ export interface FakeInsightDatabaseScenario {
   messagesBySessionId: Record<string, FakeMessageFixture[]>
   /** System prompt per session id; ids absent here have no instruction_state row. */
   systemPromptBySessionId: Record<string, Record<string, string>>
+  /**
+   * idle_outcome column per session id (session-survival route); ids
+   * absent here serve SQL NULL, which the stats layer buckets as "none".
+   */
+  idleOutcomeBySessionId?: Record<string, string | null>
+  /** Compaction message fixtures served to the /api/compaction scans. */
+  compactionMessages?: FakeCompactionMessageFixture[]
 }
 
 /** Turn a SessionSummary into the raw column shape of session_v2. */
@@ -55,7 +74,18 @@ function toSessionV2Row(sessionSummary: SessionSummary): Record<string, unknown>
 export function createFakeInsightDatabase(
   scenario: FakeInsightDatabaseScenario,
 ): SqliteReadConnection {
-  const sessionRows = scenario.sessions.map(toSessionV2Row)
+  const sessionRows = scenario.sessions.map((sessionSummary) => ({
+    ...toSessionV2Row(sessionSummary),
+    idle_outcome: scenario.idleOutcomeBySessionId?.[sessionSummary.id] ?? null,
+  }))
+  const compactionRows = (scenario.compactionMessages ?? []).map(
+    (compactionFixture) => ({
+      session_id: compactionFixture.sessionId,
+      type: "compaction",
+      time_created: compactionFixture.timeCreated ?? DEFAULT_MESSAGE_TIMESTAMP,
+      data: JSON.stringify(compactionFixture.data),
+    }),
+  )
 
   const prepareStatement = (sql: string): SqliteStatement => {
     if (sql.trim() === "SELECT 1") {
@@ -72,12 +102,71 @@ export function createFakeInsightDatabase(
             undefined,
         }
       }
+      if (sql.includes("idle_outcome")) {
+        // The session-survival scan reads every session row (v0.2-A).
+        return { all: () => sessionRows, get: () => undefined }
+      }
       return {
         all: (...parameters: unknown[]) => {
           const limit = Number(parameters[0]) || 50
           const offset = Number(parameters[1]) || 0
           return sessionRows.slice(offset, offset + limit)
         },
+        get: () => undefined,
+      }
+    }
+    if (sql.includes("type = 'compaction'")) {
+      // The three /api/compaction scans (v0.2-A): by-reason GROUP BY,
+      // per-session GROUP BY, and the time_created window scan.
+      if (sql.includes("GROUP BY") && sql.includes("reason")) {
+        const reasonCountByKey = new Map<string, number>()
+        for (const compactionRow of compactionRows) {
+          let parsedData: unknown = null
+          try {
+            parsedData = JSON.parse(String(compactionRow.data))
+          } catch {
+            parsedData = null
+          }
+          const reasonValue =
+            typeof parsedData === "object" && parsedData !== null
+              ? (parsedData as Record<string, unknown>)["reason"]
+              : null
+          const reasonKey =
+            reasonValue === null || reasonValue === undefined ? "unknown" : String(reasonValue)
+          reasonCountByKey.set(reasonKey, (reasonCountByKey.get(reasonKey) ?? 0) + 1)
+        }
+        return {
+          all: () =>
+            [...reasonCountByKey.entries()].map(([reasonKey, reasonCount]) => ({
+              reason_key: reasonKey,
+              reason_count: reasonCount,
+            })),
+          get: () => undefined,
+        }
+      }
+      if (sql.includes("GROUP BY") && sql.includes("session_id")) {
+        const countBySessionId = new Map<string, number>()
+        for (const compactionRow of compactionRows) {
+          countBySessionId.set(
+            String(compactionRow.session_id),
+            (countBySessionId.get(String(compactionRow.session_id)) ?? 0) + 1,
+          )
+        }
+        const rankedSessionCounts = [...countBySessionId.entries()]
+          .map(([sessionId, sessionCount]) => ({ session_id: sessionId, session_count: sessionCount }))
+          .sort((left, right) =>
+            right.session_count - left.session_count ||
+            (left.session_id < right.session_id ? -1 : 1),
+          )
+          .slice(0, 10)
+        return { all: () => rankedSessionCounts, get: () => undefined }
+      }
+      // recentDaily scan: time_created only, with a >= ? floor.
+      return {
+        all: (...parameters: unknown[]) =>
+          compactionRows
+            .map((compactionRow) => ({ time_created: compactionRow.time_created }))
+            .filter((compactionRow) => Number(compactionRow.time_created) >= Number(parameters[0])),
         get: () => undefined,
       }
     }

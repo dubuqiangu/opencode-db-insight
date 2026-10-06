@@ -15,8 +15,8 @@ import {
   fetchSessionSummaryById,
   SessionNotFoundError,
 } from "../data-source.js";
-import { formatTokens, formatCount, formatDateTime, escapeHtml } from "../format.js";
-import { renderTimeline, summarizeReplayTokens } from "./replay-timeline.js";
+import { formatTokens, formatCount, formatDateTime, formatPercent, escapeHtml } from "../format.js";
+import { renderTimeline, summarizeReplayTokens, summarizeStrictHitRate } from "./replay-timeline.js";
 import { renderLoading, renderError } from "./state-views.js";
 
 const TIMELINE_PAGE_SIZE = 200;
@@ -85,6 +85,7 @@ function buildHeaderElement(sessionId, messageRecords, sessionSummary) {
   headerPanel.className = "panel replay-header";
 
   const summary = summarizeReplayTokens(messageRecords);
+  const strictHitRate = summarizeStrictHitRate(messageRecords);
   const timeSpan = computeTimeSpan(messageRecords);
   const latestAssistant = findLatestAssistantModel(messageRecords);
   const sessionTitle = sessionSummary !== null && sessionSummary.title !== ""
@@ -99,6 +100,7 @@ function buildHeaderElement(sessionId, messageRecords, sessionSummary) {
       </div>
       <div class="replay-header-stats num">
         <span title="Σ(input + output + cache.read)"><b>${formatTokens(summary.totalTokens)}</b> tokens</span>
+        ${strictHitRate === null ? "" : `<span title="严格命中率 = cache.read / (cache.read + input + cache.write) · 与看板口径的差别：cache.write 计入分母"><b>${formatPercent(strictHitRate)}</b> 严格命中</span>`}
         <span title="assistant 消息数（步数）"><b>${formatCount(summary.assistantStepCount)}</b> 步</span>
         ${latestAssistant === null ? "" : `<span title="最后使用的模型"><b>${escapeHtml(latestAssistant)}</b></span>`}
         ${timeSpan === null ? "" : `<span title="首条 → 末条消息时间">${timeSpan}</span>`}

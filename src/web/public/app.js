@@ -11,6 +11,10 @@ import {
   fetchAgents,
   fetchSessions,
   fetchHealth,
+  fetchHourHeatmap,
+  fetchSessionSurvival,
+  fetchCompaction,
+  fetchTodo,
   MAX_TREND_DAYS,
 } from "./data-source.js";
 import { formatTokens, formatPercent, escapeHtml } from "./format.js";
@@ -18,6 +22,10 @@ import { onSchemeChange } from "./theme.js";
 import { renderKpiRow } from "./components/kpi-card.js";
 import { renderTrendChart } from "./components/trend-chart.js";
 import { renderCalendarHeatmap } from "./components/calendar-heatmap.js";
+import { renderHourHeatmap } from "./components/hour-heatmap.js";
+import { renderSessionSurvivalCard } from "./components/session-survival-card.js";
+import { renderCompactionPanel } from "./components/compaction-panel.js";
+import { renderTodoCard } from "./components/todo-card.js";
 import { renderToolBars } from "./components/tool-bars.js";
 import { renderTokenFunnel } from "./components/token-funnel.js";
 import { renderModelTable } from "./components/model-table.js";
@@ -39,6 +47,10 @@ const state = {
     models: undefined,
     agents: undefined,
     sessions: undefined,
+    hourHeatmap: undefined,
+    sessionSurvival: undefined,
+    compaction: undefined,
+    todo: undefined,
   },
   failedSections: new Set(),
   trendCleanup: () => {},
@@ -51,6 +63,10 @@ const kpiRowElement = document.getElementById("kpi-row");
 const trendChartElement = document.getElementById("trend-chart");
 const trendLegendElement = document.getElementById("trend-legend");
 const calendarHeatmapElement = document.getElementById("calendar-heatmap");
+const hourHeatmapElement = document.getElementById("hour-heatmap");
+const compactionPanelElement = document.getElementById("compaction-panel");
+const sessionSurvivalElement = document.getElementById("session-survival");
+const todoCardElement = document.getElementById("todo-card");
 const toolBarsElement = document.getElementById("tool-bars");
 const tokenFunnelElement = document.getElementById("token-funnel");
 const funnelCaptionElement = document.getElementById("funnel-caption");
@@ -185,6 +201,51 @@ async function loadSessionsSection() {
   }
 }
 
+async function loadHourHeatmapSection() {
+  try {
+    state.cache.hourHeatmap = await fetchHourHeatmap();
+    renderHourHeatmap(hourHeatmapElement, state.cache.hourHeatmap);
+    markSection("hour-heatmap", true);
+  } catch (error) {
+    renderError(hourHeatmapElement, error, loadHourHeatmapSection);
+    markSection("hour-heatmap", false);
+  }
+}
+
+async function loadSessionSurvivalSection() {
+  try {
+    state.cache.sessionSurvival = await fetchSessionSurvival();
+    renderSessionSurvivalCard(sessionSurvivalElement, state.cache.sessionSurvival);
+    markSection("session-survival", true);
+  } catch (error) {
+    renderError(sessionSurvivalElement, error, loadSessionSurvivalSection);
+    markSection("session-survival", false);
+  }
+}
+
+async function loadCompactionSection() {
+  try {
+    state.cache.compaction = await fetchCompaction();
+    renderCompactionPanel(compactionPanelElement, state.cache.compaction);
+    markSection("compaction", true);
+  } catch (error) {
+    renderError(compactionPanelElement, error, loadCompactionSection);
+    markSection("compaction", false);
+  }
+}
+
+async function loadTodoSection() {
+  try {
+    // fetchTodo 对 null body 返回 null：卡片渲染空占位，不算失败
+    state.cache.todo = await fetchTodo();
+    renderTodoCard(todoCardElement, state.cache.todo);
+    markSection("todo", true);
+  } catch (error) {
+    renderError(todoCardElement, error, loadTodoSection);
+    markSection("todo", false);
+  }
+}
+
 /* ---------- 模型下钻过滤 ---------- */
 function onModelSelected(modelId) {
   state.modelFilter = modelId;
@@ -264,9 +325,13 @@ function startInitialLoad() {
   loadOverviewSection();
   loadTrendSection();
   loadCalendarSection();
+  loadHourHeatmapSection();
   loadToolsSection();
   loadModelsSection();
   loadSessionsSection();
+  loadCompactionSection();
+  loadSessionSurvivalSection();
+  loadTodoSection();
 }
 
 function init() {
@@ -277,6 +342,11 @@ function init() {
     if (state.cache.overview !== undefined) renderKpiRow(kpiRowElement, state.cache.overview);
     if (state.cache.rangeTrend[state.range] !== undefined) renderTrendSectionFromCache();
     if (state.cache.calendarTrend !== undefined) renderCalendarHeatmap(calendarHeatmapElement, state.cache.calendarTrend);
+    // 时段热力 / 压缩迷你趋势用 cssVar 内联着色，主题切换后重读配色
+    if (state.cache.hourHeatmap !== undefined) renderHourHeatmap(hourHeatmapElement, state.cache.hourHeatmap);
+    if (state.cache.compaction !== undefined) renderCompactionPanel(compactionPanelElement, state.cache.compaction);
+    if (state.cache.sessionSurvival !== undefined) renderSessionSurvivalCard(sessionSurvivalElement, state.cache.sessionSurvival);
+    if (state.cache.todo !== undefined) renderTodoCard(todoCardElement, state.cache.todo);
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
     if (state.cache.sessions !== undefined) renderSessionList(sessionListElement, state.cache.sessions, state.modelFilter);

@@ -110,7 +110,7 @@ opencode-db-insight/
 │     ├─ status-panel-{data,text,controller}.ts  #   /insight-status 面板三件套
 │     ├─ open-dashboard-command.ts / export-command.ts
 │     └─ tui-context.ts         #   storage 读取（端口 / 数据库路径）
-├─ test/                         # 194 用例：模块测试 + 集成 / 韧性 / SQL 对账
+├─ test/                         # 208 用例：模块测试 + 集成 / 韧性 / SQL 对账 + v0.2 行为查询
 │  └─ helpers/                   # fake-insight-db / step 工厂
 ├─ DESIGN.md / tasks.md / CHANGELOG.md / README.md
 └─ package.json / LICENSE
@@ -147,6 +147,10 @@ opencode-db-insight/
 | `/api/trend?days=30` | 逐日序列：tokens 分项 + 命中率 |
 | `/api/models` | 模型单点指标排行 |
 | `/api/agents` | agent 用量 + 工具指纹 |
+| `/api/hour-heatmap?days=90` | 7×24 时段热力网格（168 格零填充，weekday=0 周日为外层） |
+| `/api/session-survival` | 会话存活统计（中位时长 / 短命占比 / idle 结局分布） |
+| `/api/compaction` | 压缩事件统计（总数 / 按 reason / 近 30 日逐日 / Top 10 会话） |
+| `/api/todo` | todo 完成率统计（供看板卡片） |
 | `/api/sessions?limit=&offset=` | 会话列表（标题/模型/agent/时间/token；服务端固定按 time_updated 倒序，客户端排序） |
 | `/api/session/:id/messages` | 单会话全部消息（角色分型，供回放） |
 | `/api/session/:id/system-prompt` | 该会话关联的 instruction_blob 内容 |

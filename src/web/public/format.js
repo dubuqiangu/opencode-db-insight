@@ -96,6 +96,25 @@ export function formatRelative(epochMilliseconds, now = Date.now()) {
   return formatDay(epochMilliseconds);
 }
 
+/**
+ * 秒数 → 人类可读时长：<60s "N 秒"；<1h "N 分钟"；<1d "X 小时 Y 分"；
+ * 更长 "X 天 Y 小时"（余数单位为 0 时只显示主单位）。
+ */
+export function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  if (seconds < 60) return `${Math.round(seconds)} 秒`;
+  const totalMinutes = Math.round(seconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes} 分钟`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  const remainderMinutes = totalMinutes % 60;
+  if (totalHours < 24) {
+    return remainderMinutes === 0 ? `${totalHours} 小时` : `${totalHours} 小时 ${remainderMinutes} 分`;
+  }
+  const totalDays = Math.floor(totalHours / 24);
+  const remainderHours = totalHours % 24;
+  return remainderHours === 0 ? `${totalDays} 天` : `${totalDays} 天 ${remainderHours} 小时`;
+}
+
 const HTML_ESCAPE_MAP = {
   "&": "&" + "amp;",
   "<": "&" + "lt;",

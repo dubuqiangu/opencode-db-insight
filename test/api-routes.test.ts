@@ -44,6 +44,9 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/agents",
     "/api/sessions",
     "/api/todo",
+    "/api/hour-heatmap",
+    "/api/session-survival",
+    "/api/compaction",
     "/api/session/ses_example/messages",
     "/api/session/ses_example/system-prompt",
   ]
@@ -199,6 +202,71 @@ test("unexpected query errors answer an opaque 500 and only log the cause (P2-11
     )
   } finally {
     consoleErrorMock.mock.restore()
+    clearResultCache()
+  }
+})
+
+test("v0.2-A behavior routes are registered and answer 200 with a live database", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({ id: "ses_behavior_route", timeCreated: 0, timeUpdated: 10 * 60_000 }),
+      ],
+      messagesBySessionId: {
+        ses_behavior_route: [{ type: "assistant", data: {}, timeCreated: Date.now() - 60_000 }],
+      },
+      systemPromptBySessionId: {},
+      idleOutcomeBySessionId: { ses_behavior_route: "archived" },
+      compactionMessages: [
+        { sessionId: "ses_behavior_route", data: { status: "completed", reason: "auto", summary: "x" } },
+      ],
+    })
+
+    // /api/hour-heatmap → bare 168-cell array body.
+    const heatmapResponse = handleApiRequest(apiContextFor("/api/hour-heatmap", fakeDatabase))
+    assert.equal(heatmapResponse.statusCode, 200)
+    assert.ok(Array.isArray(heatmapResponse.body), "heatmap body is a bare array")
+    assert.equal((heatmapResponse.body as unknown[]).length, 168)
+
+    // /api/hour-heatmap?days=<garbage> keeps the 90-day default and still
+    // answers a bare 200 body.
+    const heatmapRoute = matchApiRoute("/api/hour-heatmap")
+    assert.notEqual(heatmapRoute, null)
+    const heatmapDefaultDaysResponse = handleApiRequest({
+      route: heatmapRoute!,
+      searchParams: new URLSearchParams("days=not-a-number"),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+    assert.equal(heatmapDefaultDaysResponse.statusCode, 200)
+    assert.equal((heatmapDefaultDaysResponse.body as unknown[]).length, 168)
+
+    // /api/session-survival → bare survival object body.
+    const survivalResponse = handleApiRequest(apiContextFor("/api/session-survival", fakeDatabase))
+    assert.equal(survivalResponse.statusCode, 200)
+    assert.deepEqual(survivalResponse.body, {
+      totalSessions: 1,
+      medianDurationSeconds: 600,
+      shortLivedShare: 0,
+      idleOutcomeCounts: { archived: 1 },
+    })
+
+    // /api/compaction → bare compaction object body.
+    const compactionResponse = handleApiRequest(apiContextFor("/api/compaction", fakeDatabase))
+    assert.equal(compactionResponse.statusCode, 200)
+    const compactionBody = compactionResponse.body as Record<string, unknown>
+    assert.equal(compactionBody["total"], 1)
+    assert.deepEqual(compactionBody["byReason"], { auto: 1 })
+    assert.equal(
+      (compactionBody["recentDaily"] as unknown[]).length,
+      30,
+    )
+    assert.deepEqual(compactionBody["topSessions"], [
+      { sessionId: "ses_behavior_route", count: 1 },
+    ])
+  } finally {
     clearResultCache()
   }
 })

@@ -9,6 +9,13 @@
  *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts ModelMetric）
  *   GET /api/agents    → buildAgentStats()（stats/agent-fingerprint.ts AgentStat）
  *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）
+ *   GET /api/hour-heatmap?days=90  → buildHourHeatmap()（168 项零填充，
+ *                        {weekday 0=周日..6, hour 0-23, steps}，weekday-major）
+ *   GET /api/session-survival → buildSessionSurvival()（{totalSessions,
+ *                        medianDurationSeconds, shortLivedShare, idleOutcomeCounts}）
+ *   GET /api/compaction → buildCompaction()（{total, byReason,
+ *                        recentDaily 30 天升序零填充, topSessions 前 10 降序}）
+ *   GET /api/todo      → buildTodoStats()（queries.ts queryTodoStats 返回形状）
  *   GET /api/session/:id/* → 回放 fixtures 见 mock-replay-data.js
  *
  * 全部数据由同一个确定性随机源在模块加载时生成一次，
@@ -366,13 +373,112 @@ function buildSessionSummaries() {
 /* ------------------------------------------------------------
  * 导出（data-source.js 以带延迟的 Promise 包装这些同步结果）
  * ------------------------------------------------------------ */
+/* ------------------------------------------------------------
+ * GET /api/hour-heatmap?days=90 —— 168 项零填充（weekday-major）
+ * weekday 0=周日..6=周六；作息与 sessions mock 一致：深夜 21~03 高峰，
+ * 工作日白天零散，清晨 4~8 点低谷（部分格为零）。
+ * ------------------------------------------------------------
+ */
+function buildHourHeatmap() {
+  const cells = [];
+  for (let weekday = 0; weekday <= 6; weekday += 1) {
+    const isWeekend = weekday === 0 || weekday === 6;
+    for (let hour = 0; hour <= 23; hour += 1) {
+      let steps = 0;
+      const isNightOwl = hour >= 21 || hour <= 3;
+      const isWorkHour = hour >= 10 && hour <= 18 && !isWeekend;
+      const isEarlyMorning = hour >= 4 && hour <= 8;
+      if (isNightOwl) {
+        steps = Math.round(randomInRange(900, 4200) * (isWeekend ? 1.15 : 1));
+      } else if (isWorkHour) {
+        steps = Math.round(randomInRange(120, 900));
+      } else if (isEarlyMorning) {
+        steps = random() < 0.35 ? Math.round(randomInRange(10, 160)) : 0;
+      } else {
+        steps = random() < 0.6 ? Math.round(randomInRange(20, 420)) : 0;
+      }
+      cells.push({ weekday, hour, steps });
+    }
+  }
+  return cells;
+}
+
+/* ------------------------------------------------------------
+ * GET /api/session-survival —— 中位存活 / 短命占比 / idle 结局
+ * totalSessions 与 /api/sessions 的 total 同源（口径一致）；
+ * idleOutcomeCounts 各结局加和 = totalSessions（无 idle 的会话归 "none"）。
+ * ------------------------------------------------------------
+ */
+function buildSessionSurvival() {
+  const totalSessions = sessionsPayload.total;
+  const clearedCount = Math.round(totalSessions * 0.42);
+  const compactedCount = Math.round(totalSessions * 0.18);
+  const clearedOnNewMessageCount = Math.round(totalSessions * 0.08);
+  return {
+    totalSessions,
+    medianDurationSeconds: 2_730, // 45.5 分钟
+    shortLivedShare: 0.312,
+    idleOutcomeCounts: {
+      cleared: clearedCount,
+      compacted: compactedCount,
+      "cleared-on-new-message": clearedOnNewMessageCount,
+      none: totalSessions - clearedCount - compactedCount - clearedOnNewMessageCount,
+    },
+  };
+}
+
+/* ------------------------------------------------------------
+ * GET /api/compaction —— 总数 / 按原因 / 近 30 日趋势 / Top 会话
+ * total = byReason 求和（口径自洽）；recentDaily 30 天升序零填充；
+ * topSessions 取 sessions mock 的真实 id，次数降序（前 10）。
+ * ------------------------------------------------------------
+ */
+function buildCompaction() {
+  const byReason = { "token budget": 1_104, auto: 596, manual: 242 };
+  const total = Object.values(byReason).reduce((sum, count) => sum + count, 0);
+
+  const recentDaily = [];
+  for (let dayOffset = 29; dayOffset >= 0; dayOffset -= 1) {
+    const count = random() < 0.25 ? 0 : Math.round(randomInRange(1, 9));
+    recentDaily.push({ dateKey: localDateKeyBefore(dayOffset), count });
+  }
+
+  const topSessions = sessionsPayload.sessions.slice(0, 10).map((session, sessionIndex) => ({
+    sessionId: session.id,
+    count: 40 - sessionIndex * 3,
+  }));
+
+  return { total, byReason, recentDaily, topSessions };
+}
+
+/* ------------------------------------------------------------
+ * GET /api/todo —— queryTodoStats 返回形状
+ * （total 含三个已知状态之外的状态，这里放 14 个 cancelled 演示「其他」段）
+ * ------------------------------------------------------------
+ */
+function buildTodoStats() {
+  const completed = 912;
+  const pending = 233;
+  const inProgress = 141;
+  const otherStatusCount = 14;
+  return { total: completed + pending + inProgress + otherStatusCount, completed, pending, inProgress };
+}
+
 const overviewPayload = buildOverview();
 const modelMetricsPayload = buildModelMetrics();
 const agentStatsPayload = buildAgentStats();
 const sessionsPayload = buildSessionSummaries();
+const hourHeatmapPayload = buildHourHeatmap();
+const sessionSurvivalPayload = buildSessionSurvival();
+const compactionPayload = buildCompaction();
+const todoStatsPayload = buildTodoStats();
 
 export function getMockOverview() { return overviewPayload; }
 export function getMockTrend(days) { return buildTrend(days); }
 export function getMockModelMetrics() { return modelMetricsPayload; }
 export function getMockAgentStats() { return agentStatsPayload; }
 export function getMockSessions() { return sessionsPayload; }
+export function getMockHourHeatmap() { return hourHeatmapPayload; }
+export function getMockSessionSurvival() { return sessionSurvivalPayload; }
+export function getMockCompaction() { return compactionPayload; }
+export function getMockTodoStats() { return todoStatsPayload; }

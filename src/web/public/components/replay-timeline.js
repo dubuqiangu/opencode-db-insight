@@ -306,6 +306,30 @@ export function summarizeReplayTokens(messageRecords) {
   return { totalTokens, assistantStepCount };
 }
 
+/**
+ * 会话级严格命中率：src/stats/hit-rate.ts strictHitRate 的前端复刻。
+ * Σcache.read / Σ(cache.read + input + cache.write) —— cache.write 计入
+ * 分母（与看板顶部命中率口径的区别就在这一项）。
+ * 分母为 0（会话没有任何 token 流水）时返回 null，由调用方省略指标。
+ */
+export function summarizeStrictHitRate(messageRecords) {
+  let cacheReadTotal = 0;
+  let paidInputTotal = 0;
+  let cacheWriteTotal = 0;
+  for (const messageRecord of Array.isArray(messageRecords) ? messageRecords : []) {
+    if (String(messageRecord.type ?? "") !== "assistant") continue;
+    const dataRecord = asRecord(messageRecord.data);
+    const tokensRecord = dataRecord === null ? null : asRecord(dataRecord.tokens);
+    if (tokensRecord === null) continue;
+    cacheReadTotal += numberOrZero(asRecord(tokensRecord.cache)?.read);
+    paidInputTotal += numberOrZero(tokensRecord.input);
+    cacheWriteTotal += numberOrZero(asRecord(tokensRecord.cache)?.write);
+  }
+  const denominator = cacheReadTotal + paidInputTotal + cacheWriteTotal;
+  if (denominator <= 0) return null;
+  return cacheReadTotal / denominator;
+}
+
 function numberOrZero(value) {
   const numericValue = Number(value);
   return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : 0;

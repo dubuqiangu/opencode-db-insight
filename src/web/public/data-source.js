@@ -12,6 +12,12 @@
  *   GET /api/sessions?limit&off  → SessionSummary[]（裸数组，无 total 包络）
  *   GET /api/session/:id/messages        → SessionMessageRecord[]
  *   GET /api/session/:id/system-prompt   → Record<instructionKey, text> | 404
+ *   GET /api/hour-heatmap?days=90        → 168 项 {weekday,hour,steps}（零填充）
+ *   GET /api/session-survival            → {totalSessions, medianDurationSeconds,
+ *                                          shortLivedShare, idleOutcomeCounts}
+ *   GET /api/compaction                  → {total, byReason, recentDaily,
+ *                                          topSessions}
+ *   GET /api/todo                        → queryTodoStats | null（db 不可用为 null）
  *   GET /api/health              → { status, version, port, dbStatus, dbPath }
  *
  * 真实/裸形状 → 组件所需形状的适配函数（normalizeTrendPayload 等）单独导出，
@@ -24,6 +30,10 @@ import {
   getMockModelMetrics,
   getMockAgentStats,
   getMockSessions,
+  getMockHourHeatmap,
+  getMockSessionSurvival,
+  getMockCompaction,
+  getMockTodoStats,
 } from "./mock-data.js";
 import { getMockSessionMessages, getMockSessionSystemPrompt } from "./mock-replay-data.js";
 
@@ -195,6 +205,51 @@ export async function fetchSessions(limit = 15, offset = 0) {
   if (USE_MOCK) return resolveWithLatency(getMockSessions());
   const sessionPage = await fetchJson(`/sessions?limit=${limit}&offset=${offset}`);
   return normalizeSessionPage(sessionPage);
+}
+
+/* ---------------- 看板数据（v0.2-A 新区块） ---------------- */
+
+/** 时段热力固定窗口 = 契约默认值（90 天）。 */
+export const HOUR_HEATMAP_WINDOW_DAYS = 90;
+
+/** GET /api/hour-heatmap?days=90 —— 7×24 步骤分布（168 项零填充裸数组）。 */
+export async function fetchHourHeatmap(days = HOUR_HEATMAP_WINDOW_DAYS) {
+  if (USE_MOCK) return resolveWithLatency(getMockHourHeatmap());
+  const heatmapCells = await fetchJson(`/hour-heatmap?days=${clampTrendDays(days)}`);
+  return Array.isArray(heatmapCells) ? heatmapCells : [];
+}
+
+/** GET /api/session-survival —— 会话存活统计（形状不符按区块错误态降级）。 */
+export async function fetchSessionSurvival() {
+  if (USE_MOCK) return resolveWithLatency(getMockSessionSurvival());
+  const survivalStats = await fetchJson("/session-survival");
+  if (survivalStats === null || typeof survivalStats !== "object" || Array.isArray(survivalStats)) {
+    throw new Error("/api/session-survival 返回空数据");
+  }
+  return survivalStats;
+}
+
+/** GET /api/compaction —— 压缩事件统计（形状不符按区块错误态降级）。 */
+export async function fetchCompaction() {
+  if (USE_MOCK) return resolveWithLatency(getMockCompaction());
+  const compactionStats = await fetchJson("/compaction");
+  if (compactionStats === null || typeof compactionStats !== "object" || Array.isArray(compactionStats)) {
+    throw new Error("/api/compaction 返回空数据");
+  }
+  return compactionStats;
+}
+
+/**
+ * GET /api/todo —— queryTodoStats 的返回。
+ * 后端 db 不可用时 body 为 null：返回 null 由卡片渲染空占位（不算错误）。
+ */
+export async function fetchTodo() {
+  if (USE_MOCK) return resolveWithLatency(getMockTodoStats());
+  const todoStats = await fetchJson("/todo");
+  if (todoStats === null || typeof todoStats !== "object" || Array.isArray(todoStats)) {
+    return null;
+  }
+  return todoStats;
 }
 
 /* ---------------- 会话回放数据 ---------------- */

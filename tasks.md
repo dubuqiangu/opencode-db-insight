@@ -63,12 +63,14 @@
 
 **启动门槛**：T7.3 真机验证（plugin add + 重启 + 三命令冒烟）必须先通过——P1-3（storage 跨插件可见性）若失败，/insight 命令修复优先于一切 v0.2 功能。
 
-### v0.2-A 统计补全（纯函数已备，只差 SQL/路由/前端接线，预计 1 个里程碑）
-- [ ] A1 小时×星期热力：轻量行查询（time_created 抽 hour/dow，避免全扫）→ /api/hour-heatmap 路由 → 看板前端区块（复用 calendar-heatmap 的分档配色）
-- [ ] A2 会话存活统计：SQL 聚合 time_created→time_updated 分布 + idle_outcome 计数 → /api/session-survival 路由 → 前端区块
-- [ ] A3 压缩事件统计：compaction 消息按会话/按日计数（session_message 有 type='compaction'）→ 并入 A2 路由或独立 /api/compaction → 前端标注（马拉松会话信号）
-- [ ] A4 strictHitRate 接线到回放页头部并注明口径（含 cache.write 的严格命中率，纯函数已备）
-- [ ] A5 前端消费 /api/todo（todo 完成率卡片，数据源已在线）
+### v0.2-A 统计补全（已完成，push #11，2026-10-06）
+
+- [x] A1 小时×星期热力：/api/hour-heatmap 路由 + 7×24 SVG 热力区块（复用日历热力分档配色）——✅ 真实库联测 168 格序正确，冷 545ms / 缓存命中 1ms
+- [x] A2 会话存活统计：/api/session-survival 路由 + 存活卡片（中位时长/短命占比/idle 结局条）——✅ 结局计数守恒 789==789
+- [x] A3 压缩事件统计：/api/compaction（byReason SQL 聚合 + 近 30 日 + Top 10）+ 压缩面板——✅ 双守恒 54==54，byReason SQL 侧聚合不物化 data
+- [x] A4 strictHitRate 接线到回放页头部并注明口径——✅ 前端复刻公式与 hit-rate.ts 原版逐位对拍一致（0.91603 ↔ 91.6%）
+- [x] A5 前端消费 /api/todo（todo 完成率卡片，4 段进度条）——✅ 70.2% mock 验证 + 段宽合计精确 100%
+- [x] 版本 0.2.0（后端三路由 + 前端五区块），测试 194 → 208 全绿
 
 ### v0.2-B 低优先改进（可选拆批）
 - [ ] B1 /api/sessions 服务端排序参数（当前客户端排序够用；若 v0.2-A 的区块增多触发表格重构再一并做）

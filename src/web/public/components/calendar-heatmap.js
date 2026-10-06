@@ -15,8 +15,11 @@ const CELL_STEP = CELL_SIZE + CELL_GAP;
 const LABEL_GUTTER = 30;
 const MONTH_LABEL_HEIGHT = 18;
 
-/** 非零日的分位点 → 4 档着色阈值（少 → 多）。 */
-function computeLevelThresholds(dailyTotals) {
+/**
+ * 非零日的分位点 → 4 档着色阈值（少 → 多）。
+ * 导出供 hour-heatmap.js 复用（同一套 --heat-0..4 分档语义）。
+ */
+export function computeLevelThresholds(dailyTotals) {
   const activeDayTotals = dailyTotals.filter((total) => total > 0).sort((left, right) => left - right);
   if (activeDayTotals.length === 0) return [];
   const quantileAt = (fraction) =>
@@ -24,7 +27,8 @@ function computeLevelThresholds(dailyTotals) {
   return [quantileAt(0.25), quantileAt(0.5), quantileAt(0.75), quantileAt(0.9)];
 }
 
-function levelOfValue(value, thresholds) {
+/** 值 → 档位（0 = 零档；1..4 由阈值划分）。同样导出供 hour-heatmap 复用。 */
+export function levelOfValue(value, thresholds) {
   if (value <= 0 || thresholds.length < 4) return 0;
   if (value <= thresholds[0]) return 1;
   if (value <= thresholds[1]) return 2;

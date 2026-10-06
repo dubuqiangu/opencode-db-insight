@@ -24,6 +24,11 @@ import {
   querySessionSystemPrompt,
   queryTodoStats,
 } from "../db/queries.ts"
+import {
+  queryCompactionStats,
+  queryHourHeatmap,
+  querySessionSurvival,
+} from "../db/behavior-queries.ts"
 import { renderSessionMarkdown } from "../export/markdown.ts"
 import { buildCacheKey, cachedResult } from "../stats/cache.ts"
 import {
@@ -33,7 +38,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.1.2"
+export const INSIGHT_VERSION = "0.2.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -246,6 +251,25 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
           queryTodoStats(database),
         )
         return { statusCode: 200, body: todoStats }
+      }
+      case "hour-heatmap": {
+        const heatmapDays = parsePositiveIntegerParam(requestContext.searchParams, "days", 90)
+        const heatmapCells = cachedResult(buildCacheKey("queryHourHeatmap", [heatmapDays]), () =>
+          queryHourHeatmap(database, heatmapDays),
+        )
+        return { statusCode: 200, body: heatmapCells }
+      }
+      case "session-survival": {
+        const survivalStats = cachedResult(buildCacheKey("querySessionSurvival", []), () =>
+          querySessionSurvival(database),
+        )
+        return { statusCode: 200, body: survivalStats }
+      }
+      case "compaction": {
+        const compactionStats = cachedResult(buildCacheKey("queryCompactionStats", []), () =>
+          queryCompactionStats(database),
+        )
+        return { statusCode: 200, body: compactionStats }
       }
       case "sessionMessages": {
         const messageRecords = cachedResult(

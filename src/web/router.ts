@@ -15,6 +15,9 @@ export type InsightRoute =
   | { routeName: "agents" }
   | { routeName: "sessions" }
   | { routeName: "todo" }
+  | { routeName: "hour-heatmap" }
+  | { routeName: "session-survival" }
+  | { routeName: "compaction" }
   | { routeName: "sessionMessages"; sessionId: string }
   | { routeName: "sessionSystemPrompt"; sessionId: string }
   | { routeName: "sessionExport"; sessionId: string }
@@ -49,9 +52,12 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
     case "models":
     case "agents":
     case "sessions":
-    case "todo": {
+    case "todo":
+    case "hour-heatmap":
+    case "session-survival":
+    case "compaction": {
       if (pathSegments.length !== 2) return null
-      // routeSegment is narrowed to one of the six literal names here.
+      // routeSegment is narrowed to one of the nine literal names here.
       return { routeName: routeSegment }
     }
     case "session": {

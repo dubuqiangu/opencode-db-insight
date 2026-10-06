@@ -82,6 +82,18 @@
             </div>
           </article>
 
+          <article class="panel span-12 reveal d4">
+            <header class="panel-head">
+              <div>
+                <h2>活动时段热力</h2>
+                <p class="panel-sub">近 90 天每小时步骤数 · 行 = 周几，列 = 小时（本地时区）</p>
+              </div>
+            </header>
+            <div class="panel-body hour-heatmap-body">
+              <div id="hour-heatmap" aria-label="按周几与小时的步骤分布热力图"></div>
+            </div>
+          </article>
+
           <article class="panel span-8 reveal d4">
             <header class="panel-head">
               <div>
@@ -92,6 +104,44 @@
             </header>
             <div class="panel-body">
               <div id="token-funnel" aria-label="Token 漏斗图"></div>
+            </div>
+          </article>
+
+          <article class="panel span-4 reveal d4">
+            <header class="panel-head">
+              <div>
+                <h2>上下文压缩</h2>
+                <p class="panel-sub">compaction 事件 · 按原因与近 30 日趋势</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="compaction-panel" aria-label="上下文压缩事件统计"></div>
+            </div>
+          </article>
+        </section>
+
+        <section class="insight-cards reveal d5" aria-label="会话洞察卡片">
+          <article class="panel">
+            <header class="panel-head">
+              <div>
+                <h2>会话存活</h2>
+                <p class="panel-sub">中位存活时长 · 短命占比 · idle 结局分布</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="session-survival" aria-label="会话存活统计"></div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <header class="panel-head">
+              <div>
+                <h2>Todo 完成率</h2>
+                <p class="panel-sub">todo 表全历史 · 已完成 / 全部状态</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="todo-card" aria-label="Todo 完成率统计"></div>
             </div>
           </article>
         </section>

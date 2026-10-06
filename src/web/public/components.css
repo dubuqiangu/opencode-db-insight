@@ -292,6 +292,138 @@
 }
 .tooltip .tooltip-row .row-value { margin-left: auto; padding-left: 14px; font-weight: 600; }
 
+/* ---------- 活动时段热力（7×24） ---------- */
+.hour-heatmap-body { overflow-x: auto; }
+.hour-heatmap-svg { width: 100%; min-width: 760px; max-width: 1100px; display: block; margin: 0 auto; }
+.hour-heatmap-cell { transition: stroke 0.1s; }
+.hour-heatmap-cell:hover { stroke: var(--text); stroke-width: 1; }
+
+/* ---------- 会话洞察卡片行（存活 / todo） ---------- */
+.insight-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+@media (max-width: 1100px) { .insight-cards { grid-template-columns: 1fr; } }
+
+.survival-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+@media (max-width: 560px) { .survival-grid { grid-template-columns: 1fr; } }
+.survival-metric { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.metric-label { font-size: 12px; color: var(--text-faint); }
+.metric-value {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  line-height: 1.2;
+}
+.metric-hint { font-size: 11px; color: var(--text-faint); }
+.mini-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  margin-top: 6px;
+  overflow: hidden;
+}
+.mini-progress > span { display: block; height: 100%; background: var(--amber); }
+
+/* ---------- 分布行（idle 结局 / 压缩原因 共用） ---------- */
+.distribution-caption { font-size: 12px; color: var(--text-faint); margin: 0 0 8px; }
+.distribution-list { display: flex; flex-direction: column; gap: 6px; }
+.distribution-row {
+  display: grid;
+  grid-template-columns: minmax(78px, 150px) 1fr 48px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.distribution-name {
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.distribution-track {
+  height: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.distribution-bar { display: block; height: 100%; background: var(--blue); border-radius: 5px; }
+.distribution-count {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text-dim);
+}
+
+/* ---------- 上下文压缩面板 ---------- */
+.compaction-total-line { font-size: 12px; color: var(--text-dim); margin: 0 0 14px; }
+.compaction-total-line b {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  margin-right: 2px;
+}
+.compaction-subhead { margin-top: 14px; }
+.compaction-trend-svg { width: 100%; display: block; margin: 2px 0 4px; }
+.compaction-trend-bar { fill: var(--purple); }
+.compaction-trend-bar.zero { fill: var(--heat-0); }
+.compaction-session-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.compaction-session-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.compaction-session-row a { min-width: 0; }
+.compaction-session-row a code {
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: var(--blue);
+}
+.compaction-session-row a:hover code { text-decoration: underline; }
+.compaction-session-count { font-size: 11.5px; color: var(--text-dim); flex: none; }
+
+/* ---------- Todo 完成率卡片 ---------- */
+.todo-rate-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.todo-rate-value {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+}
+.todo-rate-caption { font-size: 12px; color: var(--text-dim); }
+.todo-progress {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin: 12px 0 10px;
+}
+.todo-progress .todo-seg { display: block; height: 100%; min-width: 2px; }
+.todo-progress .seg-done { background: var(--accent); }
+.todo-progress .seg-active { background: var(--amber); }
+.todo-progress .seg-pending { background: var(--border-strong); }
+.todo-progress .seg-other { background: var(--purple); }
+.todo-counts { font-size: 12px; color: var(--text-dim); margin: 0; }
+
 /* ---------- 会话回放页 ---------- */
 .session-view { max-width: 960px; margin: 0 auto; }
 .session-view .panel { margin-bottom: 16px; }
