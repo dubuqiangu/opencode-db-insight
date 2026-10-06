@@ -135,7 +135,13 @@ export async function startInsightServer(
   // by the fault guard and likewise reopened on the next request (P1-4).
   const guardLiveConnection = (connection: SqliteReadConnection): SqliteReadConnection =>
     guardDatabaseConnection(connection, (brokenConnection) => {
-      if (shuttingDown || liveDatabase === null) return
+      // Only drop the connection we are still holding: a fatal error can
+      // also arrive late from a connection that was already replaced by a
+      // reopen, and discarding that reference would leak the healthy
+      // replacement's file descriptor (P2-2). The guard reports the
+      // guarded wrapper it returned, which is exactly what liveDatabase
+      // holds while the connection is current.
+      if (shuttingDown || liveDatabase !== brokenConnection) return
       liveDatabase = null
       try {
         brokenConnection.close()

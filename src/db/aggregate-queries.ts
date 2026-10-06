@@ -30,6 +30,7 @@ import { hitRate } from "../stats/hit-rate.ts"
 import {
   bucketDailyTrend,
   MAX_TREND_DAYS,
+  toLocalDateKey,
   type DailyTrendPoint,
   type DailyTrendSample,
 } from "../stats/daily-buckets.ts"
@@ -125,63 +126,62 @@ function extractToolNamesFromPartFields(rawPartFields: unknown): string[] {
 }
 
 /**
- * Local-timezone [start, next-day-start) window of the calendar day
- * containing nowMs. Computed in JS (never via SQL date(), which has no
- * local-timezone concept) so "today" matches toLocalDateKey exactly.
- */
-function localDayWindowMs(nowMs: number): { dayStartMs: number; nextDayStartMs: number } {
-  const nowDate = new Date(nowMs)
-  const dayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate())
-  const nextDayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() + 1)
-  return { dayStartMs: dayStart.getTime(), nextDayStartMs: nextDayStart.getTime() }
-}
-
-/**
- * KPI overview for GET /api/overview, aggregated in SQL. A "step" is one
- * assistant message. `today` is the local calendar day of the query time,
- * bounded by [midnight, next midnight) — identical to the old
- * toLocalDateKey comparison, including exclusion of clock-skewed future
- * rows. CAST(... AS REAL) keeps text-stored timestamps out of the today
- * sums the same way coerceNumber mapped them to 0 before.
+ * KPI overview for GET /api/overview, aggregated from the same lightweight
+ * extracted rows as the other three routes. A "step" is one assistant
+ * message. This route deliberately does NOT sum tokens or compare
+ * timestamps inside SQL: SQLite's numeric coercion prefix-parses JSON
+ * text ("12abc" → 12) and turns booleans into 1, while the old JS
+ * coerceNumber mapped both to 0 — and CAST(time_created AS REAL) had the
+ * same prefix-parsing hazard for text-stored timestamps. Instead the
+ * multi-path json_extract array is coerced value-by-value in JS and the
+ * local-midnight "today" boundary is a toLocalDateKey comparison,
+ * exactly like the old JS aggregation (P1-1 parity fix).
  */
 export function queryOverview(db: SqliteReadConnection | null): OverviewStats | null {
   if (db === null) return null
-  const { dayStartMs, nextDayStartMs } = localDayWindowMs(Date.now())
 
-  const usageRow = db
+  const rawRows = db
     .prepare(
-      `SELECT
-         COUNT(*) AS step_count,
-         COALESCE(SUM(token_input + token_output + token_cache_read), 0) AS total_tokens,
-         COALESCE(SUM(CASE WHEN CAST(time_created AS REAL) >= ? AND CAST(time_created AS REAL) < ?
-                           THEN token_input + token_output + token_cache_read ELSE 0 END), 0) AS today_tokens,
-         COALESCE(SUM(CASE WHEN CAST(time_created AS REAL) >= ? AND CAST(time_created AS REAL) < ?
-                           THEN token_cache_read ELSE 0 END), 0) AS today_cache_read,
-         COALESCE(SUM(CASE WHEN CAST(time_created AS REAL) >= ? AND CAST(time_created AS REAL) < ?
-                           THEN token_input ELSE 0 END), 0) AS today_input
-       FROM (
-         SELECT time_created,
-                COALESCE(json_extract(data, '$.tokens.input'), 0) AS token_input,
-                COALESCE(json_extract(data, '$.tokens.output'), 0) AS token_output,
-                COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS token_cache_read
-         FROM session_message
-         WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}
-       )`,
+      `SELECT time_created,
+              json_extract(data, '$.tokens.input', '$.tokens.output', '$.tokens.cache.read') AS token_fields
+       FROM session_message
+       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}`,
     )
-    .get(dayStartMs, nextDayStartMs, dayStartMs, nextDayStartMs, dayStartMs, nextDayStartMs)
+    .all()
+
+  const todayDateKey = toLocalDateKey(Date.now())
+  let stepCount = 0
+  let totalTokens = 0
+  let todayTokens = 0
+  let todayCacheRead = 0
+  let todayInput = 0
+
+  for (const rawRow of rawRows) {
+    const rowRecord = asRecord(rawRow)
+    if (rowRecord === null) continue
+    const [inputValue, outputValue, cacheReadValue] = parseExtractedFieldList(rowRecord["token_fields"])
+    const tokenInput = coerceNumber(inputValue)
+    const tokenOutput = coerceNumber(outputValue)
+    const tokenCacheRead = coerceNumber(cacheReadValue)
+    const stepTokens = tokenInput + tokenOutput + tokenCacheRead
+    stepCount += 1
+    totalTokens += stepTokens
+    if (toLocalDateKey(coerceNumber(rowRecord["time_created"])) === todayDateKey) {
+      todayTokens += stepTokens
+      todayCacheRead += tokenCacheRead
+      todayInput += tokenInput
+    }
+  }
 
   const sessionCountRow = db.prepare("SELECT COUNT(*) AS sessionCount FROM session_v2").get()
   const totalCostRow = db.prepare("SELECT SUM(cost) AS totalCost FROM session_v2").get()
 
   return {
-    todayTokens: readRowNumber(usageRow, "today_tokens"),
-    totalTokens: readRowNumber(usageRow, "total_tokens"),
-    todayHitRate: hitRate(
-      readRowNumber(usageRow, "today_cache_read"),
-      readRowNumber(usageRow, "today_input"),
-    ),
+    todayTokens,
+    totalTokens,
+    todayHitRate: hitRate(todayCacheRead, todayInput),
     sessionCount: readRowNumber(sessionCountRow, "sessionCount"),
-    stepCount: readRowNumber(usageRow, "step_count"),
+    stepCount,
     totalCost: readRowNumber(totalCostRow, "totalCost"),
   }
 }

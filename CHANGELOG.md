@@ -8,6 +8,20 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.1.2] - 2026-10-06 · 增量审查修复
+
+@oracle 对 v0.1.1 修复代码的增量审查（含真实 node:sqlite 探针验证）发现项的修复版本；测试 194 用例全绿（191 + 3 新增）。
+
+### Fixed
+- **overview 聚合口径对齐**（P1-1）：queryOverview 改用与 trend/models/agents 相同的"多路径 json_extract + JS coerceNumber"模式——单路径 json_extract + SQLite 算术会把文本 token `'12abc'` 前缀解析成 12、布尔 `true` 转成 1（旧 JS 口径均按 0）；today 边界改回 toLocalDateKey 比较，不再 CAST(time_created)；parity fixture 补文本/布尔/null/文本时间戳四类奇异形状，对账闸门从此能暴露此类分歧
+- **连接守卫真实文案与结构化判别**（P2-1）：致命错误判定升级为 code === ERR_INVALID_STATE 优先 + ERR_SQLITE_ERROR 的 SQLITE_CORRUPT/SQLITE_NOTADB errcode，文案匹配降为兜底并补入语句级真实文案 "statement has been finalized"
+- **守卫回调引用判别**（P2-2）：旧连接延迟报错不再把新打开的健康连接置 null（引用判别替代 null 判别，防 fd 泄漏）
+- 移除仓库根目录三个 `_probe*.ts` 调试残留（P2-3）
+- verify-install.ps1：upstream 分支推导替代硬编码 origin/master、Push-Location/Pop-Location 保护调用方 cwd（P2-4）
+
+### Added
+- tasks.md 增设 v0.2 结构化执行计划（启动门槛 = T7.3 真机验证；v0.2-A 统计补全五项 / v0.2-B 低优先项 / 已知限制三条）
+
 ## [0.1.1] - 2026-10-06 · 发布前全项目审查修复
 
 @oracle 全项目审查（2 P0 / 7 P1 / 17 P2）后的修复版本；测试 191 用例全绿，前端离线冒烟 147 断言全绿。

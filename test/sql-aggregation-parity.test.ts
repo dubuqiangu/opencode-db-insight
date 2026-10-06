@@ -6,7 +6,8 @@
  * Two对照 scenarios:
  * 1. A fixture database — a real temporary SQLite file with fake data
  *    covering the wire shapes: multi-model/multi-agent sessions, missing
- *    token blocks, legacy "tool"-keyed tool names, empty-string names,
+ *    token blocks, text/boolean/null token values, text-stored
+ *    timestamps, legacy "tool"-keyed tool names, empty-string names,
  *    non-object data JSON, and sessions without session_v2 rows.
  * 2. The machine's real opencode.db when present (skipped otherwise).
  *
@@ -190,7 +191,9 @@ function createFixtureDatabase(databasePath: string): SqliteReadWriteConnection 
   const addMessage = (
     sessionId: string,
     type: string,
-    timeCreated: number,
+    // string covers text-stored timestamps (SQLite keeps non-numeric text
+    // in the INTEGER column), which must coerce to 0 like coerceNumber.
+    timeCreated: number | string,
     data: string | null,
   ): void => {
     messageSeq += 1
@@ -276,6 +279,22 @@ function createFixtureDatabase(databasePath: string): SqliteReadWriteConnection 
   // A boolean tool name coerces like the old parser (true → "true").
   addMessage("ses_orphan", "assistant", localNoonMs(2),
     assistantPayload({ content: [{ type: "tool", name: true, state: {} }] }))
+
+  // P1-1 parity shapes: token values as text (prefix-numeric and pure
+  // text), booleans and null must all count as zero tokens exactly like
+  // the old coerceNumber — SQLite's own numeric coercion would
+  // prefix-parse "12abc" into 12 and turn true into 1, which is why the
+  // overview route must not sum tokens inside SQL. One row lands today so
+  // the today-sums are exercised too.
+  addMessage("ses_orphan", "assistant", localNoonMs(0),
+    assistantPayload({ tokens: { input: "12abc", output: "纯文本token", cache: { read: true, write: null } } }))
+  addMessage("ses_orphan", "assistant", localNoonMs(1),
+    assistantPayload({ tokens: { input: true, output: null, cache: { read: "7z压缩", write: 5 } } }))
+  // A text-stored timestamp must coerce to 0 in JS (epoch 1970 → never
+  // "today"), never prefix-parse to 12 ms via CAST — its tokens are real
+  // so totalTokens parity would break on any SQLite-side arithmetic.
+  addMessage("ses_orphan", "assistant", "12abc",
+    assistantPayload({ tokens: { input: 70, output: 7, cache: { read: 7, write: 0 } } }))
 
   // Rows the old parser skipped must stay excluded by the SQL predicate.
   addMessage("ses_build", "assistant", localNoonMs(0), "[]") // valid JSON, not an object

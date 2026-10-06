@@ -24,6 +24,7 @@ import {
   type InsightHttpServer,
   type InsightServerFactory,
 } from "../src/web/server.ts"
+import { isFatalDatabaseConnectionError } from "../src/web/db-connection-guard.ts"
 import type { SqliteReadConnection, SqliteStatement } from "../src/db/types.ts"
 
 /** A database path that never exists, so these tests never touch the real opencode.db. */
@@ -156,6 +157,99 @@ function createDeadConnection(): SqliteReadConnection {
   }
 }
 
+/**
+ * A connection whose prepared statements fail the way real node:sqlite
+ * statements do once their connection is closed: all()/get() throw
+ * "statement has been finalized" with code ERR_INVALID_STATE (verified
+ * against a real node:sqlite probe), while prepare() keeps succeeding.
+ */
+function createFinalizedStatementConnection(): SqliteReadConnection {
+  const finalizedStatementError = (): Error =>
+    Object.assign(new Error("statement has been finalized"), { code: "ERR_INVALID_STATE" })
+  return {
+    prepare: () => ({
+      all: () => {
+        throw finalizedStatementError()
+      },
+      get: () => {
+        throw finalizedStatementError()
+      },
+    }),
+    close: () => {},
+  }
+}
+
+/**
+ * A connection that answers health probes until breakNow() flips it,
+ * after which every access fails like a closed database. close() calls
+ * are counted so tests can prove a connection was (not) discarded.
+ */
+function createBreakableConnection(): {
+  connection: SqliteReadConnection
+  breakNow: () => void
+  closeCallCount: { value: number }
+} {
+  let isBroken = false
+  const closeCallCount = { value: 0 }
+  const connection: SqliteReadConnection = {
+    prepare: (sql: string) => {
+      if (!isBroken && sql.trim() === "SELECT 1") {
+        return { all: () => [], get: () => ({ probe: 1 }) }
+      }
+      throw Object.assign(new Error("database is not open"), { code: "ERR_INVALID_STATE" })
+    },
+    close: () => {
+      closeCallCount.value += 1
+    },
+  }
+  return { connection, breakNow: () => { isBroken = true }, closeCallCount }
+}
+
+test("fatal-signature detection prefers structural codes and keeps texts as fallback (P2-1)", () => {
+  // Structural: every closed-connection/statement failure from real
+  // node:sqlite carries ERR_INVALID_STATE, whatever the message says.
+  assert.equal(
+    isFatalDatabaseConnectionError(
+      Object.assign(new Error("statement has been finalized"), { code: "ERR_INVALID_STATE" }),
+    ),
+    true,
+  )
+  assert.equal(
+    isFatalDatabaseConnectionError(Object.assign(new Error("whatever"), { code: "ERR_INVALID_STATE" })),
+    true,
+  )
+  // Structural: SQLite-level corruption result codes on ERR_SQLITE_ERROR.
+  assert.equal(
+    isFatalDatabaseConnectionError(
+      Object.assign(new Error("file is not a database"), { code: "ERR_SQLITE_ERROR", errcode: 26 }),
+    ),
+    true,
+  )
+  assert.equal(
+    isFatalDatabaseConnectionError(
+      Object.assign(new Error("database disk image is malformed"), { code: "ERR_SQLITE_ERROR", errcode: 11 }),
+    ),
+    true,
+  )
+  // Generic SQLite errors that a reopen would not fix must NOT be fatal.
+  assert.equal(
+    isFatalDatabaseConnectionError(
+      Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
+    ),
+    false,
+  )
+  assert.equal(
+    isFatalDatabaseConnectionError(Object.assign(new Error("bind failed"), { code: "ERR_INVALID_ARG_TYPE" })),
+    false,
+  )
+  // Text fallback for hosts/wrappers that only stringify the cause.
+  assert.equal(isFatalDatabaseConnectionError(new Error("statement has been finalized")), true)
+  assert.equal(isFatalDatabaseConnectionError(new Error("database is not open")), true)
+  assert.equal(isFatalDatabaseConnectionError(new Error("database disk image is malformed")), true)
+  assert.equal(isFatalDatabaseConnectionError(new Error("some bind error")), false)
+  assert.equal(isFatalDatabaseConnectionError(null), false)
+})
+
 test("a runtime-dead connection is dropped and the next request reopens it (P1-4)", async () => {
   const openerCalls: string[] = []
   const serverHandle = await startInsightServer({
@@ -177,6 +271,89 @@ test("a runtime-dead connection is dropped and the next request reopens it (P1-4
     const secondBody = (await secondHealth.json()) as { dbStatus: string }
     assert.equal(secondBody.dbStatus, "ok", "the connection must have been reopened")
     assert.equal(openerCalls.length, 2)
+  } finally {
+    await serverHandle.close()
+  }
+})
+
+test("a statement-level fatal error (finalized statement) is dropped and reopened too (P2-1)", async () => {
+  // Real host behavior: after the connection closes, prepare() can still
+  // succeed while the statement's all()/get() throw "statement has been
+  // finalized" with ERR_INVALID_STATE — the guard must treat that as a
+  // dead connection just like a prepare-time failure.
+  const openerCalls: string[] = []
+  const serverHandle = await startInsightServer({
+    port: 0,
+    databasePath: missingDatabasePath,
+    databaseOpener: () => {
+      openerCalls.push("open")
+      // First opening dies at the statement level; every later one is healthy.
+      return openerCalls.length === 1 ? createFinalizedStatementConnection() : createHealthProbeConnection()
+    },
+  })
+  try {
+    const firstHealth = await fetch(`http://127.0.0.1:${serverHandle.port}/api/health`)
+    const firstBody = (await firstHealth.json()) as { dbStatus: string }
+    assert.equal(firstHealth.status, 200)
+    assert.equal(firstBody.dbStatus, "unavailable", "the finalized-statement connection must not report ok")
+
+    const secondHealth = await fetch(`http://127.0.0.1:${serverHandle.port}/api/health`)
+    const secondBody = (await secondHealth.json()) as { dbStatus: string }
+    assert.equal(secondBody.dbStatus, "ok", "the connection must have been reopened")
+    assert.equal(openerCalls.length, 2)
+  } finally {
+    await serverHandle.close()
+  }
+})
+
+test("a late fatal error from an already-replaced connection must not kill the new one (P2-2)", async () => {
+  // Interleaving scenario: connection A breaks and is replaced by a
+  // reopen (B). If A then reports a second fatal error late (e.g. an
+  // in-flight statement of the old connection), the server must ignore
+  // it — dropping B instead would discard a healthy connection without
+  // closing it (fd leak) and force a needless reopen.
+  const firstConnection = createBreakableConnection()
+  const replacementConnection = createBreakableConnection()
+  const openerCallCount = { value: 0 }
+  const serverHandle = await startInsightServer({
+    port: 0,
+    databasePath: missingDatabasePath,
+    databaseOpener: () => {
+      openerCallCount.value += 1
+      return openerCallCount.value === 1 ? firstConnection.connection : replacementConnection.connection
+    },
+  })
+  try {
+    // Grab the guarded wrapper the server actually holds for A; it is
+    // the object whose late errors the callback will see.
+    const staleGuardedConnection = serverHandle.databaseProvider()
+    assert.notEqual(staleGuardedConnection, null)
+
+    const firstHealth = await fetch(`http://127.0.0.1:${serverHandle.port}/api/health`)
+    const firstBody = (await firstHealth.json()) as { dbStatus: string }
+    assert.equal(firstBody.dbStatus, "ok", "A starts healthy")
+    assert.equal(firstConnection.closeCallCount.value, 0)
+
+    // A dies at runtime; the probe drops it and the next request reopens B.
+    firstConnection.breakNow()
+    const secondHealth = await fetch(`http://127.0.0.1:${serverHandle.port}/api/health`)
+    const secondBody = (await secondHealth.json()) as { dbStatus: string }
+    assert.equal(secondBody.dbStatus, "unavailable", "the broken A must not report ok")
+    assert.equal(firstConnection.closeCallCount.value, 1, "A must have been closed exactly once")
+
+    const thirdHealth = await fetch(`http://127.0.0.1:${serverHandle.port}/api/health`)
+    const thirdBody = (await thirdHealth.json()) as { dbStatus: string }
+    assert.equal(thirdBody.dbStatus, "ok", "the connection must have been reopened as B")
+    assert.equal(openerCallCount.value, 2)
+
+    // A's delayed second fatal error arrives after B took over.
+    assert.throws(() => staleGuardedConnection!.prepare("SELECT 1"), /database is not open/)
+
+    const fourthHealth = await fetch(`http://127.0.0.1:${serverHandle.port}/api/health`)
+    const fourthBody = (await fourthHealth.json()) as { dbStatus: string }
+    assert.equal(fourthBody.dbStatus, "ok", "B must still be alive after A's late error")
+    assert.equal(replacementConnection.closeCallCount.value, 0, "B must never have been dropped")
+    assert.equal(openerCallCount.value, 2, "no reopen may be triggered by the stale error")
   } finally {
     await serverHandle.close()
   }

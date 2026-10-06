@@ -90,15 +90,25 @@ if (-not $hostConfig.Contains($PluginId)) {
 $packageJson = Get-Content (Join-Path $repoRoot "package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 $expectedVersion = $packageJson.version
 $localHead = (git -C $repoRoot rev-parse --short HEAD).Trim()
-$originHead = (git -C $repoRoot rev-parse --short origin/master).Trim()
-Assert-Check "local HEAD is pushed (HEAD == origin/master)" ($localHead -eq $originHead) "HEAD=$localHead origin=$originHead"
+# Derive the upstream ref from the branch config instead of assuming a branch name.
+$upstreamRef = (git -C $repoRoot rev-parse --abbrev-ref "@{upstream}" 2>$null | Out-String).Trim()
+if (-not $upstreamRef) {
+  Assert-Check "local HEAD is pushed (upstream branch configured)" $false "current branch has no upstream; push with -u first"
+} else {
+  $originHead = (git -C $repoRoot rev-parse --short $upstreamRef).Trim()
+  Assert-Check "local HEAD is pushed (HEAD == $upstreamRef)" ($localHead -eq $originHead) "HEAD=$localHead origin=$originHead"
+}
 
 $expectedSrcCount = Count-TrackedFiles $repoRoot "src"
 $expectedTestCount = Count-TrackedFiles $repoRoot "test"
 
 # --- one-click update (returns early — poll for the install below) -----------------
-Set-Location $env:USERPROFILE
-$updateOutput = (opencode plugin update $PluginId 2>&1 | Out-String).Trim()
+Push-Location $env:USERPROFILE
+try {
+  $updateOutput = (opencode plugin update $PluginId 2>&1 | Out-String).Trim()
+} finally {
+  Pop-Location
+}
 Write-Output ("update: " + $updateOutput)
 
 # --- wait until the host registry reflects the pushed commit -----------------------

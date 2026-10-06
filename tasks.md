@@ -59,14 +59,24 @@
 - [ ] T7.3 `opencode plugin update` 后重启实测全部功能 + 卸载重装干净
 - [ ] T7.5 v0.1.0 版本号 + CHANGELOG 汇总 + 用户验收
 
-## v0.2 Backlog（来自 T7.1 设计对账，未排期）
+## v0.2 执行计划（待 T7.3 真机验证通过后启动）
 
-- [ ] 小时×星期热力：/api/hour-heatmap 路由 + 看板前端区块（纯函数已备）
-- [ ] 会话存活统计：API 路由 + 前端区块（纯函数已备）
-- [ ] 压缩事件统计：按会话/按日计数（当前仅导出渲染通知行）
-- [ ] strictHitRate 接线到回放页并注明口径
-- [ ] /api/sessions 服务端排序参数（当前客户端排序够用）
-- [ ] 前端消费 /api/todo（todo 完成率卡片）
+**启动门槛**：T7.3 真机验证（plugin add + 重启 + 三命令冒烟）必须先通过——P1-3（storage 跨插件可见性）若失败，/insight 命令修复优先于一切 v0.2 功能。
+
+### v0.2-A 统计补全（纯函数已备，只差 SQL/路由/前端接线，预计 1 个里程碑）
+- [ ] A1 小时×星期热力：轻量行查询（time_created 抽 hour/dow，避免全扫）→ /api/hour-heatmap 路由 → 看板前端区块（复用 calendar-heatmap 的分档配色）
+- [ ] A2 会话存活统计：SQL 聚合 time_created→time_updated 分布 + idle_outcome 计数 → /api/session-survival 路由 → 前端区块
+- [ ] A3 压缩事件统计：compaction 消息按会话/按日计数（session_message 有 type='compaction'）→ 并入 A2 路由或独立 /api/compaction → 前端标注（马拉松会话信号）
+- [ ] A4 strictHitRate 接线到回放页头部并注明口径（含 cache.write 的严格命中率，纯函数已备）
+- [ ] A5 前端消费 /api/todo（todo 完成率卡片，数据源已在线）
+
+### v0.2-B 低优先改进（可选拆批）
+- [ ] B1 /api/sessions 服务端排序参数（当前客户端排序够用；若 v0.2-A 的区块增多触发表格重构再一并做）
+
+### 已知限制（记录在案，不修）
+- content part type 为奇异形状（如数组）时新旧提取器极少数分歧——真实数据不出现，parity 测试覆盖正常形状
+- unix 下运行中删除 opencode.db：连接持有 fd 继续服务冻结快照，guard 无法感知（Windows 下删除被锁文件直接失败同样不触发）——README 已有排障说明基础
+- 首屏冷缓存 6 路由串行约 2.5s 同步阻塞（23k 行规模，60s TTL 后归零）——随库增长需再评估（如改为 worker 线程聚合）
 
 ## v0.1.1 审查修复（push #9，2026-10-06）
 
@@ -77,3 +87,13 @@
 - [x] P2 全部 17 项（含前端 fetch 超时/竞态、DST 安全、稳定排序、hash 往返）——✅ smoke-dst 子进程跨 America/New_York 两次 DST 切换验证
 - [x] scripts/verify-install.ps1 推送验证脚本——✅ 首装引导分支冒烟通过；完整链路待 plugin add 后实测
 - [x] 版本 0.1.0 → 0.1.1（package.json / lock / INSIGHT_VERSION 三处同步）
+
+## v0.1.2 增量审查修复（push #10，2026-10-06）
+
+- [x] @oracle 增量审查 v0.1.1 修复代码（P0 零 / P1×1 / P2×4，含真实 node:sqlite 探针验证）
+- [x] P1-1 overview 口径对齐（多路径 json_extract + coerceNumber，fixture 补 4 类奇异形状）——✅ 对账闸门全绿，计时复核 overview 606ms 无回归
+- [x] P2-1 守卫结构化判别（ERR_INVALID_STATE / SQLITE_CORRUPT / SQLITE_NOTADB + 语句级真实文案）——✅ 探针实测三类错误形状，恢复链对齐真实宿主
+- [x] P2-2 守卫回调引用判别——✅ 交错场景测试：旧连接延迟报错不废新连接
+- [x] P2-3 删除 _probe*.ts 调试残留（3 文件）
+- [x] P2-4 verify-install.ps1 upstream 推导 + cwd 保护——✅ 冒烟通过（exit 2 首装引导、cwd 不变）
+- [x] 版本 0.1.1 → 0.1.2（package.json / lock / INSIGHT_VERSION 三处同步）；测试 194/194
