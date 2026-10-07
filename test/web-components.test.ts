@@ -715,13 +715,16 @@ test("renderSessionList renders the updated-time and cost cells and routes their
     sortChangeCalls.push({ sortKey: nextSortKey, sortOrder: nextSortOrder })
   }
 
-  // Two rows with distinct epochs and cost faces: a real cost, and the
-  // DB-typical zero cost (DESIGN §5: cost is usually 0 → degraded "—").
+  // Three rows with distinct epochs and cost faces: a real cost, the
+  // DB-typical zero cost (DESIGN §5: cost is usually 0 → degraded "—"),
+  // and a sub-cent cost that rounds to zero (0.6.0 review P2-1: must
+  // degrade like exact zero instead of rendering "$0").
   const newColumnPayload = {
     total: null as const,
     sessions: [
       { id: "ses_example_delta", title: "delta fixture", modelId: "glm-5.3", agent: "build", directory: "D:/projects/example-alpha", timeCreated: 1000, timeUpdated: 61_000, tokens: 900, cost: 2.5 },
       { id: "ses_example_echo", title: "echo fixture", modelId: "glm-5.3", agent: "plan", directory: "D:/projects/example-alpha", timeCreated: 2000, timeUpdated: 130_000, tokens: 300, cost: 0 },
+      { id: "ses_example_foxtrot", title: "foxtrot fixture", modelId: "glm-5.3", agent: "plan", directory: "D:/projects/example-alpha", timeCreated: 3000, timeUpdated: 150_000, tokens: 500, cost: 0.004 },
     ],
   }
 
@@ -747,6 +750,10 @@ test("renderSessionList renders the updated-time and cost cells and routes their
   assert.ok(
     container.innerHTML.includes("<td class=\"num\"><span title=\"无成本记录（本库 cost 字段常为 0，DESIGN §5）\">—</span></td>"),
     "the degraded cost cell keeps its numeric alignment slot",
+  )
+  assert.ok(
+    !container.innerHTML.includes("$0"),
+    "a sub-cent cost (0.004) rounds to zero and degrades like exact zero — never \"$0\" (0.6.0 review P2-1)",
   )
 
   // Header clicks on the two new columns:

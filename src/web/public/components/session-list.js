@@ -53,10 +53,16 @@ const SORT_LABEL_BY_KEY = {
  * 降级惯例同 model-table hitRateCell 的「通道无缓存」（— + 说明 title）。
  */
 function costCell(costValue) {
-  if (!Number.isFinite(costValue) || costValue === 0) {
+  if (!Number.isFinite(costValue)) {
     return `<span title="无成本记录（本库 cost 字段常为 0，DESIGN §5）">—</span>`;
   }
-  return `$${String(Number(costValue.toFixed(2)))}`;
+  // 降级判定取在舍入之后：亚分值（如 0.004）舍入为 0，与精确 0 同走降级，
+  // 否则会渲染出降级设计想避免的 "$0"（0.6.0 审查 P2-1）。
+  const roundedCost = Number(costValue.toFixed(2));
+  if (roundedCost === 0) {
+    return `<span title="无成本记录（本库 cost 字段常为 0，DESIGN §5）">—</span>`;
+  }
+  return `$${String(roundedCost)}`;
 }
 
 /**
