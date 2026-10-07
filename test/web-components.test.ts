@@ -1730,6 +1730,45 @@ test("readToolInput mirrors the rendered tool-params display string exactly", as
   assert.equal(readToolInput(null), "", "absent state renders no params block")
 })
 
+test("the rendered tool-params block text is contained verbatim in the search haystack (structural render→search lock)", async () => {
+  const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
+  const { buildReplaySearchIndex } = await import(
+    "../src/web/public/components/replay-message-text.js"
+  )
+
+  const container = freshContainer()
+  const toolInput = { command: "grep structural-lock ./src/example", count: 3 }
+  const searchRecords = [
+    replayMessageRecord(0, "assistant", {
+      model: { id: "glm-5.3" },
+      content: [
+        { type: "tool", name: "bash", state: { status: "completed", input: toolInput, metadata: { output: "done" } } },
+      ],
+    }),
+  ]
+
+  renderTimeline(container, searchRecords, 200)
+
+  // Read back what the user actually sees in the tool-params <pre>.
+  const paramsBlocks = container.querySelectorAll("pre.replay-code.lang-json")
+  assert.equal(paramsBlocks.length, 1, "the tool input renders exactly one params block")
+  const paramsDisplayText = paramsBlocks[0]!.textContent
+  assert.ok(
+    paramsDisplayText.includes('"command": "grep structural-lock ./src/example"'),
+    "the params block shows the pretty-printed JSON form",
+  )
+
+  // One-way containment: whatever the params block renders, the haystack for
+  // that message must carry it (lowercased). If someone re-inlines a different
+  // serialization into buildToolPartElement, this containment breaks loudly
+  // instead of the "rendered but unsearchable" regression passing silently.
+  const searchIndex = buildReplaySearchIndex(searchRecords)
+  assert.ok(
+    searchIndex[0]!.haystack.includes(paramsDisplayText.toLowerCase()),
+    "the params display text is part of the search haystack — display-form drift must fail here",
+  )
+})
+
 test("buildReplaySearchBar renders the find bar, counts hits across all messages, navigates and clears state", async () => {
   const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
   const { buildReplaySearchBar, REPLAY_SEARCH_DEBOUNCE_MS } = await import(

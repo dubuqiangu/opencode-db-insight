@@ -52,11 +52,14 @@ export function readToolName(toolPartRecord) {
 }
 
 /**
- * 工具入参的展示串（v0.10.0 收敛探针补齐的第六类可搜索文本）：与
- * replay-timeline 工具块参数 pre 的展示**逐字同一形态**——
+ * 工具入参的展示串（第六类可搜索文本，v0.10.0 收敛探针补齐）：
  * state.input 非 null/undefined 时 `JSON.stringify(input, null, 2)`
- * （字符串入参渲染为带引号的 JSON 字面量），否则 ""。
- * 禁止另写一套解释：渲染处怎么展示，这里就怎么提取。
+ * （字符串入参为带引号的 JSON 字面量），否则 ""。
+ * **结构单点**（ora-5 P2 修复）：渲染侧（replay-timeline 工具块的参数
+ * pre）消费本函数作为唯一出处——展示形态只有这一份代码，搜索 haystack
+ * 的入参段自动同源；改形态只改这里，渲染与搜索必然一起变。「看得见
+ * 搜不到」的错位不再靠注释纪律维持，而由结构消灭、由渲染→搜索的
+ * 包含性集成测试锁死。
  */
 export function readToolInput(stateRecord) {
   if (stateRecord === null || typeof stateRecord !== "object") return "";

@@ -17,6 +17,7 @@ import {
   partText,
   readMessageText,
   readToolName,
+  readToolInput,
   readToolOutput,
   isVisibleReplayMessageType,
 } from "./replay-message-text.js";
@@ -76,9 +77,10 @@ function buildReasoningPartElement(reasoningText) {
 function buildToolPartElement(toolPartRecord) {
   const toolName = readToolName(toolPartRecord);
   const stateRecord = asRecord(toolPartRecord.state);
-  const paramsJson = stateRecord !== null && stateRecord.input !== undefined && stateRecord.input !== null
-    ? JSON.stringify(stateRecord.input, null, 2)
-    : "";
+  // 参数 pre 的展示文本出自 readToolInput 单点（replay-message-text.js，
+  // ora-5 P2 修复）：展示形态只有这一份代码，渲染与搜索文本视图必然
+  // 同源——改形态两侧一起变，「看得见搜不到」不再靠注释纪律维持。
+  const paramsJson = readToolInput(stateRecord);
   const toolOutput = readToolOutput(stateRecord);
   const blockLength = paramsJson.length + toolOutput.length;
 
