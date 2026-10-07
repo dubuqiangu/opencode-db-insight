@@ -1202,6 +1202,18 @@ test("renderDirectoryPanel drill-down: rows toggle the directory filter and the 
   assert.equal(selectableRows.length, 2, "the empty-string directory row must not be drillable")
   assert.equal(container.querySelector(".directory-row.selected"), null, "nothing is selected initially")
 
+  // 0.7.0 review P2-1: selectable rows must keep the hover-to-read-full-path
+  // affordance — the name cell carries the path title on every row, drillable
+  // or not (the row-level click hint is additive, never a replacement).
+  // NOTE: the DOM shim flattens parsed tags, so query from the container.
+  const nameCells = container.querySelectorAll(".directory-name-cell")
+  assert.equal(nameCells.length, 3, "every directory row renders a name cell")
+  assert.equal(
+    nameCells[0]!.attributes.get("title"),
+    "D:/projects/example-alpha",
+    "the drillable row's name cell keeps the full-path title",
+  )
+
   selectableRows[0]!.click()
   assert.deepEqual(selectionEvents, ["D:/projects/example-alpha"], "a row click reports its directory")
 

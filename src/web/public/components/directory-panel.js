@@ -56,7 +56,7 @@ export function renderDirectoryPanel(container, directoryStats, selectedDirector
 
     return `
       <div class="directory-row${isSelectable ? " selectable" : ""}${isSelected ? " selected" : ""}"${isSelectable ? ` data-directory="${escapeHtml(directoryPath)}" title="点击过滤下方会话列表"` : ""}>
-        <div class="directory-name-cell"${isSelectable ? "" : ` title="${escapeHtml(directoryPath)}"`}>
+        <div class="directory-name-cell" title="${escapeHtml(directoryPath)}">
           <span class="directory-name">${escapeHtml(displayName)}</span>
           <span class="directory-path">${escapeHtml(directoryPath)}</span>
         </div>
