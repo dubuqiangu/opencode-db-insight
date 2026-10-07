@@ -667,23 +667,23 @@ test("renderSessionList renders sortable headers, keeps wire order and states th
   const { renderSessionList } = await import("../src/web/public/components/session-list.js")
   const container = freshContainer()
 
-  // Default state (time_updated desc — the wire default). It has no
-  // matching visible column (the list shows created time), so no header
-  // carries the sorted marker; the footnote names the server sort.
+  // Default state (time_updated desc — the wire default). Since v0.6.0 the
+  // default key has its own visible column (更新时间), so the initial
+  // render marks that header sorted with the desc arrow; the footnote
+  // still names the server sort as plain text (no reset entry).
   const noopSortChange = () => {}
   renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", noopSortChange)
   const sortableHeaders = container.querySelectorAll("th.sortable")
-  assert.equal(sortableHeaders.length, 3, "title / created-time / tokens columns are sortable")
+  assert.equal(sortableHeaders.length, 5, "title / created-time / updated-time / tokens / cost columns are sortable")
   assert.deepEqual(
     sortableHeaders.map((headerCell) => headerCell.dataset.sortKey),
-    ["title", "time_created", "tokens"],
-    "column → sort-key mapping must match the backend ?sort= whitelist",
+    ["title", "time_created", "time_updated", "tokens", "cost"],
+    "every backend ?sort= whitelist key maps to exactly one visible column header",
   )
-  assert.equal(
-    container.querySelectorAll("th.sorted").length,
-    0,
-    "the default time_updated sort has no visible column to mark",
-  )
+  const defaultSortedHeaders = container.querySelectorAll("th.sorted")
+  assert.equal(defaultSortedHeaders.length, 1, "the default sort marks exactly its own column")
+  assert.equal(defaultSortedHeaders[0].dataset.sortKey, "time_updated")
+  assert.match(container.innerHTML, /更新时间\s*<span class="sort-arrow">▼<\/span>/)
   assert.match(container.innerHTML, /按最近更新时间倒序/)
   // No client-side re-sorting: rows render in the payload (server) order.
   assert.deepEqual(
@@ -704,6 +704,67 @@ test("renderSessionList renders sortable headers, keeps wire order and states th
   renderSessionList(container, sessionSortFixturePayload(), null, "title", "asc", noopSortChange)
   assert.match(container.innerHTML, /标题\s*<span class="sort-arrow">▲<\/span>/)
   assert.match(container.innerHTML, /按标题正序/)
+})
+
+test("renderSessionList renders the updated-time and cost cells and routes their header clicks (v0.6.0 columns)", async () => {
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+  const { formatDateTime, formatRelative } = await import("../src/web/public/format.js")
+  const container = freshContainer()
+  const sortChangeCalls: Array<{ sortKey: string; sortOrder: string }> = []
+  const captureSortChange = (nextSortKey: string, nextSortOrder: string) => {
+    sortChangeCalls.push({ sortKey: nextSortKey, sortOrder: nextSortOrder })
+  }
+
+  // Two rows with distinct epochs and cost faces: a real cost, and the
+  // DB-typical zero cost (DESIGN §5: cost is usually 0 → degraded "—").
+  const newColumnPayload = {
+    total: null as const,
+    sessions: [
+      { id: "ses_example_delta", title: "delta fixture", modelId: "glm-5.3", agent: "build", directory: "D:/projects/example-alpha", timeCreated: 1000, timeUpdated: 61_000, tokens: 900, cost: 2.5 },
+      { id: "ses_example_echo", title: "echo fixture", modelId: "glm-5.3", agent: "plan", directory: "D:/projects/example-alpha", timeCreated: 2000, timeUpdated: 130_000, tokens: 300, cost: 0 },
+    ],
+  }
+
+  renderSessionList(container, newColumnPayload, null, "time_updated", "desc", captureSortChange)
+
+  // Updated-time cell: same formatting contract as the created-time column —
+  // relative display + full datetime title. The 1970 epochs are far older
+  // than a day, so formatRelative degrades to the deterministic MM-dd form.
+  assert.ok(
+    container.innerHTML.includes(
+      `<td class="num" title="${formatDateTime(61_000)}">${formatRelative(61_000)}</td>`,
+    ),
+    "the updated-time cell must mirror the created-time formatting exactly",
+  )
+
+  // Cost cell: KPI-card convention ($ + raw value) for a real cost, and the
+  // hitRateCell-style "—" degradation with an explanatory title for 0.
+  assert.ok(container.innerHTML.includes("<td class=\"num\">$2.5</td>"), "a real cost renders as $ + raw value")
+  assert.ok(
+    container.innerHTML.includes("无成本记录（本库 cost 字段常为 0，DESIGN §5）"),
+    "zero cost degrades to — with the not-recorded explanation",
+  )
+  assert.ok(
+    container.innerHTML.includes("<td class=\"num\"><span title=\"无成本记录（本库 cost 字段常为 0，DESIGN §5）\">—</span></td>"),
+    "the degraded cost cell keeps its numeric alignment slot",
+  )
+
+  // Header clicks on the two new columns:
+  // - time_updated is the default-sorted column, so its first click flips
+  //   the direction (same-key toggle contract);
+  // - cost is a fresh column, so its first click starts at desc.
+  const clickHeader = (sortKeyValue: string) => {
+    const headerCell = container
+      .querySelectorAll("th.sortable")
+      .find((sortableHeader) => sortableHeader.dataset.sortKey === sortKeyValue)!
+    headerCell.click()
+  }
+  clickHeader("time_updated")
+  clickHeader("cost")
+  assert.deepEqual(sortChangeCalls, [
+    { sortKey: "time_updated", sortOrder: "asc" },
+    { sortKey: "cost", sortOrder: "desc" },
+  ])
 })
 
 test("renderSessionList header clicks emit the server-sort callback and flip direction on repeat", async () => {

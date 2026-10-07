@@ -1,5 +1,5 @@
 /**
- * 会话列表：标题 / 模型 / agent / 创建时间 / tokens。
+ * 会话列表：标题 / 模型 / agent / 创建时间 / 更新时间 / tokens / cost。
  * 行 hover 高亮，点击跳 #/session/:id（M4 回放页，暂为占位路由）。
  * 支持按模型过滤（模型排行榜行下钻）。
  *
@@ -7,10 +7,10 @@
  * 排序归属服务端（分页确定性契约）——点击只产出下一组 sort/order 交给
  * onSessionSortChange 回调，由 app.js 带 ?sort=/?order= 重新请求 API，
  * 本组件不做客户端重排。交互范式与 model-table 列头一致：点新列默认
- * desc，再点同列切方向。列 → sort 键映射以可见列为准：标题列 → title、
- * 创建时间列 → time_created、Tokens 列 → tokens（模型/Agent 无对应
- * 白名单键，不可排序）。默认 time_updated desc 没有对应的可见列
- * （列表展示的是创建时间），初始态无箭头，由脚注文字说明当前排序。
+ * desc，再点同列切方向。v0.6.0 补齐 更新时间/Cost 两列后，后端五个
+ * 排序白名单键全部有可见列头（title / time_created / time_updated /
+ * tokens / cost 与五列一一对应），默认 time_updated desc 初始渲染即
+ * 带 desc 箭头与 .sorted 高亮；模型/Agent 无对应白名单键，不可排序。
  *
  * P2-3（v0.5.1）：默认排序无回路——非默认排序态下，脚注的排序描述
  * 同时是「恢复默认排序」入口（.sort-reset，点击走同一个
@@ -32,7 +32,9 @@ const COLUMNS = [
   { label: "模型", sortKey: null, numeric: false },
   { label: "Agent", sortKey: null, numeric: false },
   { label: "创建时间", sortKey: "time_created", numeric: true },
+  { label: "更新时间", sortKey: "time_updated", numeric: true },
   { label: "Tokens", sortKey: "tokens", numeric: true },
+  { label: "Cost", sortKey: "cost", numeric: true },
 ];
 
 /** 脚注的排序描述：真实源 total 未知时用它说明服务端当前的 sort/order。 */
@@ -43,6 +45,19 @@ const SORT_LABEL_BY_KEY = {
   cost: "成本",
   title: "标题",
 };
+
+/**
+ * Cost 单元格：口径与 KPI 卡一致（$ + 原始值，参照 kpi-card 的
+ * $todayCostEstimateUsd），浮点噪声截到两位小数。0 / null / 非有限数
+ * 降级 "—"——本库 cost 字段常为 0（DESIGN §5），0 与「未记录」同义，
+ * 降级惯例同 model-table hitRateCell 的「通道无缓存」（— + 说明 title）。
+ */
+function costCell(costValue) {
+  if (!Number.isFinite(costValue) || costValue === 0) {
+    return `<span title="无成本记录（本库 cost 字段常为 0，DESIGN §5）">—</span>`;
+  }
+  return `$${String(Number(costValue.toFixed(2)))}`;
+}
 
 /**
  * 渲染会话列表。
@@ -107,7 +122,9 @@ export function renderSessionList(
       <td><span class="model-cell"><span class="dot" style="background:${modelColor.get(session.modelId) ?? "transparent"}"></span><span class="name">${escapeHtml(session.modelId)}</span></span></td>
       <td><span class="badge">${escapeHtml(session.agent)}</span></td>
       <td class="num" title="${formatDateTime(session.timeCreated)}">${formatRelative(session.timeCreated, now)}</td>
+      <td class="num" title="${formatDateTime(session.timeUpdated)}">${formatRelative(session.timeUpdated, now)}</td>
       <td class="num primary">${formatTokens(session.tokens)}</td>
+      <td class="num">${costCell(session.cost)}</td>
     </tr>`).join("");
 
   const hiddenAfterFilterCount = allSessions.length - sessions.length;

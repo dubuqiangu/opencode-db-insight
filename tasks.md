@@ -190,3 +190,13 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 版本 0.5.1 三处同步；257/257（+5）；check 0；独立服务探针 6/6（controller 资产/hasOwn/重置入口/app 装配/默认 API 回归）
 - 按"审查收敛备忘"，0.5.1 为 oracle 处方修复（红→绿 + 竞态回归锁 + 探针实证），不再派下一代审查
 - v0.2-B 前端收尾完整闭环：实现（0.5.0）→ 审查 → 修复（0.5.1）
+
+## v0.6.0 会话列表补更新时间/Cost 两列（push #18，2026-10-07）
+
+- [x] 用户拍板里程碑：补齐 0.5.0 审查备忘的"无可见列不设入口"缺口，五排序键全可达
+- [x] 实现（des-14）：列布局 标题|模型|Agent|创建时间|更新时间|Tokens|Cost；更新时间→time_updated、Cost→cost；初始态 time_updated 列头带 ▼+sorted（isSorted 匹配即亮，零特判）；cost 降级"—"+说明 title（本库 cost 常 0，DESIGN §5）；格式化复用既有口径（formatRelative/formatDateTime/$+kpi-card 惯例）
+- [x] mock 核对：timeUpdated/cost 字段齐全无需补；cost 全 0 忠实实值——dev 模式"—"降级即真实库常态
+- [x] 测试 257 → 258（+1 新增、+1 更新：sortable 3→5、data-sort-key 五键深比较、初始箭头反转断言、两新列点击路由）
+- [x] 收敛复核：258/258 独立复跑 + check 0 + 独立服务探针 11/11（五键映射/降级渲染/重置入口/默认 API/sort=cost desc 端到端）
+- [x] 文档：CHANGELOG 0.6.0
+- [ ] oracle 增量审查 0.6.0 delta → 有 P0/P1 则修后推 0.6.1

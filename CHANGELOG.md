@@ -8,6 +8,19 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.6.0] - 2026-10-07 · 会话列表补更新时间 / Cost 两列，五排序键全可达
+
+### Added
+- **更新时间列**（sort 键 `time_updated`）与 **Cost 列**（sort 键 `cost`）：列布局 `标题 | 模型 | Agent | 创建时间 | 更新时间 | Tokens | Cost`——时间两列相邻、Cost 紧挨 Tokens，数字列右对齐，零新样式
+- **五键全量闭环**：后端五个排序白名单键全部有可见列头，0.5.0 审查备忘的"无可见列不设入口"缺口关闭
+- **初始态箭头自然涌现**：默认 time_updated desc 现对应可见列——初始渲染即带 ▼ + `.sorted` 高亮（组件零特判，isSorted 匹配即亮）；脚注逻辑不变（默认态纯文本、非默认态 `.sort-reset` 重置入口）
+
+### Changed
+- **Cost 格式化口径**（不新造口径）：`$` + 原始值（kpi-card 惯例），浮点噪声截两位；**0 / null / 非有限数 → "—"** + 说明 title（本库 cost 字段常为 0，DESIGN §5；0 与"未记录"同义，避免满屏 `$0`）——降级惯例同 model-table hitRateCell
+- 更新时间格式化与创建时间列逐字相同：`formatRelative` 显示 + `formatDateTime` 悬停
+- mock 核对：buildSessions 的 timeUpdated/cost 字段齐全无需补；cost 保持全 0 忠实 DESIGN §5 实值——dev 模式 Cost 列"—"降级路径正是真实库常态
+- 测试 257 → **258**（+1 新增：两新列渲染与点击路由/初始箭头反转断言；+1 更新：sortable 数 3→5、data-sort-key 五键深比较、初始态由"无 sorted"反转为"time_updated 恰一个 sorted + 箭头"）
+
 ## [0.5.1] - 2026-10-07 · v0.5.0 增量审查修复
 
 @oracle 对 v0.5.0 增量的审查（P0 零 / P1 零 / P2×3）发现项的修复版本。
