@@ -17,8 +17,6 @@ import {
   fetchTodo,
   fetchDirectoryStats,
   MAX_TREND_DAYS,
-  DEFAULT_SESSION_SORT_KEY,
-  DEFAULT_SESSION_SORT_ORDER,
 } from "./data-source.js";
 import { formatTokens, formatPercent, escapeHtml } from "./format.js";
 import { onSchemeChange } from "./theme.js";
@@ -33,7 +31,7 @@ import { renderDirectoryPanel } from "./components/directory-panel.js";
 import { renderToolBars } from "./components/tool-bars.js";
 import { renderTokenFunnel } from "./components/token-funnel.js";
 import { renderModelTable } from "./components/model-table.js";
-import { renderSessionList } from "./components/session-list.js";
+import { createSessionSortController } from "./components/session-sort-controller.js";
 import { renderSessionReplay } from "./components/session-replay.js";
 import { renderError } from "./components/state-views.js";
 
@@ -43,10 +41,6 @@ const TREND_CALENDAR_WINDOW_DAYS = MAX_TREND_DAYS;
 const state = {
   range: "30",
   modelFilter: null,
-  // 会话列表服务端排序（v0.2-B 契约，v0.5.0 接线）：排序归属服务端，
-  // 列头点击只改这组状态 → 带 ?sort=/?order= 重新请求，客户端不重排。
-  sessionSortKey: DEFAULT_SESSION_SORT_KEY,
-  sessionSortOrder: DEFAULT_SESSION_SORT_ORDER,
   healthStatus: "连接中…",
   cache: {
     overview: undefined,
@@ -54,9 +48,8 @@ const state = {
     rangeTrend: {},
     models: undefined,
     agents: undefined,
-    // 按 sort/order 组合区分（同 rangeTrend 的按 range 分键）：
-    // 切回已取过的排序立即命中渲染，不闪旧数据、不重发请求。
-    sessions: {},
+    // 会话列表的排序状态/缓存归 session-sort-controller（P2-2 抽出），
+    // 不再平铺在这里；本对象只保留其余区块。
     hourHeatmap: undefined,
     sessionSurvival: undefined,
     compaction: undefined,
@@ -202,74 +195,25 @@ async function loadModelsSection() {
   }
 }
 
+/* ---------- 会话列表：排序控制器装配（P2-2） ---------- */
+
 /** 会话列表单页大小，与 session-list 的 VISIBLE_ROWS 一致。 */
 const SESSION_LIST_PAGE_LIMIT = 15;
 
-/** sessions 缓存键：sort/order 组合（后端缓存键 sessions:[…,sort,order] 的前端对应）。 */
-function sessionSortCacheKey(sortKey, sortOrder) {
-  return `${sortKey}:${sortOrder}`;
-}
-
-/** 用当前 sort/filter 状态从缓存渲染会话列表（缺缓存时渲染加载骨架）。 */
-function renderSessionsFromCache() {
-  const cachedSessionPayload =
-    state.cache.sessions[sessionSortCacheKey(state.sessionSortKey, state.sessionSortOrder)] ?? null;
-  renderSessionList(
-    sessionListElement,
-    cachedSessionPayload,
-    state.modelFilter,
-    state.sessionSortKey,
-    state.sessionSortOrder,
-    onSessionSortChange,
-  );
-}
-
 /**
- * 排序切换请求序列守卫（同 loadTrendSection 的模式）：慢响应晚到不得
- * 覆盖当前排序——缓存仍按它自己的请求组合入库（晚到不浪费），但只有
- * 「最新一次请求 且 仍针对当前排序」的结果才允许落 DOM。
+ * 排序状态/缓存/序列守卫都在 session-sort-controller 里；这里只注入：
+ * 单页请求闭包（limit/offset 钉死，见该模块头部 N-2 注释）、模型过滤
+ * 只读访问器、顶栏失败计数回调。渲染时机（初始/列头/重置/过滤/主题）
+ * 全部转交控制器。
  */
-let sessionsLoadSequence = 0;
-
-async function loadSessionsSection() {
-  const requestToken = ++sessionsLoadSequence;
-  const requestSortKey = state.sessionSortKey;
-  const requestSortOrder = state.sessionSortOrder;
-  try {
-    const sessionPayload = await fetchSessions(
-      SESSION_LIST_PAGE_LIMIT,
-      0,
-      requestSortKey,
-      requestSortOrder,
-    );
-    state.cache.sessions[sessionSortCacheKey(requestSortKey, requestSortOrder)] = sessionPayload;
-    if (requestToken !== sessionsLoadSequence
-      || requestSortKey !== state.sessionSortKey
-      || requestSortOrder !== state.sessionSortOrder) return;
-    renderSessionsFromCache();
-    markSection("sessions", true);
-  } catch (error) {
-    if (requestToken !== sessionsLoadSequence
-      || requestSortKey !== state.sessionSortKey
-      || requestSortOrder !== state.sessionSortOrder) return;
-    renderError(sessionListElement, error, loadSessionsSection);
-    markSection("sessions", false);
-  }
-}
-
-/** 列头点击回调（session-list）：换排序 → 命中缓存立即渲染，否则重新请求。 */
-function onSessionSortChange(nextSortKey, nextSortOrder) {
-  if (state.sessionSortKey === nextSortKey && state.sessionSortOrder === nextSortOrder) return;
-  state.sessionSortKey = nextSortKey;
-  state.sessionSortOrder = nextSortOrder;
-  if (state.cache.sessions[sessionSortCacheKey(nextSortKey, nextSortOrder)] !== undefined) {
-    renderSessionsFromCache();
-  } else {
-    // 未取过的排序：先上骨架，不闪旧排序的数据
-    renderSessionList(sessionListElement, null);
-    loadSessionsSection();
-  }
-}
+const sessionSortController = createSessionSortController({
+  containerElement: sessionListElement,
+  fetchSessionsPage: (sortKey, sortOrder) =>
+    fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder),
+  getModelFilter: () => state.modelFilter,
+  markSectionSucceeded: () => markSection("sessions", true),
+  markSectionFailed: () => markSection("sessions", false),
+});
 
 async function loadHourHeatmapSection() {
   try {
@@ -330,7 +274,7 @@ async function loadDirectorySection() {
 function onModelSelected(modelId) {
   state.modelFilter = modelId;
   renderModelTable(modelTableElement, state.cache.models ?? [], state.modelFilter, onModelSelected);
-  renderSessionsFromCache();
+  sessionSortController.renderCurrent();
   renderSessionFilterChip();
 }
 
@@ -408,7 +352,7 @@ function startInitialLoad() {
   loadHourHeatmapSection();
   loadToolsSection();
   loadModelsSection();
-  loadSessionsSection();
+  sessionSortController.load();
   loadCompactionSection();
   loadSessionSurvivalSection();
   loadTodoSection();
@@ -431,7 +375,7 @@ function init() {
     if (state.cache.directories !== undefined) renderDirectoryPanel(directoryPanelElement, state.cache.directories);
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
-    if (state.cache.sessions[sessionSortCacheKey(state.sessionSortKey, state.sessionSortOrder)] !== undefined) renderSessionsFromCache();
+    sessionSortController.renderCurrentIfLoaded();
   });
 
   routeByHash();

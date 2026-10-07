@@ -198,6 +198,11 @@
 }
 .session-row { cursor: pointer; }
 
+/* 会话列表脚注的排序重置入口（P2-3）：虚线下划线示意可点，
+ * hover 提亮与 th.sortable:hover 同语言，不另起样式体系。 */
+.sort-reset { cursor: pointer; border-bottom: 1px dashed var(--border); }
+.sort-reset:hover { color: var(--text); border-bottom-color: var(--text-faint); }
+
 /* 行内小徽标：命中率高亮 */
 .hit-pill { font-weight: 600; color: var(--accent); }
 .hit-pill.low { color: var(--text-dim); font-weight: 500; }

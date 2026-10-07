@@ -179,4 +179,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 测试 249 → 252（+3 组件入库：sortable 列头/脚注/行序钉死、点击回调与方向翻转、mock 白名单回退）；DOM shim 扩展（addEventListener/click/querySelectorAll 复合选择器）
 - [x] 收敛复核：252/252 独立复跑 + check 0 + 独立服务探针 7/7（新资产含排序契约、index 提示、默认 API 零变化、sort=title asc 端到端）
 - [x] 文档：CHANGELOG 0.5.0
-- [ ] oracle 增量审查 0.5.0 delta → 有 P0/P1 则修后推 0.5.1
+- [x] oracle 增量审查 0.5.0 delta：P0 零 / P1 零 / P2×3（脚注查表原型链 / 守卫缓存零测试覆盖 / 默认排序无回路）——全部修复后推 0.5.1
+
+## v0.5.1 修复 0.5.0 审查发现项（push #17，2026-10-07）
+
+- [x] P2-1 脚注查表 hasOwn 防原型链（toString/__proto__/constructor 回退默认 label，纪律闭环）+ hostile 渲染测试
+- [x] P2-2 controller 抽取：app.js 平铺逻辑 → `components/session-sort-controller.js`（Map 缓存 + 序列守卫，app 只装配，行为零变化）+ 竞态测试三例（晚到不落 DOM 但入缓存 / 重叠请求晚 token 胜 / 陈旧 reject 丢弃、当前 reject 出错误态可重试）
+- [x] P2-3 脚注重置入口：非默认态"按X排序"可点击回默认 time_updated desc（走既有回调与缓存命中路径）；默认态/纯展示保持纯文本
+- [x] N-2 注释钉住：缓存键 `sort:order`，分页参数化时必须扩 `limit:offset:sort:order`
+- [x] 版本 0.5.1 三处同步；257/257（+5）；check 0；独立服务探针 6/6（controller 资产/hasOwn/重置入口/app 装配/默认 API 回归）
+- 按"审查收敛备忘"，0.5.1 为 oracle 处方修复（红→绿 + 竞态回归锁 + 探针实证），不再派下一代审查
+- v0.2-B 前端收尾完整闭环：实现（0.5.0）→ 审查 → 修复（0.5.1）

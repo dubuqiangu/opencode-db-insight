@@ -822,3 +822,221 @@ test("getMockSessions mirrors the backend sort whitelist, fallback and id ASC ti
   )
   assert.deepEqual(getMockSessions("tokens", "asc").sessions, firstRequestSummaries)
 })
+
+test("renderSessionList falls back to the default sort label for prototype-chain sort keys (P2-1)", async () => {
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+
+  // The component is an exported function — sortKey cannot be assumed to
+  // come from the whitelist. A plain ?? lookup resolves prototype-chain
+  // keys ("toString" etc.) to an inherited function and would stringify
+  // it into the footnote. hasOwn must gate the label lookup.
+  for (const hostileSortKey of ["toString", "__proto__", "constructor"]) {
+    const hostileContainer = freshContainer()
+    renderSessionList(hostileContainer, sessionSortFixturePayload(), null, hostileSortKey, "desc", null)
+    assert.match(
+      hostileContainer.innerHTML,
+      /按最近更新时间倒序/,
+      `${hostileSortKey} must render the default sort label`,
+    )
+    assert.ok(
+      !hostileContainer.innerHTML.includes("[native code]"),
+      `${hostileSortKey} must never stringify an inherited function into the footnote`,
+    )
+    assert.equal(
+      hostileContainer.querySelectorAll("th.sorted").length,
+      0,
+      `${hostileSortKey} matches no visible column, so no sorted marker`,
+    )
+  }
+})
+
+test("the footnote sort description doubles as a reset entry back to the default sort (P2-3)", async () => {
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+  const sortChangeCalls: Array<{ sortKey: string; sortOrder: string }> = []
+  const captureSortChange = (nextSortKey: string, nextSortOrder: string) => {
+    sortChangeCalls.push({ sortKey: nextSortKey, sortOrder: nextSortOrder })
+  }
+
+  // Non-default sort with an interactive callback → clickable reset entry.
+  const sortedContainer = freshContainer()
+  renderSessionList(sortedContainer, sessionSortFixturePayload(), null, "tokens", "desc", captureSortChange)
+  assert.match(sortedContainer.innerHTML, /按token 用量倒序/)
+  const resetEntry = sortedContainer.querySelector(".sort-reset")
+  assert.notEqual(resetEntry, null, "a non-default sort exposes a reset entry in the footnote")
+  resetEntry!.click()
+  assert.deepEqual(sortChangeCalls, [
+    { sortKey: "time_updated", sortOrder: "desc" },
+  ], "clicking reset must emit the default sort combination through the shared callback")
+
+  // Default state → the description stays plain text, no reset affordance.
+  const defaultContainer = freshContainer()
+  renderSessionList(defaultContainer, sessionSortFixturePayload(), null, "time_updated", "desc", captureSortChange)
+  assert.match(defaultContainer.innerHTML, /按最近更新时间倒序/)
+  assert.equal(
+    defaultContainer.querySelector(".sort-reset"),
+    null,
+    "the default view must not show a reset entry",
+  )
+
+  // Display-only usage (no callback): a non-default sort shows the plain
+  // description — never a styled, dead-end reset affordance.
+  const displayOnlyContainer = freshContainer()
+  renderSessionList(displayOnlyContainer, sessionSortFixturePayload(), null, "tokens", "desc", null)
+  assert.match(displayOnlyContainer.innerHTML, /按token 用量倒序/)
+  assert.equal(displayOnlyContainer.querySelector(".sort-reset"), null)
+})
+
+/* ------------- session-sort-controller race conditions (P2-2) ------------- */
+
+/**
+ * Deferred page-request harness: every fetchSessionsPage call parks in a
+ * queue the test settles by hand, so response arrival order is fully
+ * scripted. Payloads use fictional example-series fixtures only.
+ */
+interface DeferredSessionPageRequest {
+  sortKey: string
+  sortOrder: string
+  resolve: (sessionPayload: { total: null; sessions: SessionListFixtureSummary[] }) => void
+  reject: (error: Error) => void
+}
+
+function createDeferredSessionPageHarness() {
+  const pendingRequests: DeferredSessionPageRequest[] = []
+  const fetchSessionsPage = (sortKey: string, sortOrder: string) =>
+    new Promise<{ total: null; sessions: SessionListFixtureSummary[] }>((resolve, reject) => {
+      pendingRequests.push({ sortKey, sortOrder, resolve, reject })
+    })
+  return {
+    fetchSessionsPage,
+    pendingRequests,
+    /** Settle request #index with a payload whose rows carry the marker title. */
+    settleWithMarker: (requestIndex: number, markerTitle: string) => {
+      pendingRequests[requestIndex].resolve({
+        total: null,
+        sessions: [{ ...sessionSortFixturePayload().sessions[0], title: markerTitle }],
+      })
+    },
+    rejectWith: (requestIndex: number, errorMessage: string) => {
+      pendingRequests[requestIndex].reject(new Error(errorMessage))
+    },
+  }
+}
+
+/** Let the controller's promise continuations (microtasks) drain before asserting. */
+async function flushControllerMicrotasks() {
+  await new Promise<void>((resolveFlush) => {
+    setTimeout(resolveFlush, 0)
+  })
+}
+
+test("session-sort-controller: a late response misses the DOM but still lands in its own cache slot", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const sectionOutcomes: boolean[] = []
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+    markSectionSucceeded: () => sectionOutcomes.push(true),
+    markSectionFailed: () => sectionOutcomes.push(false),
+  })
+
+  controller.load() // request 0: time_updated desc
+  controller.changeSort("tokens", "desc") // skeleton + request 1
+  assert.equal(harness.pendingRequests.length, 2)
+
+  // The stale request resolves first — its token no longer matches, so it
+  // must not render, but its payload still enters the cache for its own
+  // sort combination.
+  harness.settleWithMarker(0, "late default marker")
+  await flushControllerMicrotasks()
+  assert.ok(
+    !container.innerHTML.includes("late default marker"),
+    "a late response for a superseded sort must not reach the DOM",
+  )
+  assert.equal(sectionOutcomes.length, 0, "the stale request must not report success")
+
+  harness.settleWithMarker(1, "fresh tokens marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("fresh tokens marker"))
+  assert.deepEqual(sectionOutcomes, [true], "only the fresh request reports success")
+
+  // Cache proof: switching back to the default sort renders the parked
+  // stale payload immediately — no third request is issued.
+  controller.changeSort("time_updated", "desc")
+  assert.equal(harness.pendingRequests.length, 2, "cache hit must not issue a new request")
+  assert.ok(container.innerHTML.includes("late default marker"))
+  assert.ok(!container.innerHTML.includes("fresh tokens marker"))
+})
+
+test("session-sort-controller: overlapping requests for the same sort keep only the latest token's render", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+  })
+
+  controller.load() // request 0 (time_updated desc)
+  controller.load() // request 1 — same sort combination, newer token
+  assert.equal(harness.pendingRequests.length, 2)
+
+  harness.settleWithMarker(0, "older duplicate marker")
+  await flushControllerMicrotasks()
+  assert.ok(!container.innerHTML.includes("older duplicate marker"))
+
+  harness.settleWithMarker(1, "newer duplicate marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("newer duplicate marker"))
+  assert.ok(!container.innerHTML.includes("older duplicate marker"))
+})
+
+test("session-sort-controller: a stale rejection is dropped, a fresh one renders the error state with retry", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const sectionOutcomes: boolean[] = []
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+    markSectionSucceeded: () => sectionOutcomes.push(true),
+    markSectionFailed: () => sectionOutcomes.push(false),
+  })
+
+  controller.load() // request 0
+  controller.changeSort("tokens", "desc") // request 1
+
+  // The superseded request fails — dropped silently, no error state shown.
+  harness.rejectWith(0, "stale request blew up")
+  await flushControllerMicrotasks()
+  assert.ok(!container.innerHTML.includes("stale request blew up"))
+  assert.equal(sectionOutcomes.length, 0, "a stale rejection must not mark the section failed")
+
+  // The current request fails — error state with a retry button appears.
+  harness.rejectWith(1, "fresh request blew up")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("fresh request blew up"))
+  assert.match(container.innerHTML, /这块数据没加载出来/)
+  assert.deepEqual(sectionOutcomes, [false])
+
+  const retryButton = container.querySelector(".retry-button")
+  assert.notEqual(retryButton, null, "the error state exposes a retry button")
+  retryButton!.click()
+  const retryRequest = harness.pendingRequests[2]!
+  assert.equal(harness.pendingRequests.length, 3, "retry re-issues the load for the current sort")
+  assert.deepEqual(
+    { sortKey: retryRequest.sortKey, sortOrder: retryRequest.sortOrder },
+    { sortKey: "tokens", sortOrder: "desc" },
+    "the retry requests the sort that was on screen when the error hit",
+  )
+})

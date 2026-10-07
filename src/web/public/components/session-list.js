@@ -11,6 +11,12 @@
  * 创建时间列 → time_created、Tokens 列 → tokens（模型/Agent 无对应
  * 白名单键，不可排序）。默认 time_updated desc 没有对应的可见列
  * （列表展示的是创建时间），初始态无箭头，由脚注文字说明当前排序。
+ *
+ * P2-3（v0.5.1）：默认排序无回路——非默认排序态下，脚注的排序描述
+ * 同时是「恢复默认排序」入口（.sort-reset，点击走同一个
+ * onSessionSortChange 回调与缓存路径，零新列零新组件）；默认态只显
+ * 纯文本。本组件是导出函数，sortKey 不能假设来自白名单：查表一律
+ * Object.hasOwn（P2-1），原型链键回退默认 label，不渲染继承函数串。
  */
 
 import { formatTokens, formatDateTime, formatRelative, escapeHtml } from "../format.js";
@@ -110,8 +116,18 @@ export function renderSessionList(
   if (modelFilter !== null) footNoteParts.push(`已过滤掉 ${hiddenAfterFilterCount} 条非 ${escapeHtml(modelFilter)} 会话`);
   if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);
   if (sessionPayload.total === null || sessionPayload.total === undefined) {
-    const sortLabel = SORT_LABEL_BY_KEY[sortKey] ?? SORT_LABEL_BY_KEY[DEFAULT_SESSION_SORT_KEY];
-    footNoteParts.push(`按${sortLabel}${sortOrder === "asc" ? "正序" : "倒序"}`);
+    // P2-1：hasOwn 先行——"toString"/"__proto__" 等原型链键在 ?? 语义下
+    // 取到的是继承函数，脚注会渲染出 "[native code]" 串；回退默认 label。
+    const sortLabel = Object.hasOwn(SORT_LABEL_BY_KEY, sortKey)
+      ? SORT_LABEL_BY_KEY[sortKey]
+      : SORT_LABEL_BY_KEY[DEFAULT_SESSION_SORT_KEY];
+    const sortDescription = `按${sortLabel}${sortOrder === "asc" ? "正序" : "倒序"}`;
+    const isDefaultSort = sortKey === DEFAULT_SESSION_SORT_KEY && sortOrder === DEFAULT_SESSION_SORT_ORDER;
+    // P2-3：非默认排序 + 有回调时，脚注描述即重置入口（回默认组合）；
+    // 默认态与纯展示用法（无回调）保持纯文本，不造不可点的假入口。
+    footNoteParts.push(isDefaultSort || onSessionSortChange === null
+      ? sortDescription
+      : `<span class="sort-reset" title="恢复默认排序（最近更新时间倒序）">${sortDescription}</span>`);
   } else {
     footNoteParts.push(`全库共 <b class="num">${sessionPayload.total.toLocaleString("en-US")}</b> 个会话`);
   }
@@ -126,6 +142,13 @@ export function renderSessionList(
     </div>`;
 
   if (onSessionSortChange !== null) {
+    // P2-3：重置入口——回默认组合，与列头共用同一个回调/缓存路径
+    const resetEntry = container.querySelector(".sort-reset");
+    if (resetEntry !== null) {
+      resetEntry.addEventListener("click", () => {
+        onSessionSortChange(DEFAULT_SESSION_SORT_KEY, DEFAULT_SESSION_SORT_ORDER);
+      });
+    }
     for (const headerCell of container.querySelectorAll("th.sortable")) {
       headerCell.addEventListener("click", () => {
         const clickedSortKey = headerCell.dataset.sortKey;
