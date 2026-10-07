@@ -168,7 +168,8 @@ export function renderSessionList(
   // v0.7.0：目录过滤态先说目录（服务端参数，语义上先于客户端模型过滤）
   if (hasDirectoryFilter) footNoteParts.push(`目录：${escapeHtml(directoryFilter)}`);
   if (modelFilter !== null) footNoteParts.push(`已过滤掉 ${hiddenAfterFilterCount} 条非 ${escapeHtml(modelFilter)} 会话`);
-  if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);  if (sessionPayload.total === null || sessionPayload.total === undefined) {
+  if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);
+  if (sessionPayload.total === null || sessionPayload.total === undefined) {
     // P2-1：hasOwn 先行——"toString"/"__proto__" 等原型链键在 ?? 语义下
     // 取到的是继承函数，脚注会渲染出 "[native code]" 串；回退默认 label。
     const sortLabel = Object.hasOwn(SORT_LABEL_BY_KEY, sortKey)

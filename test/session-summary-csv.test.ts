@@ -480,3 +480,71 @@ test(
     }
   },
 )
+
+test(
+  "real-SQL integration: an exact 500-row page boundary exports every row once and terminates (P2-2)",
+  { skip: skipReason },
+  () => {
+    // The page size is a module-local constant inside the api.ts export
+    // case (exportPageSize = 500, the query clamp ceiling) and is not
+    // injectable — so the fixture inserts exactly 500 rows directly:
+    // :memory: SQLite makes that instant, mirroring the 502-row build
+    // above. The boundary under test: when the row count is an exact
+    // multiple of the page size, the pagination loop's next fetch
+    // returns an EMPTY page (0 < 500 → break) instead of a short one —
+    // it must neither duplicate the last page's rows nor hang.
+    const database = new readWriteConstructor!(":memory:")
+    try {
+      database.exec(
+        "CREATE TABLE session_v2 (" +
+          "id TEXT, title TEXT, model TEXT, agent TEXT, directory TEXT, " +
+          "time_created INTEGER, time_updated INTEGER, " +
+          "tokens_input REAL, tokens_output REAL, tokens_cache_read REAL, cost REAL);",
+      )
+      const insertSession = database.prepare(
+        "INSERT INTO session_v2 (id, title, model, agent, directory, time_created, time_updated, " +
+          "tokens_input, tokens_output, tokens_cache_read, cost) " +
+          "VALUES (?, 'boundary row', ?, 'fixer', 'D:/projects/example-alpha', 1000, ?, 1, 1, 1, 0.1)",
+      )
+      // Exactly 500 rows: one full page and nothing behind it.
+      for (let rowIndex = 0; rowIndex < 500; rowIndex += 1) {
+        insertSession.run(
+          `ses_csv_edge_${String(rowIndex).padStart(3, "0")}`,
+          MODEL_COLUMN_TEXT,
+          rowIndex,
+        )
+      }
+
+      const readOnlyConnection = database as unknown as SqliteReadConnection
+      const exportResponse = handleApiRequest(csvContextFor(readOnlyConnection, ""))
+      assert.equal(exportResponse.statusCode, 200)
+      const exportRecords = parseCsvDocument(exportResponse.rawText!.text)
+
+      // Exactly 500 data rows behind the header: the empty boundary
+      // page appended nothing, duplicated nothing, skipped nothing.
+      assert.equal(exportRecords.length, 501, "header + exactly the 500 rows, no extra fetch artifacts")
+
+      // No duplicated id across the page boundary (Set collapses dupes).
+      const exportedIds = exportRecords.slice(1).map((record) => record[0])
+      assert.equal(
+        new Set(exportedIds).size,
+        500,
+        "each of the 500 ids appears exactly once",
+      )
+
+      // Ordering survived the boundary: newest first, oldest last.
+      assert.equal(
+        exportRecords[1][0],
+        "ses_csv_edge_499",
+        "the first data row is the newest (time_updated desc)",
+      )
+      assert.equal(exportRecords[500][0], "ses_csv_edge_000", "the oldest row closes the export")
+
+      // The test reaching these assertions is itself the termination
+      // proof: an off-by-one loop here would spin forever (the next
+      // full page would repeat, never producing a short page).
+    } finally {
+      database.close()
+    }
+  },
+)
