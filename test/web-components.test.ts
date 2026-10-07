@@ -1299,3 +1299,83 @@ test("getMockSessions mirrors the backend directory filter contract: exact match
   const tokenCounts = tokensDescendingPage.sessions.map((session) => session.tokens)
   assert.deepEqual(tokenCounts, [...tokenCounts].sort((leftCount, rightCount) => rightCount - leftCount))
 })
+
+/* ------------- CSV export entry (v0.8.0) ------------- */
+
+test("sessionsExportCsvPath is the single construction point for the CSV export URL", async () => {
+  const { sessionsExportCsvPath } = await import("../src/web/public/data-source.js")
+
+  // No filter: bare path, byte-identical to the no-filter request contract.
+  assert.equal(sessionsExportCsvPath(null), "/api/export/sessions.csv")
+  assert.equal(
+    sessionsExportCsvPath(""),
+    "/api/export/sessions.csv",
+    "empty string is no-filter by contract — same bare path as absent",
+  )
+
+  // Filtered: the directory param is encoded exactly once, same convention
+  // as fetchSessions' request path (both go through the shared helper).
+  assert.equal(
+    sessionsExportCsvPath("D:/projects/example-alpha"),
+    "/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha",
+  )
+})
+
+test("sessionsCsvExportEntryHtml renders per availability mode with the scoped download href", async () => {
+  const { sessionsCsvExportEntryHtml } = await import(
+    "../src/web/public/components/session-csv-export.js"
+  )
+
+  // Available + filtered: native anchor carrying the encoded directory href.
+  const filteredEntryHtml = sessionsCsvExportEntryHtml("D:/projects/example-alpha", true)
+  assert.ok(
+    filteredEntryHtml.includes('href="/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha"'),
+    "the entry href reuses the data-source URL single point",
+  )
+  assert.ok(filteredEntryHtml.includes('download="sessions.csv"'))
+  assert.match(filteredEntryHtml, /导出 CSV/)
+
+  // Available + unfiltered: bare path.
+  const unfilteredEntryHtml = sessionsCsvExportEntryHtml(null, true)
+  assert.ok(unfilteredEntryHtml.includes('href="/api/export/sessions.csv"'))
+
+  // Unavailable (mock preview): no entry at all — availability is decided at
+  // render time, so there is nothing to show first and hide later.
+  assert.equal(
+    sessionsCsvExportEntryHtml("D:/projects/example-alpha", false),
+    "",
+    "mock mode renders no entry — no flash of a route that does not exist",
+  )
+})
+
+test("renderSessionList appends the export entry whose href follows the controller's directory filter", async () => {
+  const { renderSessionList } = await import(
+    "../src/web/public/components/session-list.js"
+  )
+  const container = freshContainer()
+
+  // Real-mode wiring: SESSIONS_CSV_EXPORT_AVAILABLE is !USE_MOCK, true in the
+  // integrated environment — if this ever fails, USE_MOCK was flipped back on
+  // and the entry is (correctly) gone; the mock-mode branch itself is covered
+  // by the entry-builder test above.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null)
+  assert.ok(
+    container.innerHTML.includes('href="/api/export/sessions.csv"'),
+    "no filter → bare export path in the footnote entry",
+  )
+  assert.ok(!container.innerHTML.includes("directory="), "no directory param without an active filter")
+
+  // Directory filter → the entry href carries it, encoded.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, "D:/projects/example-alpha")
+  assert.ok(
+    container.innerHTML.includes('href="/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha"'),
+  )
+
+  // The filter changed → a re-render swaps the href; the stale one is gone.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, "D:/projects/example-beta")
+  assert.ok(container.innerHTML.includes('href="/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-beta"'))
+  assert.ok(
+    !container.innerHTML.includes("directory=D%3A%2Fprojects%2Fexample-alpha"),
+    "the export href must track the current filter, not accumulate stale ones",
+  )
+})

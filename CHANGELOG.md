@@ -8,6 +8,16 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.8.0] - 2026-10-07 · 导出增强：会话汇总 CSV（双车道）
+
+### Added
+- **`GET /api/export/sessions.csv`**：会话汇总 CSV 导出（后端）——九列固定序 `id,title,modelId,agent,directory,timeCreated,timeUpdated,tokens,cost`；RFC 4180 转义（含逗号/双引号/CRLF/CJK 的标题为 torture 夹具主敌，内嵌引号翻倍、CJK 不触发包裹）；每记录 CRLF 结尾；**UTF-8 BOM**（Excel 中文不乱码）；`Content-Type: text/csv; charset=utf-8` + `Content-Disposition: attachment`；**全量翻页**——按页拉取（每页 500 钳位上限）直到短页，`id ASC` 决胜保证无重无漏（活库 827 行端到端验证不截断）
+- **目录过滤复用**：`?directory=` 契约与 /api/sessions 完全一致（URLSearchParams 解码、精确匹配、缺省/空=全量、miss=仅表头 200——过滤语义非回退）；排序固定 sessions 默认序（time_updated desc + id ASC，注释钉住"导出是快照不是视图"）；一次性点击**不走缓存**（`resultCacheSize === 0` 测试锁）
+- **前端导出入口**：会话面板脚注「导出 CSV」文字链接（`.sort-reset` 脚注动作语言的延伸，样式同款）；原生 `<a href download="sessions.csv">` 零 JS——Content-Disposition attachment 双保险；**URL 编码单点** `directoryQueryParam`（fetchSessions 与导出共用，无两处漂移）；携带当前目录过滤（controller 状态透传，不另存副本，切目录后旧 href 自然消失）；**mock 模式渲染期常量隐藏**（dev 预览无真实路由，不闪现）；悬停 title 按过滤态说明导出的是服务端全量视图（与列表分页/模型客户端过滤无关）
+- CSV 构造独立模块 `src/web/session-summary-csv.ts`（纯函数，不塞 api.ts）
+- 测试 269 → **281**（+12：纯函数 torture 逐行字节级断言 + mini RFC 4180 parser 往返、真实 SQLite 集成（默认序证明/目录子集/miss/502 行多页翻取）、api-routes（路由匹配+5 错拼 404/503 短路/响应头/缓存零条目）、组件（URL 单点/双态/stale href））
+- 既有单会话 `.md` 导出路由零改动
+
 ## [0.7.1] - 2026-10-07 · v0.7.0 增量审查修复
 
 @oracle 对 v0.7.0 增量的审查（P0 零 / P1 零 / P2×1）发现项的修复版本。

@@ -29,6 +29,12 @@
  *                                          directories[{directory, name,
  *                                          sessions, steps, lastActiveMs}]}
  *   GET /api/health              → { status, version, port, dbStatus, dbPath }
+ *   GET /api/export/sessions.csv → CSV 附件下载（v0.8.0）：九列
+ *                                  id,title,modelId,agent,directory,
+ *                                  timeCreated,timeUpdated,tokens,cost；
+ *                                  RFC 4180 转义 + CRLF + UTF-8 BOM；
+ *                                  ?directory= 过滤与 /api/sessions 同语义
+ *                                  （精确匹配、缺省/空=全量、miss=仅表头）
  *
  * 真实/裸形状 → 组件所需形状的适配函数（normalizeTrendPayload 等）单独导出，
  * 供离线冒烟测试直接喂数验证。mock 分支保留用于离线演示。
@@ -60,6 +66,35 @@ export const MAX_TREND_DAYS = 366;
  */
 export const DEFAULT_SESSION_SORT_KEY = "time_updated";
 export const DEFAULT_SESSION_SORT_ORDER = "desc";
+
+/**
+ * ?directory= 参数段（不含 ?/& 前缀）；null / 空串 → ""。
+ * 后端契约：缺省与空串同为「不过滤/全量」，两端归一。这是 directory
+ * 参数编码的**唯一出处**——fetchSessions 与 CSV 导出地址共用，杜绝
+ * 两处 encodeURIComponent 各自漂移（v0.8.0 单点要求）。
+ */
+function directoryQueryParam(directory) {
+  return directory === null || directory === "" ? "" : `directory=${encodeURIComponent(directory)}`;
+}
+
+/**
+ * GET /api/export/sessions.csv 的下载地址（v0.8.0）。directory 过滤走
+ * directoryQueryParam 单点：无过滤 = 裸路径，有过滤 = ?directory=…
+ * 与 fetchSessions 的请求路径构造保持同一语义。
+ */
+export function sessionsExportCsvPath(directory = null) {
+  const directoryParam = directoryQueryParam(directory);
+  return directoryParam === ""
+    ? `${API_BASE}/export/sessions.csv`
+    : `${API_BASE}/export/sessions.csv?${directoryParam}`;
+}
+
+/**
+ * CSV 导出入口是否可用（v0.8.0）。mock 预览模式隐藏入口：dev 预览没有
+ * 真实路由 /api/export/sessions.csv，点了只会 404。可用性是渲染期常量
+ * ——入口在初始渲染时就按模式决定，不存在"先显示再藏"的闪现。
+ */
+export const SESSIONS_CSV_EXPORT_AVAILABLE = !USE_MOCK;
 /** KPI sparkline / 今日环比所需的最小趋势窗口。 */
 const OVERVIEW_TREND_WINDOW_DAYS = 15;
 const SESSION_LOOKUP_PAGE_SIZE = 500;
@@ -236,7 +271,8 @@ export async function fetchSessions(
   let requestPath = `/sessions?limit=${limit}&offset=${offset}`;
   if (sortKey !== DEFAULT_SESSION_SORT_KEY) requestPath += `&sort=${encodeURIComponent(sortKey)}`;
   if (sortOrder !== DEFAULT_SESSION_SORT_ORDER) requestPath += `&order=${encodeURIComponent(sortOrder)}`;
-  if (directory !== null && directory !== "") requestPath += `&directory=${encodeURIComponent(directory)}`;
+  const directoryParam = directoryQueryParam(directory);
+  if (directoryParam !== "") requestPath += `&${directoryParam}`;
   const sessionPage = await fetchJson(requestPath);
   return normalizeSessionPage(sessionPage);
 }

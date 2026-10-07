@@ -22,6 +22,7 @@ export type InsightRoute =
   | { routeName: "sessionMessages"; sessionId: string }
   | { routeName: "sessionSystemPrompt"; sessionId: string }
   | { routeName: "sessionExport"; sessionId: string }
+  | { routeName: "sessionSummaryExport" }
 
 /** Percent-decode a single path segment; malformed encoding yields "". */
 function decodePathSegment(segment: string): string {
@@ -73,6 +74,13 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
       return null
     }
     case "export": {
+      // /api/export/sessions.csv — the session-summary CSV export
+      // (v0.8.0); the ".csv" suffix is as literal as the ".md" one
+      // below. The two export shapes coexist: [export, sessions.csv]
+      // (3 segments) vs [export, session, :id.md] (4 segments).
+      if (pathSegments.length === 3 && pathSegments[2] === "sessions.csv") {
+        return { routeName: "sessionSummaryExport" }
+      }
       // /api/export/session/:id.md — the ".md" suffix is literal (DESIGN §6).
       if (pathSegments.length !== 4 || pathSegments[2] !== "session") return null
       const sessionSegment = pathSegments[3]

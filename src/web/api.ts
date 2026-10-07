@@ -14,6 +14,8 @@
 
 import type { SessionMessageRecord, SessionSummary, SqliteReadConnection } from "../db/types.ts"
 import {
+  DEFAULT_SESSION_SORT_KEY,
+  DEFAULT_SESSION_SORT_ORDER,
   queryAgentStats,
   queryDailyTrend,
   queryModelMetrics,
@@ -37,6 +39,11 @@ import {
   queryDirectoryStats,
 } from "../db/directory-queries.ts"
 import { renderSessionMarkdown } from "../export/markdown.ts"
+import {
+  renderSessionSummaryCsv,
+  SESSION_SUMMARY_CSV_CONTENT_TYPE,
+  SESSION_SUMMARY_CSV_FILENAME,
+} from "./session-summary-csv.ts"
 import { buildCacheKey, cachedResult } from "../stats/cache.ts"
 import { MAX_TREND_DAYS } from "../stats/daily-buckets.ts"
 import {
@@ -46,7 +53,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.7.1"
+export const INSIGHT_VERSION = "0.8.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -392,6 +399,53 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             contentType: "text/markdown; charset=utf-8",
             headers: {
               "Content-Disposition": `attachment; filename="${asciiFilenameFallback(downloadFilename)}"; filename*=UTF-8''${encodeURIComponent(downloadFilename)}`,
+            },
+          },
+        }
+      }
+      case "sessionSummaryExport": {
+        // One-shot click export, deliberately NOT wrapped in cachedResult
+        // (same reasoning as the .md export above): the CSV must reflect
+        // the moment of the click, and a 60s TTL entry would only occupy
+        // a slot of the 64-entry cache. An export is a snapshot, not a
+        // view: ?sort=/?order= are intentionally ignored — the row order
+        // is the sessions list's default (time_updated desc, id ASC).
+        // ?directory= reuses the sessions drill-down contract verbatim
+        // (v0.7.0): the decoded raw string from URLSearchParams, exact
+        // match, missing/empty = the whole list, a miss = a header-only
+        // CSV — filter semantics, not fallback semantics.
+        const exportDirectoryFilter = requestContext.searchParams.get("directory") ?? ""
+        const exportSummaries: SessionSummary[] = []
+        // Full-pull semantics: page through at querySessionList's clamp
+        // ceiling (limit 500 — its hard maximum, see
+        // clampPaginationValue) until a short page. The live db
+        // (~800 rows) therefore exports whole. The fixed ordering plus
+        // the id ASC tie-break make the pagination deterministic: no
+        // duplicated or skipped rows across page boundaries.
+        const exportPageSize = 500
+        for (let pageOffset = 0; ; pageOffset += exportPageSize) {
+          const summaryPage = querySessionList(
+            database,
+            exportPageSize,
+            pageOffset,
+            DEFAULT_SESSION_SORT_KEY,
+            DEFAULT_SESSION_SORT_ORDER,
+            exportDirectoryFilter,
+          )
+          // Unreachable with a non-null db; kept as belt-and-braces so a
+          // mid-export null can never crash the handler.
+          if (summaryPage === null) break
+          exportSummaries.push(...summaryPage)
+          if (summaryPage.length < exportPageSize) break
+        }
+        return {
+          statusCode: 200,
+          body: null,
+          rawText: {
+            text: renderSessionSummaryCsv(exportSummaries),
+            contentType: SESSION_SUMMARY_CSV_CONTENT_TYPE,
+            headers: {
+              "Content-Disposition": `attachment; filename="${SESSION_SUMMARY_CSV_FILENAME}"`,
             },
           },
         }

@@ -22,11 +22,16 @@
  * （服务端 ?directory= 精确匹配，行序仍等于 payload 序——过滤同样
  * 归属服务端）；与 modelFilter 可叠加（目录=服务端参数、模型=客户
  * 端行过滤，正交），空态文案按叠加组合给出。
+ *
+ * v0.8.0：脚注末尾追加 CSV 导出入口（components/session-csv-export.js，
+ * 原生 <a download>，href 随 directoryFilter 在渲染期构造）。空态与
+ * 加载骨架没有脚注，也就没有导出入口。
  */
 
 import { formatTokens, formatDateTime, formatRelative, escapeHtml } from "../format.js";
 import { modelPalette } from "../theme.js";
 import { renderEmpty, renderLoading } from "./state-views.js";
+import { sessionsCsvExportEntryHtml } from "./session-csv-export.js";
 import { DEFAULT_SESSION_SORT_KEY, DEFAULT_SESSION_SORT_ORDER } from "../data-source.js";
 
 const VISIBLE_ROWS = 15;
@@ -163,8 +168,7 @@ export function renderSessionList(
   // v0.7.0：目录过滤态先说目录（服务端参数，语义上先于客户端模型过滤）
   if (hasDirectoryFilter) footNoteParts.push(`目录：${escapeHtml(directoryFilter)}`);
   if (modelFilter !== null) footNoteParts.push(`已过滤掉 ${hiddenAfterFilterCount} 条非 ${escapeHtml(modelFilter)} 会话`);
-  if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);
-  if (sessionPayload.total === null || sessionPayload.total === undefined) {
+  if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);  if (sessionPayload.total === null || sessionPayload.total === undefined) {
     // P2-1：hasOwn 先行——"toString"/"__proto__" 等原型链键在 ?? 语义下
     // 取到的是继承函数，脚注会渲染出 "[native code]" 串；回退默认 label。
     const sortLabel = Object.hasOwn(SORT_LABEL_BY_KEY, sortKey)
@@ -180,6 +184,12 @@ export function renderSessionList(
   } else {
     footNoteParts.push(`全库共 <b class="num">${sessionPayload.total.toLocaleString("en-US")}</b> 个会话`);
   }
+  // v0.8.0：CSV 导出入口（真实模式常显 / mock 模式渲染期即无，见
+  // session-csv-export.js）。href 经 data-source 单点构造，directoryFilter
+  // 即 controller 透传的当前下钻值——不另存状态。原生 <a download>，
+  // 无需 JS 点击处理器。
+  const csvExportEntryHtml = sessionsCsvExportEntryHtml(directoryFilter);
+  if (csvExportEntryHtml !== "") footNoteParts.push(csvExportEntryHtml);
 
   container.innerHTML = `
     <table class="data-table" aria-label="会话列表">

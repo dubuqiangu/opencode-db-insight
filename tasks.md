@@ -224,3 +224,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 版本 0.7.1 三处同步；269/269（断言增强不增测试数）；check 0
 - 按"审查收敛备忘"，0.7.1 为 oracle 处方修复（一行 + 断言锁），不再派下一代审查
 - v0.7.0 目录下钻完整闭环：双车道实现 → 审查 → 修复（0.7.1）
+
+## v0.8.0 导出增强：会话汇总 CSV（push #22，2026-10-07，双车道并行）
+
+- [x] 用户拍板里程碑：全库/按目录过滤 CSV 导出（浏览器下载入口）
+- [x] 契约钉死：/api/export/sessions.csv 九列固定序、RFC 4180 + CRLF + UTF-8 BOM、?directory= 复用 /api/sessions 过滤契约、固定默认序（快照非视图）、一次性不走缓存、attachment 响应头
+- [x] 后端（fix-15）：session-summary-csv.ts 纯函数模块（escapeCsvField/renderSessionSummaryCsv）；router [export, sessions.csv] 三段分支（.md 四段零改动）；api case 全量翻页（每页 500 钳位，短页终止，id ASC 决胜无重无漏）；真实 SQLite 集成（502 行多页锁）+ api-routes（5 错拼 404/503/响应头/缓存零条目锁）
+- [x] 前端（des-14）：脚注「导出 CSV」链接（.sort-reset 语言延伸）；原生 <a download> 零 JS；directoryQueryParam 编码单点（fetchSessions 共用）；mock 渲染期常量隐藏不闪现；切目录后 stale href 自然消失（测试钉死）
+- [x] 测试 269 → 281（+12）
+- [x] 收敛复核：版本 0.8.0 三处同步（协调方统一 bump）+ 合并 281/281 独立复跑 + check 0 + 真实库探针 10/10（BOM 字节级 ef bb bf/表头/全量 827=827 不截断/过滤 576=576 行行同目录/miss 仅表头——注意 fetch().text() 的 TextDecoder 默认剥 BOM，BOM 判定必须走 arrayBuffer 字节级，探针假阴性已甄别）
+- [x] 文档：CHANGELOG 0.8.0
+- [ ] oracle 增量审查 0.8.0 delta → 有 P0/P1 则修后推 0.8.1

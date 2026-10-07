@@ -20,6 +20,11 @@ import type { SqliteReadConnection } from "../src/db/types.ts"
 import { matchApiRoute } from "../src/web/router.ts"
 import { clearResultCache, resultCacheSize } from "../src/stats/cache.ts"
 import {
+  SESSION_SUMMARY_CSV_CONTENT_TYPE,
+  SESSION_SUMMARY_CSV_FILENAME,
+  SESSION_SUMMARY_CSV_HEADER,
+} from "../src/web/session-summary-csv.ts"
+import {
   buildFakeSessionSummary,
   createFakeInsightDatabase,
 } from "./helpers/fake-insight-db.ts"
@@ -50,6 +55,7 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/directories",
     "/api/session/ses_example/messages",
     "/api/session/ses_example/system-prompt",
+    "/api/export/sessions.csv",
   ]
   for (const pathname of dataRoutePathnames) {
     const requestContext = requestContextFor(pathname)
@@ -608,6 +614,111 @@ test("sessions cache keys carry the directory dimension: distinct values get ent
     // at all — never a near-duplicate entry (contract #4).
     handleApiRequest(contextWithQuery("directory="))
     assert.equal(resultCacheSize(), 4, "empty directory shares the default key")
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("router matches /api/export/sessions.csv and rejects the near-miss spellings (v0.8.0)", () => {
+  assert.deepEqual(matchApiRoute("/api/export/sessions.csv"), {
+    routeName: "sessionSummaryExport",
+  })
+  // Typos and shape violations must fall through to the server's 404.
+  assert.equal(matchApiRoute("/api/export/sessions-csv"), null, "hyphen is not a dot")
+  assert.equal(matchApiRoute("/api/export/sessions"), null, "missing the .csv suffix")
+  assert.equal(matchApiRoute("/api/export/sessions.csv/extra"), null, "no trailing segment allowed")
+  assert.equal(matchApiRoute("/api/export/session.csv"), null, "singular session is the .md shape only")
+  assert.equal(matchApiRoute("/api/export/sessions.csv.md"), null, "no double suffix")
+  // The legacy per-session .md shape still matches — zero change to it.
+  assert.deepEqual(matchApiRoute("/api/export/session/ses_example.md"), {
+    routeName: "sessionExport",
+    sessionId: "ses_example",
+  })
+})
+
+test("the sessions.csv export short-circuits to 503 before parsing any parameter while the db is missing (v0.8.0)", () => {
+  const exportCsvRoute = matchApiRoute("/api/export/sessions.csv")
+  assert.notEqual(exportCsvRoute, null)
+  const apiResponse = handleApiRequest({
+    route: exportCsvRoute!,
+    searchParams: new URLSearchParams("directory=%27%20OR%20%271%27%3D%271"),
+    database: null,
+    databasePath: "test://no-database",
+    serverPort: 18789,
+  })
+  // Same discipline as the sessions route: the db-unavailable
+  // short-circuit fires before any parameter parsing — hostile
+  // directory text never reaches the query layer on the way to the 503.
+  assert.equal(apiResponse.statusCode, 503)
+  assert.deepEqual(apiResponse.body, { error: DATABASE_UNAVAILABLE_MESSAGE })
+})
+
+test("the sessions.csv export answers 200 with the CSV headers, the BOM document, and no cache entries (v0.8.0)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_csv_route_alpha",
+          title: "alpha 标题, with comma",
+          directory: "D:/projects/example-alpha",
+        }),
+        buildFakeSessionSummary({
+          id: "ses_csv_route_beta",
+          directory: "D:/projects/example-beta",
+        }),
+      ],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+    const exportCsvRoute = matchApiRoute("/api/export/sessions.csv")!
+    const contextWithQuery = (queryString: string): ApiRequestContext => ({
+      route: exportCsvRoute,
+      searchParams: new URLSearchParams(queryString),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+
+    const exportResponse = handleApiRequest(contextWithQuery(""))
+    assert.equal(exportResponse.statusCode, 200)
+    assert.equal(exportResponse.rawText!.contentType, SESSION_SUMMARY_CSV_CONTENT_TYPE)
+    assert.equal(
+      exportResponse.rawText!.headers["Content-Disposition"],
+      `attachment; filename="${SESSION_SUMMARY_CSV_FILENAME}"`,
+    )
+    const exportText = exportResponse.rawText!.text
+    assert.ok(exportText.startsWith("\uFEFF"), "BOM prefixes the export document")
+    assert.ok(
+      exportText.includes("ses_csv_route_alpha"),
+      "the export carries every session row, torture title included",
+    )
+    assert.ok(
+      exportText.includes('"alpha 标题, with comma"'),
+      "the comma title arrives RFC 4180-escaped",
+    )
+    assert.ok(exportText.endsWith("\r\n"), "the document is CRLF-terminated")
+
+    // A directory miss is filter semantics, not fallback: a
+    // header-only CSV with 200.
+    const missResponse = handleApiRequest(
+      contextWithQuery("directory=D%3A%2Fprojects%2Fexample-nowhere"),
+    )
+    assert.equal(missResponse.statusCode, 200)
+    assert.equal(
+      missResponse.rawText!.text,
+      "\uFEFF" + SESSION_SUMMARY_CSV_HEADER + "\r\n",
+      "miss yields the header-only document",
+    )
+
+    // An empty ?directory= is the same "no filter" export as no
+    // parameter at all.
+    const emptyFilterResponse = handleApiRequest(contextWithQuery("directory="))
+    assert.equal(emptyFilterResponse.rawText!.text, exportText)
+
+    // One-shot click export, deliberately uncached: the requests above
+    // must not have left a single TTL entry behind.
+    assert.equal(resultCacheSize(), 0, "the export never touches the result cache")
   } finally {
     clearResultCache()
   }
