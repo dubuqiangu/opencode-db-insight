@@ -456,6 +456,11 @@
   transition: background 0.12s;
 }
 .directory-row:hover { background: var(--panel-2); }
+/* v0.7.0 目录→会话下钻：可点行 cursor + 选中高亮，语言对齐
+ * data-table 的行 hover / .selected（accent-soft 底）。 */
+.directory-row.selectable { cursor: pointer; }
+.directory-row.selected { background: var(--accent-soft); }
+.directory-row.selected:hover { background: var(--accent-soft); }
 .directory-name-cell {
   display: flex;
   flex-direction: column;

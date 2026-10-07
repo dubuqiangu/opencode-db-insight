@@ -197,6 +197,25 @@ export function resolveSessionSortOrder(
 }
 
 /**
+ * SELECT list + FROM clause of the session list (single point so the
+ * filtered and unfiltered shapes below can never drift apart — the
+ * scan-conventions.ts single-source discipline, applied to this query).
+ */
+const SESSION_LIST_SELECT_SQL =
+  `SELECT id, title, model, agent, directory, time_created, time_updated,
+              tokens_input, tokens_output, tokens_cache_read, cost
+       FROM session_v2`
+
+/**
+ * Directory drill-down filter (v0.7.0): parameterized exact match on the
+ * session_v2.directory column. The value is a free-form string (NOT a
+ * whitelist key like ?sort=), so it only ever reaches SQLite as a bind
+ * parameter — every other token of the constructed SQL stays a
+ * compile-time literal.
+ */
+const SESSION_DIRECTORY_FILTER_SQL = "WHERE directory = ?"
+
+/**
  * Session list for GET /api/sessions. `tokens` comes from the session_v2
  * summary columns (lagging for active sessions — the list is the only
  * place they are used, DESIGN §2.2).
@@ -207,6 +226,14 @@ export function resolveSessionSortOrder(
  * primary key must paginate without duplicates or gaps. Callers may pass
  * raw query-string values; they are whitelisted here again (defense in
  * depth next to the API layer's own resolution for the cache key).
+ *
+ * Directory drill-down (v0.7.0): a non-empty `directoryValue` adds an
+ * exact-match WHERE. Its semantics are deliberately NOT the sort/order
+ * fallback semantics: a directory that matches nothing is a legitimate
+ * EMPTY result (200 []), because the caller asked to filter, not to
+ * sort. Missing, null or empty-string means no filter at all, and the
+ * no-filter SQL stays byte-identical to the pre-0.7.0 statement (locked
+ * by test/session-directory-filter.test.ts).
  */
 export function querySessionList(
   db: SqliteReadConnection | null,
@@ -214,6 +241,7 @@ export function querySessionList(
   offset: number = 0,
   sortKeyValue: string | null | undefined = DEFAULT_SESSION_SORT_KEY,
   sortOrderValue: string | null | undefined = DEFAULT_SESSION_SORT_ORDER,
+  directoryValue: string | null | undefined = null,
 ): SessionSummary[] | null {
   if (db === null) return null
   const safeLimit = clampPaginationValue(limit, 1, 500)
@@ -222,16 +250,24 @@ export function querySessionList(
   const safeSortOrder = resolveSessionSortOrder(sortOrderValue)
   const primarySortSql = SESSION_SORT_SQL_BY_SORT_KEY[safeSortKey]
   const primaryDirectionSql = safeSortOrder === "asc" ? "ASC" : "DESC"
+  const hasDirectoryFilter = typeof directoryValue === "string" && directoryValue !== ""
 
   const rawRows = db
     .prepare(
-      `SELECT id, title, model, agent, directory, time_created, time_updated,
-              tokens_input, tokens_output, tokens_cache_read, cost
-       FROM session_v2
+      hasDirectoryFilter
+        ? `${SESSION_LIST_SELECT_SQL}
+       ${SESSION_DIRECTORY_FILTER_SQL}
+       ORDER BY ${primarySortSql} ${primaryDirectionSql}, id ASC
+       LIMIT ? OFFSET ?`
+        : `${SESSION_LIST_SELECT_SQL}
        ORDER BY ${primarySortSql} ${primaryDirectionSql}, id ASC
        LIMIT ? OFFSET ?`,
     )
-    .all(safeLimit, safeOffset)
+    .all(
+      ...(hasDirectoryFilter
+        ? [directoryValue, safeLimit, safeOffset]
+        : [safeLimit, safeOffset]),
+    )
 
   const sessionSummaries: SessionSummary[] = []
   for (const rawRow of rawRows) {

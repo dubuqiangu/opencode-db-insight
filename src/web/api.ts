@@ -46,7 +46,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.6.1"
+export const INSIGHT_VERSION = "0.7.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -260,8 +260,22 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         // naming choice for this route (v0.2-B), like "directory-stats".
         const sessionSortKey = resolveSessionSortKey(requestContext.searchParams.get("sort"))
         const sessionSortOrder = resolveSessionSortOrder(requestContext.searchParams.get("order"))
+        // Directory drill-down (v0.7.0): the decoded raw string straight
+        // from URLSearchParams (paths with spaces/CJK/quotes decode
+        // here — never via the router's path-segment decoding). The
+        // cache key carries it with "" for a missing parameter, so an
+        // empty ?directory= shares the "no filter" key with no parameter
+        // at all. Unlike sort/order this is NOT a fallback dimension: a
+        // directory with zero matches is a legitimate empty 200 result.
+        const sessionDirectoryFilter = requestContext.searchParams.get("directory") ?? ""
         const sessionPage = cachedResult(
-          buildCacheKey("sessions", [sessionLimit, sessionOffset, sessionSortKey, sessionSortOrder]),
+          buildCacheKey("sessions", [
+            sessionLimit,
+            sessionOffset,
+            sessionSortKey,
+            sessionSortOrder,
+            sessionDirectoryFilter,
+          ]),
           () =>
             querySessionList(
               database,
@@ -269,6 +283,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
               sessionOffset,
               sessionSortKey,
               sessionSortOrder,
+              sessionDirectoryFilter,
             ),
         )
         return { statusCode: 200, body: sessionPage }

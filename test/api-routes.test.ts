@@ -504,3 +504,111 @@ test("sessions cache keys carry resolved sort/order: distinct combos get entries
     clearResultCache()
   }
 })
+
+test("sessions with a directory parameter still answers 503 while the db is missing", () => {
+  const sessionsRoute = matchApiRoute("/api/sessions")
+  assert.notEqual(sessionsRoute, null)
+  const apiResponse = handleApiRequest({
+    route: sessionsRoute!,
+    searchParams: new URLSearchParams("directory=%27%20OR%20%271%27%3D%271"),
+    database: null,
+    databasePath: "test://no-database",
+    serverPort: 18789,
+  })
+  // The db-unavailable short-circuit happens before any parameter
+  // parsing — hostile directory text must never even reach the query
+  // layer on the way to the 503.
+  assert.equal(apiResponse.statusCode, 503)
+  assert.deepEqual(apiResponse.body, { error: DATABASE_UNAVAILABLE_MESSAGE })
+})
+
+test("sessions route serves directory-filtered requests with 200 and the exact-match subset (v0.7.0)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_directory_drill_alpha",
+          directory: "D:/projects/example-alpha",
+          timeCreated: 1000,
+          timeUpdated: 2000,
+        }),
+        buildFakeSessionSummary({
+          id: "ses_directory_drill_beta",
+          directory: "D:/projects/example-beta",
+          timeCreated: 3000,
+          timeUpdated: 4000,
+        }),
+      ],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+    const sessionsRoute = matchApiRoute("/api/sessions")!
+    const contextWithQuery = (queryString: string): ApiRequestContext => ({
+      route: sessionsRoute,
+      searchParams: new URLSearchParams(queryString),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+
+    const filteredResponse = handleApiRequest(
+      contextWithQuery("directory=D%3A%2Fprojects%2Fexample-beta"),
+    )
+    assert.equal(filteredResponse.statusCode, 200)
+    assert.deepEqual(
+      (filteredResponse.body as { id: string }[]).map((sessionSummary) => sessionSummary.id),
+      ["ses_directory_drill_beta"],
+      "the drill-down returns only the exact-match row",
+    )
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("sessions cache keys carry the directory dimension: distinct values get entries, empty string shares the default key (v0.7.0)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_directory_cache",
+          directory: "D:/projects/example-alpha",
+          timeCreated: 1000,
+          timeUpdated: 2000,
+        }),
+      ],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+    const sessionsRoute = matchApiRoute("/api/sessions")!
+    const contextWithQuery = (queryString: string): ApiRequestContext => ({
+      route: sessionsRoute,
+      searchParams: new URLSearchParams(queryString),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+
+    // The default entry (directory "" — the no-filter request).
+    handleApiRequest(contextWithQuery(""))
+    assert.equal(resultCacheSize(), 1)
+
+    // Each distinct directory value gets its own entry.
+    handleApiRequest(contextWithQuery("directory=D%3A%2Fprojects%2Fexample-alpha"))
+    assert.equal(resultCacheSize(), 2, "one entry per directory value")
+    handleApiRequest(contextWithQuery("directory=D%3A%2Fprojects%2Fexample-beta"))
+    assert.equal(resultCacheSize(), 3, "a second directory value is its own entry")
+
+    // Combinations with other dimensions stay distinct entries too.
+    handleApiRequest(contextWithQuery("directory=D%3A%2Fprojects%2Fexample-alpha&sort=cost"))
+    assert.equal(resultCacheSize(), 4, "directory + sort is its own entry")
+
+    // An empty ?directory= shares the "no filter" key with no parameter
+    // at all — never a near-duplicate entry (contract #4).
+    handleApiRequest(contextWithQuery("directory="))
+    assert.equal(resultCacheSize(), 4, "empty directory shares the default key")
+  } finally {
+    clearResultCache()
+  }
+})

@@ -85,19 +85,23 @@ class StubElement {
   }
 
   /**
-   * Class-token query supporting both ".class" and "tag.class" selectors
-   * (components use the compound form, e.g. "th.sortable" / "tr.session-row").
+   * Class-token query supporting ".class", "tag.class" and multi-class
+   * ".a.b" compounds (components combine state classes, e.g. the v0.7.0
+   * drill-down rows ".directory-row.selectable") plus bare "tag" selectors.
    */
   querySelectorAll(elementSelector: string): StubElement[] {
-    const compoundSelectorMatch = /^([a-zA-Z][a-zA-Z0-9]*)\.(.+)$/.exec(elementSelector)
-    const wantedTagName = compoundSelectorMatch !== null ? compoundSelectorMatch[1] : null
-    const wantedClassName = compoundSelectorMatch !== null
-      ? compoundSelectorMatch[2]
-      : elementSelector.replace(/^\./, "")
+    const selectorParts = elementSelector.split(".")
+    const wantedTagName = /^[a-zA-Z][a-zA-Z0-9]*$/.test(selectorParts[0])
+      ? selectorParts[0]
+      : null
+    const wantedClassTokens = (wantedTagName === null ? selectorParts : selectorParts.slice(1))
+      .filter((classToken) => classToken !== "")
     const matchedElements: StubElement[] = []
     const walkChildren = (parentElement: StubElement): void => {
       for (const childElement of parentElement.stubChildren) {
-        const classNameMatches = childElement.classTokenList().includes(wantedClassName)
+        const elementClassTokens = childElement.classTokenList()
+        const classNameMatches = wantedClassTokens
+          .every((classToken) => elementClassTokens.includes(classToken))
         const tagNameMatches = wantedTagName === null
           || childElement.tagName.toLowerCase() === wantedTagName.toLowerCase()
         if (classNameMatches && tagNameMatches) {
@@ -960,19 +964,21 @@ test("the footnote sort description doubles as a reset entry back to the default
  * Deferred page-request harness: every fetchSessionsPage call parks in a
  * queue the test settles by hand, so response arrival order is fully
  * scripted. Payloads use fictional example-series fixtures only.
+ * v0.7.0: requests carry the directory dimension of the cache key.
  */
 interface DeferredSessionPageRequest {
   sortKey: string
   sortOrder: string
+  directory: string | null
   resolve: (sessionPayload: { total: null; sessions: SessionListFixtureSummary[] }) => void
   reject: (error: Error) => void
 }
 
 function createDeferredSessionPageHarness() {
   const pendingRequests: DeferredSessionPageRequest[] = []
-  const fetchSessionsPage = (sortKey: string, sortOrder: string) =>
+  const fetchSessionsPage = (sortKey: string, sortOrder: string, directory: string | null) =>
     new Promise<{ total: null; sessions: SessionListFixtureSummary[] }>((resolve, reject) => {
-      pendingRequests.push({ sortKey, sortOrder, resolve, reject })
+      pendingRequests.push({ sortKey, sortOrder, directory, resolve, reject })
     })
   return {
     fetchSessionsPage,
@@ -1107,4 +1113,177 @@ test("session-sort-controller: a stale rejection is dropped, a fresh one renders
     { sortKey: "tokens", sortOrder: "desc" },
     "the retry requests the sort that was on screen when the error hit",
   )
+})
+
+/* ------------- directory drill-down (v0.7.0) ------------- */
+
+test("session-sort-controller: directory drill-down gets its own cache slot and the guard validates the directory snapshot", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+  })
+
+  controller.load() // request 0: time_updated desc, no directory
+  controller.changeDirectory("D:/projects/example-alpha") // skeleton + request 1
+  assert.equal(harness.pendingRequests.length, 2)
+  assert.deepEqual(
+    { sortKey: harness.pendingRequests[1]!.sortKey, sortOrder: harness.pendingRequests[1]!.sortOrder },
+    { sortKey: "time_updated", sortOrder: "desc" },
+    "drilling into a directory must keep the current sort (filters are orthogonal)",
+  )
+  assert.equal(harness.pendingRequests[1]!.directory, "D:/projects/example-alpha")
+
+  // The stale no-directory response resolves first — dropped by its token,
+  // but parked in its own cache slot.
+  harness.settleWithMarker(0, "unfiltered late marker")
+  await flushControllerMicrotasks()
+  assert.ok(!container.innerHTML.includes("unfiltered late marker"))
+
+  // Back to no directory is a pure cache hit (the slot was just filled), so
+  // no new request and the load token does not move.
+  controller.changeDirectory(null)
+  assert.equal(harness.pendingRequests.length, 2, "cache hit must not issue a new request")
+  assert.ok(container.innerHTML.includes("unfiltered late marker"))
+
+  // Directory-snapshot guard beyond the token: request 1 settles while its
+  // token is STILL the latest (the cache hit above never issued a load), but
+  // the view has moved back — only the (sort, order, directory) snapshot
+  // comparison can drop it. Its payload still parks in its own slot.
+  harness.settleWithMarker(1, "directory marker")
+  await flushControllerMicrotasks()
+  assert.ok(
+    !container.innerHTML.includes("directory marker"),
+    "a response whose directory snapshot no longer matches must not render even on a fresh token",
+  )
+
+  // Cache separation proof: re-entering the directory renders the parked
+  // payload with no third request.
+  controller.changeDirectory("D:/projects/example-alpha")
+  assert.equal(harness.pendingRequests.length, 2)
+  assert.ok(container.innerHTML.includes("directory marker"))
+  assert.ok(!container.innerHTML.includes("unfiltered late marker"))
+})
+
+test("renderDirectoryPanel drill-down: rows toggle the directory filter and the empty-string row stays non-interactive", async () => {
+  const { renderDirectoryPanel } = await import(
+    "../src/web/public/components/directory-panel.js"
+  )
+  const container = freshContainer()
+  const directoryStats = {
+    totalDirectories: 3,
+    totalSessions: 40,
+    directories: [
+      { directory: "D:/projects/example-alpha", name: "example-alpha", sessions: 20, steps: 900, lastActiveMs: null },
+      { directory: "D:/projects/example-beta", name: "example-beta", sessions: 15, steps: 400, lastActiveMs: null },
+      { directory: "", name: null, sessions: 5, steps: 100, lastActiveMs: null },
+    ],
+  }
+  const selectionEvents: Array<string | null> = []
+  const captureDirectorySelect = (directoryPath: string | null) => {
+    selectionEvents.push(directoryPath)
+  }
+
+  // Pure display usage (no callback): nothing is selectable.
+  renderDirectoryPanel(container, directoryStats)
+  assert.equal(
+    container.querySelectorAll(".directory-row.selectable").length,
+    0,
+    "without a callback the panel must stay a pure listing",
+  )
+
+  renderDirectoryPanel(container, directoryStats, null, captureDirectorySelect)
+  const selectableRows = container.querySelectorAll(".directory-row.selectable")
+  assert.equal(selectableRows.length, 2, "the empty-string directory row must not be drillable")
+  assert.equal(container.querySelector(".directory-row.selected"), null, "nothing is selected initially")
+
+  selectableRows[0]!.click()
+  assert.deepEqual(selectionEvents, ["D:/projects/example-alpha"], "a row click reports its directory")
+
+  // Re-render with that directory selected: the row gains .selected and a
+  // repeat click toggles the filter off (same toggle contract as the model
+  // table).
+  renderDirectoryPanel(container, directoryStats, "D:/projects/example-alpha", captureDirectorySelect)
+  const selectedRow = container.querySelector(".directory-row.selected")
+  assert.notEqual(selectedRow, null, "the active filter's row is highlighted")
+  assert.equal(selectedRow!.dataset.directory, "D:/projects/example-alpha")
+  selectedRow!.click()
+  assert.deepEqual(
+    selectionEvents,
+    ["D:/projects/example-alpha", null],
+    "clicking the selected row toggles the filter off",
+  )
+})
+
+test("renderSessionList labels the directory filter in the footnote and explains empty results per filter combination", async () => {
+  const { renderSessionList } = await import(
+    "../src/web/public/components/session-list.js"
+  )
+  const container = freshContainer()
+
+  // Non-empty filtered view: the footnote names the directory before the
+  // sort description; row order stays the payload order (filtering happened
+  // server-side).
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, "D:/projects/example-alpha")
+  assert.match(container.innerHTML, /目录：D:\/projects\/example-alpha/)
+  assert.match(container.innerHTML, /按最近更新时间倒序/)
+  const renderedRowIds = container
+    .querySelectorAll("tr.session-row")
+    .map((sessionRow) => sessionRow.dataset.sessionId)
+  assert.deepEqual(
+    renderedRowIds,
+    ["ses_example_alpha", "ses_example_bravo", "ses_example_charlie"],
+    "the directory filter is a server-side concern — rows arrive pre-filtered",
+  )
+
+  // Stacking: directory (server-side) and model (client-side) filters both
+  // appear in the footnote.
+  renderSessionList(container, sessionSortFixturePayload(), "glm-5.3", "time_updated", "desc", null, "D:/projects/example-alpha")
+  assert.match(container.innerHTML, /目录：D:\/projects\/example-alpha/)
+  assert.match(container.innerHTML, /已过滤掉 1 条非 glm-5\.3 会话/)
+
+  // Empty under a directory filter: directory-flavored empty state.
+  renderSessionList(container, { total: null, sessions: [] }, null, "time_updated", "desc", null, "D:/projects/example-gamma")
+  assert.match(container.innerHTML, /该目录没有会话记录/)
+
+  // Empty under both filters: the stacked message says which knobs to try.
+  renderSessionList(container, { total: null, sessions: [] }, "glm-5.3", "time_updated", "desc", null, "D:/projects/example-gamma")
+  assert.match(container.innerHTML, /没有 glm-5\.3 在该目录下的会话/)
+})
+
+test("getMockSessions mirrors the backend directory filter contract: exact match, miss = empty, absent/empty = no filter", async () => {
+  const { getMockSessions } = await import("../src/web/public/mock-data.js")
+  const unfilteredPage = getMockSessions()
+  const firstDirectory = unfilteredPage.sessions[0]!.directory
+  assert.ok(firstDirectory !== "", "fixture sessions must carry a non-empty directory for this test")
+
+  // null / "" are both "no filter" — identical to the unfiltered call.
+  assert.deepEqual(getMockSessions("time_updated", "desc", null), unfilteredPage)
+  assert.deepEqual(getMockSessions("time_updated", "desc", ""), unfilteredPage)
+
+  // Exact match: every returned session lives in that directory.
+  const filteredPage = getMockSessions("time_updated", "desc", firstDirectory)
+  assert.ok(filteredPage.sessions.length > 0)
+  assert.ok(filteredPage.sessions.every((session) => session.directory === firstDirectory))
+  assert.equal(
+    filteredPage.total,
+    null,
+    "a filtered page carries no total — the global mock count would mislabel it, and the real source is a bare array",
+  )
+
+  // No match = empty result (filter semantics, a legal 200 — not an error).
+  assert.deepEqual(
+    getMockSessions("time_updated", "desc", "D:/projects/example-no-such-directory"),
+    { total: null, sessions: [] },
+  )
+
+  // Sorting still applies within the filtered set (tokens desc → descending).
+  const tokensDescendingPage = getMockSessions("tokens", "desc", firstDirectory)
+  const tokenCounts = tokensDescendingPage.sessions.map((session) => session.tokens)
+  assert.deepEqual(tokenCounts, [...tokenCounts].sort((leftCount, rightCount) => rightCount - leftCount))
 })

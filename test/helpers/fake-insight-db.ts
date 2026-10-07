@@ -213,11 +213,23 @@ export function createFakeInsightDatabase(
       // the real node:sqlite :memory: fixture in
       // test/session-list-sorting.test.ts (发布清单 #2: SQL semantics
       // must be locked against real SQLite, not a fake JS mirror).
+      // The v0.7.0 directory drill-down IS mirrored here (exact match
+      // on the directory column) — only so filtered route tests get
+      // meaningful rows and the bind-parameter positions stay right;
+      // its authoritative semantics live in
+      // test/session-directory-filter.test.ts.
+      const hasDirectoryFilter = sql.includes("WHERE directory = ?")
       return {
         all: (...parameters: unknown[]) => {
-          const limit = Number(parameters[0]) || 50
-          const offset = Number(parameters[1]) || 0
-          return sessionRows.slice(offset, offset + limit)
+          const parameterList = hasDirectoryFilter ? parameters.slice(1) : parameters
+          const filterValue = hasDirectoryFilter ? String(parameters[0] ?? "") : null
+          const matchedSessionRows =
+            filterValue === null
+              ? sessionRows
+              : sessionRows.filter((sessionRow) => sessionRow.directory === filterValue)
+          const limit = Number(parameterList[0]) || 50
+          const offset = Number(parameterList[1]) || 0
+          return matchedSessionRows.slice(offset, offset + limit)
         },
         get: () => undefined,
       }

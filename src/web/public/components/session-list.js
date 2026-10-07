@@ -17,6 +17,11 @@
  * onSessionSortChange 回调与缓存路径，零新列零新组件）；默认态只显
  * 纯文本。本组件是导出函数，sortKey 不能假设来自白名单：查表一律
  * Object.hasOwn（P2-1），原型链键回退默认 label，不渲染继承函数串。
+ *
+ * v0.7.0 目录下钻：directoryFilter 非空时脚注标注当前过滤目录
+ * （服务端 ?directory= 精确匹配，行序仍等于 payload 序——过滤同样
+ * 归属服务端）；与 modelFilter 可叠加（目录=服务端参数、模型=客户
+ * 端行过滤，正交），空态文案按叠加组合给出。
  */
 
 import { formatTokens, formatDateTime, formatRelative, escapeHtml } from "../format.js";
@@ -68,10 +73,13 @@ function costCell(costValue) {
 /**
  * 渲染会话列表。
  * sessionPayload = { total, sessions: SessionSummary[] } 或 null。
- * modelFilter：非 null 时只显示该模型的会话。
+ * modelFilter：非 null 时只显示该模型的会话（客户端行过滤）。
  * sortKey / sortOrder：当前服务端排序（默认与后端契约默认一致）。
  * onSessionSortChange(nextSortKey, nextSortOrder)：列头点击回调，
  * 传 null 时列头不挂排序交互（纯展示用法）。
+ * directoryFilter（v0.7.0）：非 null/"" 时当前会话列表已由服务端按
+ * 该目录精确匹配过滤（?directory=），本组件只负责把它说出来——
+ * 过滤本身不在此发生，行序仍等于 payload 序。
  */
 export function renderSessionList(
   container,
@@ -80,6 +88,7 @@ export function renderSessionList(
   sortKey = DEFAULT_SESSION_SORT_KEY,
   sortOrder = DEFAULT_SESSION_SORT_ORDER,
   onSessionSortChange = null,
+  directoryFilter = null,
 ) {
   if (sessionPayload === null) {
     renderLoading(container, 4);
@@ -90,13 +99,28 @@ export function renderSessionList(
   const sessions = modelFilter === null
     ? allSessions
     : allSessions.filter((session) => session.modelId === modelFilter);
+  const hasDirectoryFilter = directoryFilter !== null && directoryFilter !== "";
 
   if (sessions.length === 0) {
-    renderEmpty(
-      container,
-      modelFilter === null ? "没有会话记录" : `没有 ${escapeHtml(modelFilter)} 的会话`,
-      modelFilter === null ? "数据库里还没有 session_v2 记录" : "这个模型在最近的会话里没出现过，试试取消过滤",
-    );
+    // 空态文案按过滤叠加组合给出：目录（服务端过滤）与模型（客户端
+    // 过滤）正交可叠加，各自「可能不是原因」要说清楚，避免空结果被
+    // 误读成"库是空的"。
+    let emptyTitle;
+    let emptyHint;
+    if (modelFilter !== null && hasDirectoryFilter) {
+      emptyTitle = `没有 ${escapeHtml(modelFilter)} 在该目录下的会话`;
+      emptyHint = "目录和模型的过滤是叠加的，试试取消其中一个";
+    } else if (modelFilter !== null) {
+      emptyTitle = `没有 ${escapeHtml(modelFilter)} 的会话`;
+      emptyHint = "这个模型在最近的会话里没出现过，试试取消过滤";
+    } else if (hasDirectoryFilter) {
+      emptyTitle = "该目录没有会话记录";
+      emptyHint = "这个目录在最近的会话里没出现过，试试点击其他目录行或取消过滤";
+    } else {
+      emptyTitle = "没有会话记录";
+      emptyHint = "数据库里还没有 session_v2 记录";
+    }
+    renderEmpty(container, emptyTitle, emptyHint);
     return;
   }
 
@@ -136,6 +160,8 @@ export function renderSessionList(
   const hiddenAfterFilterCount = allSessions.length - sessions.length;
   const remainingCount = Math.max(0, sessions.length - VISIBLE_ROWS);
   const footNoteParts = [];
+  // v0.7.0：目录过滤态先说目录（服务端参数，语义上先于客户端模型过滤）
+  if (hasDirectoryFilter) footNoteParts.push(`目录：${escapeHtml(directoryFilter)}`);
   if (modelFilter !== null) footNoteParts.push(`已过滤掉 ${hiddenAfterFilterCount} 条非 ${escapeHtml(modelFilter)} 会话`);
   if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);
   if (sessionPayload.total === null || sessionPayload.total === undefined) {

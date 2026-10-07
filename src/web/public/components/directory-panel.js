@@ -8,6 +8,12 @@
  * 与工具调用条形图同款比例语义——总步数占比会把尾部压成不可见线）。
  * directory / name 是外部字符串：innerHTML 与 title 属性插入点一律
  * escapeHtml；name 缺失时用 pathLastSegment(directory) 兜底切分。
+ *
+ * v0.7.0 目录→会话下钻：行点击过滤下方会话列表（服务端 ?directory=
+ * 精确匹配），交互范式对齐模型排行榜的 onModelSelected——点选中行
+ * 再点取消，选中行 .selected 高亮。空串目录行（v0.3 已知有 1 个）不
+ * 挂下钻：后端契约空串=不过滤，点击只会表现为「伪装成过滤的取消」，
+ * 不如不做；显示沿用既有空目录降级形态，不因交互能力改变外观。
  */
 
 import { formatCount, formatRelative, escapeHtml, pathLastSegment } from "../format.js";
@@ -16,8 +22,11 @@ import { renderEmpty } from "./state-views.js";
 /**
  * 渲染目录用量区块。directoryStats 为契约对象或 null。
  * totalDirectories 为 0 / 列表为空时渲染空占位（不是白块）。
+ * selectedDirectory：当前下钻过滤的目录（null = 无过滤）。
+ * onDirectorySelect(directory | null)：行点击回调（toggle 语义由本
+ * 组件内部处理，调用方只管应用）；传 null 时行不挂交互（纯展示用法）。
  */
-export function renderDirectoryPanel(container, directoryStats) {
+export function renderDirectoryPanel(container, directoryStats, selectedDirectory = null, onDirectorySelect = null) {
   const directoryRows = Array.isArray(directoryStats?.directories) ? directoryStats.directories : [];
   const totalDirectories = Number(directoryStats?.totalDirectories);
   if (directoryStats === null || directoryRows.length === 0 || !Number.isFinite(totalDirectories) || totalDirectories <= 0) {
@@ -41,10 +50,13 @@ export function renderDirectoryPanel(container, directoryStats) {
       ? formatRelative(lastActiveMs)
       : "—";
     const barWidthPercent = Math.max(2, (stepCount / topSteps) * 100);
+    // 空串目录不挂下钻（见头部注释）；有回调且非空串的行才可点。
+    const isSelectable = onDirectorySelect !== null && directoryPath !== "";
+    const isSelected = selectedDirectory !== null && directoryPath === selectedDirectory;
 
     return `
-      <div class="directory-row">
-        <div class="directory-name-cell" title="${escapeHtml(directoryPath)}">
+      <div class="directory-row${isSelectable ? " selectable" : ""}${isSelected ? " selected" : ""}"${isSelectable ? ` data-directory="${escapeHtml(directoryPath)}" title="点击过滤下方会话列表"` : ""}>
+        <div class="directory-name-cell"${isSelectable ? "" : ` title="${escapeHtml(directoryPath)}"`}>
           <span class="directory-name">${escapeHtml(displayName)}</span>
           <span class="directory-path">${escapeHtml(directoryPath)}</span>
         </div>
@@ -67,4 +79,14 @@ export function renderDirectoryPanel(container, directoryStats) {
     <div class="directory-meta">
       <span>共 <b class="num">${formatCount(totalDirectories)}</b> 个目录 · <b class="num">${formatCount(Number.isFinite(totalSessions) ? totalSessions : 0)}</b> 个会话${totalDirectories > directoryRows.length ? ` · 显示前 ${directoryRows.length} 个` : ""}</span>
     </div>`;
+
+  if (onDirectorySelect !== null) {
+    for (const directoryRowElement of container.querySelectorAll(".directory-row.selectable")) {
+      directoryRowElement.addEventListener("click", () => {
+        // toggle 语义同模型排行榜：点选中行 → null（取消过滤）
+        const clickedDirectory = directoryRowElement.dataset.directory;
+        onDirectorySelect(clickedDirectory === selectedDirectory ? null : clickedDirectory);
+      });
+    }
+  }
 }

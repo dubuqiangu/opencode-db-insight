@@ -13,7 +13,10 @@
  *                                  v0.4.0 起支持 ?sort=/?order= 服务端排序：
  *                                  sort ∈ time_updated(默认)|time_created|
  *                                  tokens|cost|title，order ∈ desc(默认)|asc，
- *                                  非法值后端回退默认不发 400；响应体零变化）
+ *                                  非法值后端回退默认不发 400；响应体零变化；
+ *                                  v0.7.0 起支持 ?directory=<项目目录> 精确
+ *                                  匹配过滤——缺省/空=不过滤，匹配不到=空数组
+ *                                  200（过滤语义，合法结果））
  *   GET /api/session/:id/messages        → SessionMessageRecord[]
  *   GET /api/session/:id/system-prompt   → Record<instructionKey, text> | 404
  *   GET /api/hour-heatmap?days=90        → 168 项 {weekday,hour,steps}（零填充）
@@ -215,19 +218,25 @@ export async function fetchAgents() {
   return Array.isArray(agentStats) ? agentStats : [];
 }
 
-/** GET /api/sessions?limit&offset&sort&order —— 会话列表（真实源 total 未知）。 */
+/**
+ * GET /api/sessions?limit&offset&sort&order&directory —— 会话列表（真实源
+ * total 未知）。directory 为 null/"" 时不携带该参数：默认请求路径与 0.6.1
+ * 逐字节一致（后端对缺省与空串同为「不过滤」，两端归一）。
+ */
 export async function fetchSessions(
   limit = 15,
   offset = 0,
   sortKey = DEFAULT_SESSION_SORT_KEY,
   sortOrder = DEFAULT_SESSION_SORT_ORDER,
+  directory = null,
 ) {
-  if (USE_MOCK) return resolveWithLatency(getMockSessions(sortKey, sortOrder));
+  if (USE_MOCK) return resolveWithLatency(getMockSessions(sortKey, sortOrder, directory));
   // 默认组合不携带 sort/order 参数：默认请求路径与 0.4.1 逐字节一致
   // （后端对缺省与显式默认解析结果相同，省参数还少一次字符串拼接）。
   let requestPath = `/sessions?limit=${limit}&offset=${offset}`;
   if (sortKey !== DEFAULT_SESSION_SORT_KEY) requestPath += `&sort=${encodeURIComponent(sortKey)}`;
   if (sortOrder !== DEFAULT_SESSION_SORT_ORDER) requestPath += `&order=${encodeURIComponent(sortOrder)}`;
+  if (directory !== null && directory !== "") requestPath += `&directory=${encodeURIComponent(directory)}`;
   const sessionPage = await fetchJson(requestPath);
   return normalizeSessionPage(sessionPage);
 }

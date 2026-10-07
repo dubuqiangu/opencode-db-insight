@@ -41,6 +41,7 @@ const TREND_CALENDAR_WINDOW_DAYS = MAX_TREND_DAYS;
 const state = {
   range: "30",
   modelFilter: null,
+  directoryFilter: null,
   healthStatus: "连接中…",
   cache: {
     overview: undefined,
@@ -204,12 +205,13 @@ const SESSION_LIST_PAGE_LIMIT = 15;
  * 排序状态/缓存/序列守卫都在 session-sort-controller 里；这里只注入：
  * 单页请求闭包（limit/offset 钉死，见该模块头部 N-2 注释）、模型过滤
  * 只读访问器、顶栏失败计数回调。渲染时机（初始/列头/重置/过滤/主题）
- * 全部转交控制器。
+ * 全部转交控制器。v0.7.0：请求闭包透传 directory（目录下钻维度，
+ * 空串/缺省在 fetchSessions 内归一为不携带参数）。
  */
 const sessionSortController = createSessionSortController({
   containerElement: sessionListElement,
-  fetchSessionsPage: (sortKey, sortOrder) =>
-    fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder),
+  fetchSessionsPage: (sortKey, sortOrder, directory) =>
+    fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder, directory),
   getModelFilter: () => state.modelFilter,
   markSectionSucceeded: () => markSection("sessions", true),
   markSectionFailed: () => markSection("sessions", false),
@@ -262,7 +264,7 @@ async function loadTodoSection() {
 async function loadDirectorySection() {
   try {
     state.cache.directories = await fetchDirectoryStats(10);
-    renderDirectoryPanel(directoryPanelElement, state.cache.directories);
+    renderDirectoryPanel(directoryPanelElement, state.cache.directories, state.directoryFilter, onDirectorySelected);
     markSection("directories", true);
   } catch (error) {
     renderError(directoryPanelElement, error, loadDirectorySection);
@@ -270,7 +272,7 @@ async function loadDirectorySection() {
   }
 }
 
-/* ---------- 模型下钻过滤 ---------- */
+/* ---------- 模型 / 目录下钻过滤 ---------- */
 function onModelSelected(modelId) {
   state.modelFilter = modelId;
   renderModelTable(modelTableElement, state.cache.models ?? [], state.modelFilter, onModelSelected);
@@ -278,19 +280,47 @@ function onModelSelected(modelId) {
   renderSessionFilterChip();
 }
 
+/**
+ * 目录下钻（v0.7.0）：点目录面板行 → 会话列表按该目录过滤（服务端
+ * ?directory= 精确匹配），toggle 语义同模型排行榜（点选中行 → null）。
+ * 与模型过滤正交可叠加：目录走服务端参数（控制器缓存键扩维），模型
+ * 走客户端行过滤（renderCurrent 即时生效）。
+ */
+function onDirectorySelected(directoryPath) {
+  state.directoryFilter = directoryPath;
+  renderDirectoryPanel(directoryPanelElement, state.cache.directories ?? null, state.directoryFilter, onDirectorySelected);
+  sessionSortController.changeDirectory(directoryPath);
+  renderSessionFilterChip();
+}
+
+/**
+ * 会话面板头部的过滤态可视化：目录与模型各一枚 filter-chip，各带独立
+ * 清除 ✕（形态与既有模型 chip 完全一致，v0.7.0 只是把它扩成枚举）。
+ */
 function renderSessionFilterChip() {
-  if (state.modelFilter === null) {
-    sessionFilterChipElement.innerHTML = "";
-    return;
+  const chipParts = [];
+  if (state.directoryFilter !== null) {
+    chipParts.push(`
+      <span class="filter-chip">目录：${escapeHtml(state.directoryFilter)}
+        <button type="button" data-clear-filter="directory" title="取消目录过滤" aria-label="取消目录过滤">✕</button>
+      </span>`);
   }
-  sessionFilterChipElement.innerHTML = `
-    <span class="filter-chip">模型：${escapeHtml(state.modelFilter)}
-      <button type="button" title="取消过滤" aria-label="取消模型过滤">✕</button>
-    </span>`;
-  sessionFilterChipElement.querySelector("button").addEventListener("click", () => {
-    state.modelFilter = null;
-    onModelSelected(null);
-  });
+  if (state.modelFilter !== null) {
+    chipParts.push(`
+      <span class="filter-chip">模型：${escapeHtml(state.modelFilter)}
+        <button type="button" data-clear-filter="model" title="取消过滤" aria-label="取消模型过滤">✕</button>
+      </span>`);
+  }
+  sessionFilterChipElement.innerHTML = chipParts.join("");
+  for (const clearButton of sessionFilterChipElement.querySelectorAll("button[data-clear-filter]")) {
+    clearButton.addEventListener("click", () => {
+      if (clearButton.dataset.clearFilter === "directory") {
+        onDirectorySelected(null);
+      } else {
+        onModelSelected(null);
+      }
+    });
+  }
 }
 
 /* ---------- 时间范围 ---------- */
@@ -372,7 +402,7 @@ function init() {
     if (state.cache.compaction !== undefined) renderCompactionPanel(compactionPanelElement, state.cache.compaction);
     if (state.cache.sessionSurvival !== undefined) renderSessionSurvivalCard(sessionSurvivalElement, state.cache.sessionSurvival);
     if (state.cache.todo !== undefined) renderTodoCard(todoCardElement, state.cache.todo);
-    if (state.cache.directories !== undefined) renderDirectoryPanel(directoryPanelElement, state.cache.directories);
+    if (state.cache.directories !== undefined) renderDirectoryPanel(directoryPanelElement, state.cache.directories, state.directoryFilter, onDirectorySelected);
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
     sessionSortController.renderCurrentIfLoaded();

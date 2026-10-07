@@ -206,3 +206,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] P2-1 costCell 降级判定挪到舍入之后：0.004 等亚分值与精确 0 同走 "—"，不再渲染 "$0"（一行修复，orchestrator 直接执行）；夹具补 ses_example_foxtrot cost=0.004 + 断言永不出现 "$0"
 - [x] 版本 0.6.1 三处同步；258/258（断言增强不增测试数）；check 0
 - 按"审查收敛备忘"，0.6.1 为 oracle 处方修复（一行 + 断言锁），不再派下一代审查
+
+## v0.7.0 目录→会话下钻过滤（push #20，2026-10-07，双车道并行）
+
+- [x] 用户拍板里程碑：点目录面板行 → 会话列表按该项目目录过滤（全栈）
+- [x] 契约钉死：?directory= 精确匹配参数化 WHERE；缺省/空=无过滤（默认 SQL 与 0.6.1 逐字节一致）；miss=空数组 200（过滤语义≠回退语义）；缓存键 sessions:[limit,offset,sort,order,directory]；URLSearchParams 解码
+- [x] 后端（fix-15）：SESSION_LIST_SELECT_SQL/SESSION_DIRECTORY_FILTER_SQL 单点常量；querySessionList 第 6 参 directoryValue；真实 SQLite 夹具 4 测试（精确子集/特殊字符/注入面字节锁/叠加分页）+ api-routes 3（缓存维度/503/端到端）；fake 最小目录镜像
+- [x] 前端（des-14）：目录行可点 toggle 对齐模型下钻；空串行不挂下钻（自洽决定）；chips 枚举化（目录/模型叠加独立清除）；controller 三维扩维 sort:order:directory（键无碰撞论证）+ 三维竞态快照守卫（token 匹配目录漂移窗口钉住）；mock 契约对齐（miss=空、过滤态 total=null）
+- [x] 测试 258 → 269（+11：后端 7 + 组件 4）
+- [x] 收敛复核：版本 0.7.0 三处同步（协调方统一 bump）+ 合并 269/269 独立复跑 + check 0 + 真实库探针 9/9（真实目录 575 会话命中行行同目录/空串=缺省/miss=空 200/过滤×排序叠加/注入形值零泄漏）
+- [x] 文档：CHANGELOG 0.7.0
+- [ ] oracle 增量审查 0.7.0 delta → 有 P0/P1 则修后推 0.7.1
