@@ -5,58 +5,27 @@
  *
  * 消息 `data` 的解释口径与 src/export/message-roles.ts 逐条对齐
  * （工具名 name→tool 回退；输出 state.metadata.output→state.content 回退）。
- * 大会话分页：visible 消息 >200 条时先渲染 200 条，"加载更多"逐块追加。
+ * 文本提取函数自 v0.10.0 起共享自 replay-message-text.js（渲染与搜索
+ * 共用同一出处）。大会话分页：visible 消息 >200 条时先渲染 200 条，
+ * "加载更多"逐块追加。
  */
 
 import { formatDateTime, escapeHtml } from "../format.js";
 import { buildTurnCostBarElement } from "./replay-turn-bar.js";
+import {
+  asRecord,
+  partText,
+  readMessageText,
+  readToolName,
+  readToolOutput,
+  isVisibleReplayMessageType,
+} from "./replay-message-text.js";
 
 const DEFAULT_PAGE_SIZE = 200;
 /** 单个工具块（参数+输出）超过此字符数默认折叠。 */
 const TOOL_BLOCK_COLLAPSE_THRESHOLD = 4000;
 
 const ASSISTANT_MODEL_COLORS = ["var(--m1)", "var(--m2)", "var(--m6)", "var(--m4)"];
-
-function readMessageText(dataRecord) {
-  if (dataRecord === null || typeof dataRecord !== "object") return "";
-  const textField = dataRecord.text;
-  if (typeof textField === "string") return textField;
-  if (Array.isArray(dataRecord.content)) {
-    return dataRecord.content
-      .map((part) => partText(part))
-      .filter((text) => text !== "")
-      .join("\n\n");
-  }
-  return "";
-}
-
-function partText(contentPart) {
-  if (contentPart === null || typeof contentPart !== "object") return "";
-  if (String(contentPart.type) !== "text") return "";
-  return typeof contentPart.text === "string" ? contentPart.text : "";
-}
-
-function readToolName(toolPartRecord) {
-  let toolName = typeof toolPartRecord.name === "string" ? toolPartRecord.name : "";
-  if (toolName === "") toolName = typeof toolPartRecord.tool === "string" ? toolPartRecord.tool : "";
-  return toolName === "" ? "unknown" : toolName;
-}
-
-function readToolOutput(stateRecord) {
-  if (stateRecord === null || typeof stateRecord !== "object") return "";
-  const metadata = stateRecord.metadata;
-  if (metadata !== null && typeof metadata === "object" && typeof metadata.output === "string" && metadata.output !== "") {
-    return metadata.output;
-  }
-  if (Array.isArray(stateRecord.content)) {
-    return stateRecord.content.map((part) => partText(part)).filter((text) => text !== "").join("\n\n");
-  }
-  return "";
-}
-
-function asRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-}
 
 /* ---------------- 单条消息节点 ---------------- */
 
@@ -235,18 +204,20 @@ function buildNoticeNode(messageRecord) {
 
 /* ---------------- 时间线容器 + 分页 ---------------- */
 
-function isIgnoredMessageType(messageType) {
-  return messageType === "idle" || messageType === "synthetic";
-}
-
 /**
  * 渲染角色时间线，返回分页控制器：
- *   { appendNextChunk(): boolean, hasMore, visibleCount }
+ *   { appendNextChunk(): boolean, hasMore, visibleCount,
+ *     renderedCount, nodeAt(index) }
  * messageRecords 需已按 seq 升序（后端 ORDER BY seq ASC）。
+ * v0.10.0 增 renderedCount / nodeAt：会话内搜索（replay-search.js）的
+ * 命中定位需要知道「DOM 渲染到第几条」并按可见序号取节点——时间线第 i
+ * 个子节点恒等于第 i 条可见消息（buildMessageNode 每条消息恰好产出一个
+ * 节点），与 buildReplaySearchIndex 的第 i 项对齐（见
+ * replay-message-text.js 头部的对齐不变量）。
  */
 export function renderTimeline(container, messageRecords, pageSize = DEFAULT_PAGE_SIZE) {
   const visibleRecords = (Array.isArray(messageRecords) ? messageRecords : [])
-    .filter((record) => !isIgnoredMessageType(String(record.type ?? "")));
+    .filter((record) => isVisibleReplayMessageType(String(record.type ?? "")));
 
   const listElement = document.createElement("div");
   listElement.className = "replay-timeline";
@@ -259,6 +230,13 @@ export function renderTimeline(container, messageRecords, pageSize = DEFAULT_PAG
   const controller = {
     hasMore: false,
     visibleCount: visibleRecords.length,
+    get renderedCount() {
+      return renderedCount;
+    },
+    /** 时间线第 index 个子节点（未渲染区间返回 null）。 */
+    nodeAt(index) {
+      return index >= 0 && index < renderedCount ? listElement.children[index] : null;
+    },
     appendNextChunk() {
       const chunkEnd = Math.min(renderedCount + pageSize, visibleRecords.length);
       const fragment = document.createDocumentFragment();

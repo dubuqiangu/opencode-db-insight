@@ -42,12 +42,35 @@ class StubElement {
   textContent = ""
   title = ""
   hidden = false
+  /** Form control value (the v0.10.0 replay search input is the first user). */
+  value = ""
   private innerHtmlText = ""
   private stubChildren: StubElement[] = []
-  private eventListeners = new Map<string, Array<() => void>>()
+  private eventListeners = new Map<string, Array<(eventPayload?: unknown) => void>>()
 
   constructor(tagName: string) {
     this.tagName = tagName
+  }
+
+  /**
+   * Minimal classList (the v0.10.0 replay search paints node-level hit
+   * classes). Backed by the className field, variadic add/remove like the
+   * real DOMTokenList.
+   */
+  classList = {
+    add: (...classTokens: string[]) => {
+      for (const classToken of classTokens) {
+        if (!this.classTokenList().includes(classToken)) {
+          this.className = `${this.className} ${classToken}`.trim()
+        }
+      }
+    },
+    remove: (...classTokens: string[]) => {
+      this.className = this.classTokenList()
+        .filter((classToken) => !classTokens.includes(classToken))
+        .join(" ")
+    },
+    contains: (classToken: string) => this.classTokenList().includes(classToken),
   }
 
   set innerHTML(htmlText: string) {
@@ -63,25 +86,43 @@ class StubElement {
   }
 
   appendChild(childElement: StubElement): StubElement {
+    // Real-DOM semantics: appending a DocumentFragment appends its children.
+    if (childElement.tagName === "#document-fragment") {
+      for (const fragmentChild of childElement.stubChildren) {
+        this.stubChildren.push(fragmentChild)
+      }
+      childElement.stubChildren = []
+      return childElement
+    }
     this.stubChildren.push(childElement)
     return childElement
   }
 
-  addEventListener(eventType: string, listener: () => void): void {
+  addEventListener(eventType: string, listener: (eventPayload?: unknown) => void): void {
     const typedListeners = this.eventListeners.get(eventType) ?? []
     typedListeners.push(listener)
     this.eventListeners.set(eventType, typedListeners)
   }
 
+  /** Fire all listeners registered for an event type (render-time bindings). */
+  fire(eventType: string, eventPayload?: unknown): void {
+    for (const eventListener of this.eventListeners.get(eventType) ?? []) {
+      eventListener(eventPayload)
+    }
+  }
+
   /** Fire all listeners registered for "click" (render-time bindings only). */
   click(): void {
-    for (const clickListener of this.eventListeners.get("click") ?? []) {
-      clickListener()
-    }
+    this.fire("click")
   }
 
   classTokenList(): string[] {
     return this.className.split(/\s+/).filter((classToken) => classToken !== "")
+  }
+
+  /** Real-DOM Element.children semantics (replay-timeline.nodeAt indexes it). */
+  get children(): StubElement[] {
+    return this.stubChildren
   }
 
   /**
@@ -156,6 +197,7 @@ function installDomShim(): void {
     documentElement: new StubElement("html"),
     createElement: (tagName: string) => new StubElement(tagName),
     createElementNS: (_namespaceUri: string, tagName: string) => new StubElement(tagName),
+    createDocumentFragment: () => new StubElement("#document-fragment"),
     getElementById: () => null,
   }
   globalThis.document = documentStub as unknown as Document
@@ -1596,6 +1638,314 @@ test("session-sort-controller: inside a time-window view every dimension switch 
   harness.settleWithMarker(5, "model filter in range marker")
   await flushControllerMicrotasks()
   assert.ok(container.innerHTML.includes("model filter in range marker"))
+})
+
+/* ------------- replay in-session search (v0.10.0) ------------- */
+
+/** Fictional SessionMessageRecord fixture (example-alpha series only). */
+function replayMessageRecord(recordSeq: number, recordType: string, recordData: Record<string, unknown>) {
+  const timeCreated = 1_700_000_000_000 + recordSeq * 60_000
+  return {
+    id: `msg_example_alpha_${String(recordSeq).padStart(4, "0")}`,
+    sessionId: "ses_example_alpha",
+    type: recordType,
+    seq: recordSeq,
+    timeCreated,
+    timeUpdated: timeCreated + 1_000,
+    data: recordData,
+  }
+}
+
+const replaySleep = (delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+
+test("buildReplaySearchIndex extracts exactly the rendered search scope, case-insensitively, and skips unrendered types", async () => {
+  const { buildReplaySearchIndex } = await import(
+    "../src/web/public/components/replay-message-text.js"
+  )
+  const searchRecords = [
+    replayMessageRecord(0, "user", { text: "user 正文里埋了 needle-user 一词" }),
+    replayMessageRecord(1, "assistant", {
+      model: { id: "glm-5.3" },
+      content: [
+        { type: "reasoning", text: "思考段里埋了 needle-reason" },
+        { type: "tool", name: "needle-tool", state: { status: "completed", input: { command: "grep needle-input ./src/example" }, metadata: { output: "输出里埋了 needle-output" } } },
+        { type: "text", text: "第一段正文没有目标词" },
+        { type: "text", text: "第二段正文才有 needle-text" },
+      ],
+    }),
+    replayMessageRecord(2, "idle", { duration: 300_000, text: "idle 里的 needle 不可搜（不渲染）" }),
+    replayMessageRecord(3, "synthetic", { text: "synthetic 里的 needle 不可搜" }),
+    replayMessageRecord(4, "system", { text: "system 提示词里的 needle 不可搜（截断渲染）" }),
+    replayMessageRecord(5, "compaction", { status: "completed", reason: "auto", summary: "压缩摘要里的 needle 不可搜" }),
+    replayMessageRecord(6, "user", { text: "这条完全没有目标词" }),
+  ]
+
+  // idle/synthetic drop out of the index (they drop out of the timeline too);
+  // notices stay indexed (they render) but carry an empty haystack — the six
+  // contract categories are the only searchable text.
+  const searchIndex = buildReplaySearchIndex(searchRecords)
+  assert.equal(searchIndex.length, 5, "user / assistant / system / compaction / user — same filter as renderTimeline")
+  assert.equal(searchIndex[2]!.haystack, "", "system notices are not in the search scope")
+  assert.equal(searchIndex[3]!.haystack, "", "compaction notices are not in the search scope")
+
+  const matchingIndexesFor = (query: string) => searchIndex
+    .map((indexEntry, recordIndex) => (indexEntry.haystack.includes(query.toLowerCase()) ? recordIndex : -1))
+    .filter((recordIndex) => recordIndex !== -1)
+
+  // The six searchable categories, one distinct needle each.
+  assert.deepEqual(matchingIndexesFor("needle-user"), [0], "user body text is searchable")
+  assert.deepEqual(matchingIndexesFor("needle-reason"), [1], "assistant reasoning part is searchable")
+  assert.deepEqual(matchingIndexesFor("needle-tool"), [1], "tool name is searchable")
+  assert.deepEqual(matchingIndexesFor("needle-input"), [1], "tool input is searchable — the probe-found gap (rendered params pre, previously invisible to search)")
+  assert.deepEqual(matchingIndexesFor("needle-output"), [1], "tool output is searchable")
+  assert.deepEqual(matchingIndexesFor("needle-text"), [1], "assistant text parts are searchable — multi-part content is joined into one view")
+  assert.deepEqual(matchingIndexesFor("needle-不存在"), [], "no haystack match → empty hit list")
+
+  // Case-insensitivity is "both sides lowercased": the haystack is stored
+  // lowercase, the caller lowercases the query (mirrors replay-search.js).
+  assert.ok(searchIndex[0]!.haystack.includes("NEEDLE-USER".toLowerCase()))
+  assert.ok(!searchIndex[0]!.haystack.includes("NEEDLE-USER"), "haystack itself must be pre-lowercased")
+})
+
+test("readToolInput mirrors the rendered tool-params display string exactly", async () => {
+  const { readToolInput } = await import("../src/web/public/components/replay-message-text.js")
+
+  // Object input: the params <pre> renders JSON.stringify(input, null, 2) —
+  // the haystack must carry that same serialized form.
+  const objectInput = { command: "grep example", path: "~/projects/example-alpha" }
+  assert.equal(
+    readToolInput({ input: objectInput }),
+    JSON.stringify(objectInput, null, 2),
+    "object input is the pretty-printed JSON the params block shows",
+  )
+
+  // String input: the render quotes it (JSON literal), not the bare string.
+  assert.equal(readToolInput({ input: "bash -c echo example" }), '"bash -c echo example"')
+  assert.equal(readToolInput({ input: 42 }), "42", "scalar inputs follow the same JSON.stringify rule")
+
+  // Missing input: the render skips the params pre entirely → empty string.
+  assert.equal(readToolInput({ status: "completed" }), "", "absent input renders no params block")
+  assert.equal(readToolInput({ input: null }), "", "null input renders no params block")
+  assert.equal(readToolInput({ input: undefined }), "", "undefined input renders no params block")
+  assert.equal(readToolInput(null), "", "absent state renders no params block")
+})
+
+test("buildReplaySearchBar renders the find bar, counts hits across all messages, navigates and clears state", async () => {
+  const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
+  const { buildReplaySearchBar, REPLAY_SEARCH_DEBOUNCE_MS } = await import(
+    "../src/web/public/components/replay-search.js"
+  )
+  assert.equal(REPLAY_SEARCH_DEBOUNCE_MS, 200, "production debounce stays at 200ms unless deliberately changed")
+
+  const container = freshContainer()
+  const searchRecords = [0, 1, 2, 3, 4].map((recordSeq) =>
+    replayMessageRecord(recordSeq, "user", {
+      text: recordSeq % 2 === 0 ? `needle 第 ${recordSeq} 处正文` : `普通正文 ${recordSeq}`,
+    }),
+  )
+  const paginationController = renderTimeline(container, searchRecords, 200)
+  const replaySearch = buildReplaySearchBar({
+    paginationController,
+    messageRecords: searchRecords,
+    debounceMs: 5,
+  })
+  container.appendChild(replaySearch.element)
+
+  const searchInput = container.querySelectorAll("input.replay-search-input")[0]!
+  const navButtons = container.querySelectorAll("button.replay-search-nav")
+  const hitCountLabel = container.querySelectorAll("span.replay-search-count")[0]!
+  assert.equal(navButtons.length, 2, "prev / next navigation buttons")
+  assert.equal(hitCountLabel.textContent, "", "no count before the first search")
+
+  // Type-to-search through the debounced input path; the query is uppercase
+  // to pin case-insensitivity end to end.
+  searchInput.value = "NEEDLE"
+  searchInput.fire("input")
+  await replaySleep(20)
+  assert.equal(hitCountLabel.textContent, "3 处命中 · 第 1 处", "count spans all messages, not just the visible page")
+  assert.equal(container.querySelectorAll(".replay-hit").length, 3)
+  assert.equal(container.querySelectorAll(".replay-hit-current").length, 1)
+  assert.ok(paginationController.nodeAt(0)!.classTokenList().includes("replay-hit-current"))
+  assert.ok(paginationController.nodeAt(2)!.classTokenList().includes("replay-hit"))
+  assert.ok(!paginationController.nodeAt(1)!.classTokenList().includes("replay-hit"))
+
+  // Next / prev buttons step the current marker (and wrap around the ends).
+  navButtons[1]!.click()
+  assert.equal(hitCountLabel.textContent, "3 处命中 · 第 2 处")
+  assert.ok(paginationController.nodeAt(2)!.classTokenList().includes("replay-hit-current"))
+  assert.ok(!paginationController.nodeAt(0)!.classTokenList().includes("replay-hit-current"))
+  navButtons[0]!.click()
+  assert.ok(paginationController.nodeAt(0)!.classTokenList().includes("replay-hit-current"))
+
+  // Enter / Shift+Enter keyboard stepping, Escape exits the search state.
+  searchInput.fire("keydown", { key: "Enter" })
+  assert.ok(paginationController.nodeAt(2)!.classTokenList().includes("replay-hit-current"))
+  searchInput.fire("keydown", { key: "Enter", shiftKey: true })
+  assert.ok(paginationController.nodeAt(0)!.classTokenList().includes("replay-hit-current"))
+  searchInput.fire("keydown", { key: "Escape" })
+  assert.equal(searchInput.value, "", "Escape clears the input")
+  assert.equal(container.querySelectorAll(".replay-hit").length, 0, "all highlights cleared")
+  assert.equal(hitCountLabel.textContent, "", "count hidden after exit")
+
+  // Whitespace-only input is also "exit the search state" (contract).
+  searchInput.value = "needle"
+  searchInput.fire("input")
+  await replaySleep(20)
+  assert.equal(container.querySelectorAll(".replay-hit").length, 3)
+  searchInput.value = "   "
+  searchInput.fire("input")
+  await replaySleep(20)
+  assert.equal(container.querySelectorAll(".replay-hit").length, 0, "whitespace-only input restores the full view")
+  assert.equal(hitCountLabel.textContent, "")
+
+  // No-hit query states itself plainly and navigation no-ops.
+  searchInput.value = "不存在的词"
+  searchInput.fire("input")
+  await replaySleep(20)
+  assert.equal(hitCountLabel.textContent, "无命中")
+  navButtons[1]!.click()
+  assert.equal(hitCountLabel.textContent, "无命中")
+})
+
+test("a hit beyond the rendered pagination window is counted and navigation appends the timeline to reach it", async () => {
+  const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
+  const { buildReplaySearchBar } = await import("../src/web/public/components/replay-search.js")
+
+  const container = freshContainer()
+  const searchRecords = []
+  for (let recordSeq = 0; recordSeq < 210; recordSeq += 1) {
+    searchRecords.push(replayMessageRecord(recordSeq, "user", {
+      text: recordSeq === 205 ? "分页区外的 deep-needle 命中" : `普通填充行 ${recordSeq}`,
+    }))
+  }
+  const paginationController = renderTimeline(container, searchRecords, 200)
+  assert.equal(paginationController.renderedCount, 200)
+  assert.equal(paginationController.hasMore, true)
+
+  const replaySearch = buildReplaySearchBar({
+    paginationController,
+    messageRecords: searchRecords,
+    debounceMs: 5,
+  })
+  container.appendChild(replaySearch.element)
+  const searchInput = container.querySelectorAll("input.replay-search-input")[0]!
+  const hitCountLabel = container.querySelectorAll("span.replay-search-count")[0]!
+
+  searchInput.value = "deep-needle"
+  searchInput.fire("input")
+  await replaySleep(20)
+
+  // The hit lives at visible index 205 — beyond the first 200-node page —
+  // yet it is counted (index-based, independent of the rendered window) and
+  // the navigation drove appendNextChunk() through it.
+  assert.equal(hitCountLabel.textContent, "1 处命中 · 第 1 处")
+  assert.equal(paginationController.renderedCount, 210, "navigation appended chunks until the target node exists")
+  assert.equal(paginationController.hasMore, false)
+  assert.equal(container.querySelectorAll(".replay-node").length, 210)
+  assert.ok(paginationController.nodeAt(205)!.classTokenList().includes("replay-hit"))
+  assert.ok(paginationController.nodeAt(205)!.classTokenList().includes("replay-hit-current"))
+  assert.equal(container.querySelectorAll(".replay-hit").length, 1)
+})
+
+test("renderSessionReplay mounts the search bar and a session switch leaves no stale search state behind", async () => {
+  const { renderSessionReplay } = await import(
+    "../src/web/public/components/session-replay.js"
+  )
+
+  const alphaRecords = [
+    replayMessageRecord(0, "user", { text: "alpha 会话里的 needle 正文" }),
+    replayMessageRecord(1, "assistant", { model: { id: "glm-5.3" }, content: [{ type: "text", text: "alpha 回复正文" }] }),
+  ]
+  const betaRecords = [
+    replayMessageRecord(0, "user", { text: "beta 会话正文，没有目标词" }),
+  ]
+
+  const savedFetch = globalThis.fetch
+  globalThis.fetch = (async (fetchInput: unknown) => {
+    const requestUrl = String(fetchInput)
+    if (!requestUrl.includes("/messages")) {
+      // system-prompt / summary degrade to 404 → omitted panel / fallback title
+      return { ok: false, status: 404, json: async () => ({}) }
+    }
+    const messageRecords = requestUrl.includes("ses_example_alpha") ? alphaRecords : betaRecords
+    return { ok: true, status: 200, json: async () => messageRecords }
+  }) as unknown as typeof fetch
+
+  try {
+    const container = freshContainer()
+    await renderSessionReplay(container, "ses_example_alpha")
+    assert.equal(container.querySelectorAll("input.replay-search-input").length, 1, "the find bar is mounted in the replay page")
+
+    const searchInput = container.querySelectorAll("input.replay-search-input")[0]!
+    const hitCountLabel = container.querySelectorAll("span.replay-search-count")[0]!
+    searchInput.value = "needle"
+    searchInput.fire("input")
+    await replaySleep(300) // production debounce path (200ms) through the page-level wiring
+    assert.equal(hitCountLabel.textContent, "1 处命中 · 第 1 处")
+    assert.equal(container.querySelectorAll(".replay-hit").length, 1)
+
+    // Switching sessions re-renders the whole view: the previous session's
+    // search state (needle, highlights, count) must not survive.
+    await renderSessionReplay(container, "ses_example_beta")
+    assert.equal(container.querySelectorAll(".replay-hit").length, 0, "no stale highlights from the previous session")
+    assert.equal(container.querySelectorAll(".replay-hit-current").length, 0)
+    const freshCountLabel = container.querySelectorAll("span.replay-search-count")[0]!
+    const freshSearchInput = container.querySelectorAll("input.replay-search-input")[0]!
+    assert.equal(freshCountLabel.textContent, "", "the fresh session starts with a clean search bar")
+    assert.equal(freshSearchInput.value, "", "the fresh session starts with an empty input")
+  } finally {
+    globalThis.fetch = savedFetch
+  }
+})
+
+test("the mock replay fixture drives the search end to end, including hits beyond the first page", async () => {
+  const { getMockSessionMessages } = await import("../src/web/public/mock-replay-data.js")
+  const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
+  const { buildReplaySearchBar } = await import("../src/web/public/components/replay-search.js")
+
+  const container = freshContainer()
+  const mockRecords = getMockSessionMessages("ses_example_replay_mock")
+  const paginationController = renderTimeline(container, mockRecords, 200)
+  const replaySearch = buildReplaySearchBar({
+    paginationController,
+    messageRecords: mockRecords,
+    debounceMs: 5,
+  })
+  container.appendChild(replaySearch.element)
+
+  const searchInput = container.querySelectorAll("input.replay-search-input")[0]!
+  const navButtons = container.querySelectorAll("button.replay-search-nav")
+  const hitCountLabel = container.querySelectorAll("span.replay-search-count")[0]!
+
+  // Direct fixture facts (no extraction reuse): user prompts carrying 时区
+  // repeat at every 15th message — 16 user-body hits across the 228-message
+  // fixture. Reasoning passages carry more (「本地时区为东八区」), so the
+  // total comes off the count label itself and the walk below is generic.
+  const userHitsWithTimeZone = mockRecords.filter(
+    (mockRecord) => mockRecord.type === "user" && String(mockRecord.data?.text ?? "").includes("时区"),
+  ).length
+  assert.equal(userHitsWithTimeZone, 16, "fixture shape pin: USER_PROMPTS[0] recurs at every 15th user slot")
+
+  searchInput.value = "时区"
+  searchInput.fire("input")
+  await replaySleep(20)
+  const firstCountMatch = hitCountLabel.textContent.match(/^(\d+) 处命中 · 第 1 处$/)
+  assert.ok(firstCountMatch !== null, `mock mode previews the full search semantics: ${hitCountLabel.textContent}`)
+  const totalHitCount = Number(firstCountMatch![1])
+  assert.ok(totalHitCount >= 16, "user-body hits are counted; reasoning passages add the rest")
+  assert.ok(paginationController.renderedCount < paginationController.visibleCount, "first hit is early — the tail stays unrendered until navigation reaches it")
+
+  // Walk to the last hit (a tail assistant reasoning record): navigation
+  // must keep appending chunks as the current marker moves into the
+  // unrendered region, and every appended hit picks up its highlight.
+  for (let stepIndex = 0; stepIndex < totalHitCount - 1; stepIndex += 1) {
+    navButtons[1]!.click()
+  }
+  assert.equal(hitCountLabel.textContent, `${totalHitCount} 处命中 · 第 ${totalHitCount} 处`)
+  assert.equal(paginationController.renderedCount, paginationController.visibleCount, "reaching the tail hit appended the remaining chunks")
+  assert.equal(paginationController.hasMore, false)
+  assert.equal(container.querySelectorAll(".replay-hit").length, totalHitCount)
+  assert.equal(container.querySelectorAll(".replay-hit-current").length, 1)
 })
 
 test("sessionsExportCsvPath and the export entry carry the range alongside the directory", async () => {

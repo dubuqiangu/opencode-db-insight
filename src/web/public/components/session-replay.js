@@ -2,7 +2,9 @@
  * 单会话回放视图（M4）：#/session/:id 的真实页面。
  * 结构：返回链接 + 会话头部（标题/模型/agent/时间跨度/token 汇总）
  *      + 系统提示词折叠面板（默认收起）
- *      + 角色时间线（replay-timeline.js，>200 条分页加载）。
+ *      + 角色时间线（replay-timeline.js，>200 条分页加载）
+ *      + 会话内搜索（replay-search.js，v0.10.0：时间线头部的查找栏，
+ *        输入即搜防抖、命中节点级高亮、分页区命中可导航）。
  *
  * 数据：fetchSessionMessages（404 → 旧表会话专门文案）、
  *      fetchSessionSystemPrompt（null → 省略面板）、
@@ -17,6 +19,7 @@ import {
 } from "../data-source.js";
 import { formatTokens, formatCount, formatDateTime, formatPercent, escapeHtml } from "../format.js";
 import { renderTimeline, summarizeReplayTokens, summarizeStrictHitRate } from "./replay-timeline.js";
+import { buildReplaySearchBar } from "./replay-search.js";
 import { renderLoading, renderError } from "./state-views.js";
 
 const TIMELINE_PAGE_SIZE = 200;
@@ -176,12 +179,18 @@ function buildSystemPromptPanelElement(systemPrompt) {
   return promptPanel;
 }
 
-/* ---------------- 时间线区（分页） ---------------- */
+/* ---------------- 时间线区（分页 + 会话内搜索） ---------------- */
 
 function buildTimelineSectionElement(messageRecords) {
   const timelinePanel = document.createElement("article");
   const timelineMount = document.createElement("div");
   const paginationController = renderTimeline(timelineMount, messageRecords, TIMELINE_PAGE_SIZE);
+
+  // v0.10.0 会话内搜索：搜索栏挂在时间线 panel-head（输入即搜防抖，
+  // 命中节点级高亮，未渲染分页区的命中由导航驱动 appendNextChunk）。
+  // 状态全在 buildReplaySearchBar 闭包内——本函数随每次回放重渲染重建，
+  // 切换会话自然清零，无跨会话残留。
+  const replaySearch = buildReplaySearchBar({ paginationController, messageRecords });
 
   const timelineHeader = document.createElement("header");
   timelineHeader.className = "panel-head";
@@ -194,6 +203,7 @@ function buildTimelineSectionElement(messageRecords) {
   };
   updateProgressNote();
   timelineHeader.innerHTML = "<div><h2>角色时间线</h2></div>";
+  timelineHeader.appendChild(replaySearch.element);
   timelineHeader.appendChild(progressNote);
 
   timelinePanel.appendChild(timelineHeader);
@@ -207,6 +217,8 @@ function buildTimelineSectionElement(messageRecords) {
     loadMoreButton.addEventListener("click", () => {
       const stillHasMore = paginationController.appendNextChunk();
       updateProgressNote();
+      // 手动追加的新节点也要吃到当前搜索的高亮（计数不变——它基于全量索引）
+      replaySearch.syncAfterAppend();
       if (!stillHasMore) loadMoreButton.remove();
     });
     timelinePanel.appendChild(loadMoreButton);

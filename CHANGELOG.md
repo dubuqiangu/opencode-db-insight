@@ -8,6 +8,18 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.10.0] - 2026-10-07 · 回放内搜索（纯前端单车道）
+
+### Added
+- **回放时间线页内查找栏**（全前端第一个文本输入，样式借回放面板语言）：输入即搜 + 200ms 防抖（具名常量 `REPLAY_SEARCH_DEBOUNCE_MS` 测试钉住）；命中计数（跨全消息非仅可见区）+ 上一处/下一处导航；键盘约定 Enter 下一处 / Shift+Enter 上一处 / Esc 退出（浏览器查找栏惯例）；无命中文案与导航 no-op；空串/空白/Esc 即时退出并清高亮
+- **搜索文本视图单点 `replay-message-text.js`**：五个提取纯函数从 replay-timeline 原样迁出共享（渲染与搜索同一出处，杜绝"搜得到渲染不出"的口径漂移）；`buildReplaySearchIndex` 按时间线可见顺序预计算小写合并 haystack（大小写不敏感=两侧同 lower），逐键只做 includes
+- **搜索范围六类（与渲染口径逐字对齐）**：user 正文 / assistant text / reasoning / tool name / **tool input** / tool output。**工具入参为收敛探针实证补齐**：初版契约漏了 state.input——它在 UI 上渲染为工具块参数（"看得见却搜不到"，真实会话实证 "opencode" 差值 1077/4073≈26%）；`readToolInput` 逐字镜像渲染形态（`JSON.stringify(input, null, 2)` 同守卫同序列化同空串出口），补齐后差值收窄至 39/540≈7%（剩余为 step-start 等不渲染元数据面，正确不可搜）。通知行（system/model-switched/compaction）刻意排除：其渲染文本为截断拼装，搜全文会命中渲染不出来的文本
+- **节点级高亮（契约钉死）**：`.replay-hit`（琥珀左缘）+ `.replay-hit-current`（当前导航位 accent 醒目）；正文一律 textContent 写入，零 `<mark>`、零转义风险；清除走记账式精确摘除
+- **分页区命中**：导航到未渲染区（>200 条外）驱动 `appendNextChunk()` 连续追加到目标条再 `scrollIntoView` 定位；追加区间其余命中一并补高亮（与"加载更多"手动路径同语义）；分页控制器扩 `renderedCount`/`nodeAt(index)`（既有事实非新状态源）
+- **状态清零**：搜索态全部存活在查找栏闭包内，随 `renderSessionReplay` 每次渲染整体重建——切换会话/退出回放自然清零，renderSequence 竞态守卫下无残留（集成测试钉住）
+- 测试 300 → **306**（+6：六类文本视图纯函数逐类命中/大小写/多 part、查找栏 DOM/防抖/计数/步进换标/Esc 退出、210 条夹具分页区命中驱动追加、会话切换零残留、mock 228 条全链路 16 处命中步进到尾）；DOM shim 第三次扩展（value/classList/fire/children/fragment——对应真实 DOM 语义）；回放 DOM 首次有测试
+- 真实会话探针对账：索引↔可见记录逐位对齐（通知行占位空 haystack 不脱位）、六类命中双向对账、readToolInput 渲染形态逐字一致、626 个真实工具入参进搜索面
+
 ## [0.9.1] - 2026-10-07 · v0.9.0 增量审查修复
 
 @oracle 对 v0.9.0 增量的审查（P0 零 / P1 零 / P2×1）发现项的修复版本。审查确认面：三态词表封闭性（hasOwn 电池 + 敌意键逐一测试）、冻结时钟真实夹具、四形态 SQL 字节锁、导出每页同阈值、注入面闭合、双侧边界夹逼、600+300 翻页陷阱设计、活库 828 行 epoch-ms 全整数（跨类型序陷阱不存在）。
