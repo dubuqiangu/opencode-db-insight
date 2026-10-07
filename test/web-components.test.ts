@@ -1488,7 +1488,7 @@ test("session-sort-controller: range switches keep the other filters and reuse t
   assert.ok(container.innerHTML.includes("stacked filters marker"))
 })
 
-test("session-sort-controller: range gets its own cache dimension and the guard validates the range snapshot", async () => {
+test("session-sort-controller: stable 全部 views keep exact cache hits while time-window re-entry always re-requests", async () => {
   const { createSessionSortController } = await import(
     "../src/web/public/components/session-sort-controller.js"
   )
@@ -1510,15 +1510,17 @@ test("session-sort-controller: range gets its own cache dimension and the guard 
   await flushControllerMicrotasks()
   assert.ok(!container.innerHTML.includes("all-range late marker"))
 
-  // Back to 全部 is a pure cache hit — no new request, token unmoved.
+  // Back to 全部 is a pure cache hit — no new request, token unmoved. Empty
+  // range is a stable dimension: this zero-request behavior is the part of
+  // the cache that v0.9.1 keeps.
   controller.changeRange("")
-  assert.equal(harness.pendingRequests.length, 2, "cache hit must not issue a new request")
+  assert.equal(harness.pendingRequests.length, 2, "a stable 全部 view must still hit the cache without a request")
   assert.ok(container.innerHTML.includes("all-range late marker"))
 
   // Range-snapshot guard beyond the token: the in-flight 7d request settles
   // while its token is still latest, but the view moved back to 全部 — only
-  // the four-dimension snapshot comparison drops it; its payload parks in
-  // the 7d slot.
+  // the four-dimension snapshot comparison drops it. Under v0.9.1 semantics
+  // it is also NOT parked (time-window entries never enter the cache).
   harness.settleWithMarker(1, "7d marker")
   await flushControllerMicrotasks()
   assert.ok(
@@ -1526,12 +1528,74 @@ test("session-sort-controller: range gets its own cache dimension and the guard 
     "a response whose range snapshot no longer matches must not render even on a fresh token",
   )
 
-  // Re-entering the range renders the parked payload — different range,
-  // different cache slot, still no third request.
+  // Re-entering the time window must RE-REQUEST (ora-5 P2): the 7d payload
+  // resolved moments ago is deliberately not in the cache — same key no
+  // longer means same answer once the wall clock moves. If the old
+  // cache-hit behavior leaked back, this count would stay at 2.
   controller.changeRange("7d")
-  assert.equal(harness.pendingRequests.length, 2)
-  assert.ok(container.innerHTML.includes("7d marker"))
+  assert.equal(harness.pendingRequests.length, 3, "time-window re-entry must issue a fresh request, never a cache hit")
+
+  harness.settleWithMarker(2, "7d fresh marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("7d fresh marker"))
   assert.ok(!container.innerHTML.includes("all-range late marker"))
+  assert.ok(!container.innerHTML.includes("7d marker"), "the pre-fix parked 7d payload must not exist to be rendered")
+
+  // Behavioral key-absence proof: leave and re-enter the same window once
+  // more — a fourth request appears. Had the 7d entry ever been written,
+  // this would be a zero-request cache hit.
+  controller.changeRange("")
+  assert.equal(harness.pendingRequests.length, 3)
+  controller.changeRange("7d")
+  assert.equal(harness.pendingRequests.length, 4, "no time-window entry ever lands in the cache map")
+})
+
+test("session-sort-controller: inside a time-window view every dimension switch re-requests — the bypass is judged by the view, not the action (ora-5 P2)", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+  })
+
+  controller.load() // request 0: 全部 range
+  controller.changeRange("7d") // request 1 — enter the time-window view
+  harness.settleWithMarker(1, "7d first marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("7d first marker"))
+
+  // A sort click — a perfectly cacheable dimension in a stable view — must
+  // re-request here, because the VIEW still contains a time window.
+  controller.changeSort("tokens", "desc") // request 2
+  assert.equal(harness.pendingRequests.length, 3, "a sort switch inside a range view must re-request")
+  assert.equal(harness.pendingRequests[2]!.range, "7d")
+
+  // Switching back to the exact combination that is currently rendered must
+  // STILL re-request: the same key stopped meaning the same answer the
+  // moment the wall clock moved.
+  controller.changeSort("time_updated", "desc") // request 3
+  assert.equal(harness.pendingRequests.length, 4, "even an identical sort combination re-requests inside a range view")
+  assert.equal(harness.pendingRequests[3]!.range, "7d")
+
+  // Same for a directory switch inside the window.
+  controller.changeDirectory("D:/projects/example-alpha") // request 4
+  assert.equal(harness.pendingRequests.length, 5)
+  assert.equal(harness.pendingRequests[4]!.range, "7d", "a directory switch inside a range view re-requests with the window intact")
+  assert.equal(harness.pendingRequests[4]!.directory, "D:/projects/example-alpha")
+
+  // renderCurrent (the app.js model-filter path) must not hit a silent
+  // skeleton in a range view either — it re-requests, per the view property.
+  controller.renderCurrent() // request 5
+  assert.equal(harness.pendingRequests.length, 6, "renderCurrent inside a range view re-requests instead of rendering a stuck skeleton")
+  assert.equal(harness.pendingRequests[5]!.range, "7d")
+
+  harness.settleWithMarker(5, "model filter in range marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("model filter in range marker"))
 })
 
 test("sessionsExportCsvPath and the export entry carry the range alongside the directory", async () => {
