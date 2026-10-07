@@ -9,7 +9,11 @@
  *                                  后端未提供按模型拆分；趋势图降级为总量层）
  *   GET /api/models              → ModelMetric[]
  *   GET /api/agents              → AgentStat[]
- *   GET /api/sessions?limit&off  → SessionSummary[]（裸数组，无 total 包络）
+ *   GET /api/sessions?limit&off  → SessionSummary[]（裸数组，无 total 包络；
+ *                                  v0.4.0 起支持 ?sort=/?order= 服务端排序：
+ *                                  sort ∈ time_updated(默认)|time_created|
+ *                                  tokens|cost|title，order ∈ desc(默认)|asc，
+ *                                  非法值后端回退默认不发 400；响应体零变化）
  *   GET /api/session/:id/messages        → SessionMessageRecord[]
  *   GET /api/session/:id/system-prompt   → Record<instructionKey, text> | 404
  *   GET /api/hour-heatmap?days=90        → 168 项 {weekday,hour,steps}（零填充）
@@ -46,6 +50,13 @@ const API_BASE = "/api";
 
 /** 与后端 MAX_TREND_DAYS（stats/daily-buckets.ts）一致；日历窗口请求此值。 */
 export const MAX_TREND_DAYS = 366;
+/**
+ * 会话列表服务端排序默认值，与后端 DEFAULT_SESSION_SORT_KEY / ORDER
+ * （db/queries.ts，v0.2-B 契约）一致。session-list / app 从这里取默认，
+ * 不各自复制——前端只有一个"契约默认"出处。
+ */
+export const DEFAULT_SESSION_SORT_KEY = "time_updated";
+export const DEFAULT_SESSION_SORT_ORDER = "desc";
 /** KPI sparkline / 今日环比所需的最小趋势窗口。 */
 const OVERVIEW_TREND_WINDOW_DAYS = 15;
 const SESSION_LOOKUP_PAGE_SIZE = 500;
@@ -204,10 +215,20 @@ export async function fetchAgents() {
   return Array.isArray(agentStats) ? agentStats : [];
 }
 
-/** GET /api/sessions?limit&offset —— 会话列表（真实源 total 未知）。 */
-export async function fetchSessions(limit = 15, offset = 0) {
-  if (USE_MOCK) return resolveWithLatency(getMockSessions());
-  const sessionPage = await fetchJson(`/sessions?limit=${limit}&offset=${offset}`);
+/** GET /api/sessions?limit&offset&sort&order —— 会话列表（真实源 total 未知）。 */
+export async function fetchSessions(
+  limit = 15,
+  offset = 0,
+  sortKey = DEFAULT_SESSION_SORT_KEY,
+  sortOrder = DEFAULT_SESSION_SORT_ORDER,
+) {
+  if (USE_MOCK) return resolveWithLatency(getMockSessions(sortKey, sortOrder));
+  // 默认组合不携带 sort/order 参数：默认请求路径与 0.4.1 逐字节一致
+  // （后端对缺省与显式默认解析结果相同，省参数还少一次字符串拼接）。
+  let requestPath = `/sessions?limit=${limit}&offset=${offset}`;
+  if (sortKey !== DEFAULT_SESSION_SORT_KEY) requestPath += `&sort=${encodeURIComponent(sortKey)}`;
+  if (sortOrder !== DEFAULT_SESSION_SORT_ORDER) requestPath += `&order=${encodeURIComponent(sortOrder)}`;
+  const sessionPage = await fetchJson(requestPath);
   return normalizeSessionPage(sessionPage);
 }
 

@@ -169,3 +169,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] N-2 UTF-16/UTF-8 序一致性假设注释
 - [x] 版本 0.4.1 三处同步；249/249 全绿（清单喂入不增测试数）、check 0
 - 按"审查收敛备忘"，0.4.1 为 oracle 处方修复（红→绿 + 真机实证 + 回归锁），不再派下一代审查
+
+## v0.5.0 v0.2-B 前端收尾：会话面板排序接线（push #16，2026-10-07）
+
+- [x] 缺口识别：v0.4.0 排序 API 就绪但前端不携带 sort/order、面板无排序控件（data-source.js:210 核实）——"API 就绪但用户摸不到"
+- [x] 实现（des-14，des-13 因提供方 503 中断后重派）：列头点击范式对齐 model-table；排序归服务端（组件只出 (sortKey, sortOrder) 回调，客户端不重排）；缓存按 sort:order 分键 + 请求序列守卫；DEFAULT_SESSION_SORT_KEY/ORDER 契约默认单点；默认组合不携带参数（默认请求路径与 0.4.1 逐字节一致）
+- [x] 列→键映射：title/time_created/tokens 三列可排序；time_updated/cost 无可见列不设入口（不新造列）；脚注动态说明当前排序
+- [x] mock 会话分支契约对齐：白名单（含 Object.hasOwn 防原型链）+ 回退 + id ASC 决胜 + 码元序 title；dev 默认序 time_created desc → time_updated desc（消除 dev 漂移，对齐真实 API）
+- [x] 测试 249 → 252（+3 组件入库：sortable 列头/脚注/行序钉死、点击回调与方向翻转、mock 白名单回退）；DOM shim 扩展（addEventListener/click/querySelectorAll 复合选择器）
+- [x] 收敛复核：252/252 独立复跑 + check 0 + 独立服务探针 7/7（新资产含排序契约、index 提示、默认 API 零变化、sort=title asc 端到端）
+- [x] 文档：CHANGELOG 0.5.0
+- [ ] oracle 增量审查 0.5.0 delta → 有 P0/P1 则修后推 0.5.1

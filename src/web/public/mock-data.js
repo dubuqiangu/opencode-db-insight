@@ -8,7 +8,10 @@
  *                        + byModel 每模型日序列，供堆叠面积图分色）
  *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts ModelMetric）
  *   GET /api/agents    → buildAgentStats()（stats/agent-fingerprint.ts AgentStat）
- *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）
+ *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）；
+ *                        getMockSessions(sort, order) 在此之上补齐 v0.4.0
+ *                        排序契约：白名单/回退与后端 resolveSessionSortKey/
+ *                        Order（queries.ts）一致，非法值回退默认不发 400
  *   GET /api/hour-heatmap?days=90  → buildHourHeatmap()（168 项零填充，
  *                        {weekday 0=周日..6, hour 0-23, steps}，weekday-major；
  *                        步数从逐日序列按作息权重重分摊，与 trend 口径一致）
@@ -609,7 +612,48 @@ export function getMockOverview() { return overviewPayload; }
 export function getMockTrend(days) { return buildTrend(days); }
 export function getMockModelMetrics() { return modelMetricsPayload; }
 export function getMockAgentStats() { return agentStatsPayload; }
-export function getMockSessions() { return sessionsPayload; }
+
+/* ------------------------------------------------------------
+ * GET /api/sessions?sort&order —— v0.4.0 排序契约的 mock 语义
+ * 白名单与回退对齐后端 resolveSessionSortKey / resolveSessionSortOrder
+ * （db/queries.ts）：sort ∈ time_updated(默认)|time_created|tokens|cost|title，
+ * 非白名单/缺省回退默认；order 仅 "asc" 翻转，其余回退 desc。
+ * 并列决胜与后端 ORDER BY …, id ASC 一致：主键相等时按 id 升序。
+ * title 用码元比较（近似 SQLite BINARY 整序；localeCompare 是本地化
+ * 排序，与真实后端语义相悖）。每次请求在副本上排序，sessionsPayload
+ * 的基准次序不动（compaction topSessions 等共用它）。
+ * ------------------------------------------------------------ */
+const SESSION_SORT_FIELD_BY_KEY = {
+  time_updated: "timeUpdated",
+  time_created: "timeCreated",
+  tokens: "tokens",
+  cost: "cost",
+  title: "title",
+};
+
+export function getMockSessions(
+  sortKeyValue = "time_updated",
+  sortOrderValue = "desc",
+) {
+  const safeSortKey = Object.hasOwn(SESSION_SORT_FIELD_BY_KEY, sortKeyValue)
+    ? sortKeyValue
+    : "time_updated";
+  const safeSortOrder = sortOrderValue === "asc" ? "asc" : "desc";
+  const sortField = SESSION_SORT_FIELD_BY_KEY[safeSortKey];
+  const directionSign = safeSortOrder === "asc" ? 1 : -1;
+  const sortedSessions = [...sessionsPayload.sessions].sort((left, right) => {
+    if (sortField === "title") {
+      const titleCompare = (left.title < right.title ? -1 : left.title > right.title ? 1 : 0) * directionSign;
+      if (titleCompare !== 0) return titleCompare;
+    } else {
+      const valueCompare = ((left[sortField] ?? 0) - (right[sortField] ?? 0)) * directionSign;
+      if (valueCompare !== 0) return valueCompare;
+    }
+    // 与后端相同的 id ASC 决胜：方向无关，恒为升序
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  });
+  return { total: sessionsPayload.total, sessions: sortedSessions };
+}
 // 按需构建（同 getMockTrend）：热力窗口必须与 trend 同 days 才守恒
 export function getMockHourHeatmap(days) { return buildHourHeatmap(days); }
 export function getMockSessionSurvival() { return sessionSurvivalPayload; }

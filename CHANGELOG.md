@@ -8,6 +8,19 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.5.0] - 2026-10-07 · v0.2-B 前端收尾：会话面板排序接线
+
+### Added
+- **会话列表排序交互**（v0.2-B 前端收尾）：列头点击范式与模型排行榜一致（复用 `th.sortable` 样式，零新样式体系）——点击新列 desc 起步、同列再点切方向；排序归属服务端，组件只产出 `(sortKey, sortOrder)` 交回调重新请求 `/api/sessions?sort=&order=`，客户端不重排（保住分页确定性契约）
+- **列→sort 键映射**：标题→`title`、创建时间→`time_created`、Tokens→`tokens`；`time_updated`（默认）与 `cost` 无可见列不设入口（不新造列，保证默认视图与 0.4.1 一致）；初始态无箭头，脚注动态说明当前排序
+- **缓存按 sort:order 组合分键** + 请求序列守卫（慢响应晚到不覆盖当前排序）；排序切换缓存命中立即渲染、未命中先上骨架
+- **前端契约默认值单点**：`DEFAULT_SESSION_SORT_KEY/ORDER` 从 data-source.js 导出，组件与 app 统一取用；**默认组合不携带 sort/order 参数——默认请求路径与 0.4.1 逐字节一致**
+- mock 会话分支补齐排序语义：白名单解析（含 `Object.hasOwn` 防原型链键，与 0.4.1 后端修复同款）、非法回退默认、`id ASC` 决胜、码元序 title
+- index.html 会话面板补「点击列头排序」提示；测试 249 → **252**（+3：sortable 列头渲染/脚注/行序钉死、点击回调与方向翻转、mock 白名单回退与决胜）
+
+### Changed
+- **dev 模式（mock）会话默认序 `time_created desc` → `time_updated desc`**：对齐后端契约（0.4.0 起真实 API 默认即 time_updated desc），消除 dev 漂移；每次在副本上排序，共享基准 payload 不受影响
+
 ## [0.4.1] - 2026-10-07 · v0.4.0 增量审查修复
 
 @oracle 对 v0.4.0 增量的审查（P0 零 / P1×1 / P2×2）发现项的修复版本。

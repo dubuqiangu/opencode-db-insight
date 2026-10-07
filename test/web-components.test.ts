@@ -29,7 +29,9 @@ import { directoryDisplayName } from "../src/db/directory-queries.ts"
  * Minimal element stub. `innerHTML` stores the assigned markup and parses
  * a flat list of opening tags (class / data-* / every other attribute);
  * queries walk that list recursively so nested and appended elements are
- * both reachable.
+ * both reachable. Render-time addEventListener bindings are captured so
+ * interaction tests can fire them via click(); assigning innerHTML again
+ * drops them, like a real re-render.
  */
 class StubElement {
   tagName: string
@@ -42,6 +44,7 @@ class StubElement {
   hidden = false
   private innerHtmlText = ""
   private stubChildren: StubElement[] = []
+  private eventListeners = new Map<string, Array<() => void>>()
 
   constructor(tagName: string) {
     this.tagName = tagName
@@ -50,6 +53,9 @@ class StubElement {
   set innerHTML(htmlText: string) {
     this.innerHtmlText = htmlText
     this.stubChildren = parseStubChildren(htmlText)
+    // innerHTML replaces the subtree: listeners registered on the previous
+    // subtree's elements are gone with it — exactly like a real re-render.
+    this.eventListeners.clear()
   }
 
   get innerHTML(): string {
@@ -61,21 +67,40 @@ class StubElement {
     return childElement
   }
 
-  addEventListener(): void {
-    // Hover tooltips only fire on real pointer events; render-time
-    // binding just needs the call to exist.
+  addEventListener(eventType: string, listener: () => void): void {
+    const typedListeners = this.eventListeners.get(eventType) ?? []
+    typedListeners.push(listener)
+    this.eventListeners.set(eventType, typedListeners)
+  }
+
+  /** Fire all listeners registered for "click" (render-time bindings only). */
+  click(): void {
+    for (const clickListener of this.eventListeners.get("click") ?? []) {
+      clickListener()
+    }
   }
 
   classTokenList(): string[] {
     return this.className.split(/\s+/).filter((classToken) => classToken !== "")
   }
 
-  querySelectorAll(classSelector: string): StubElement[] {
-    const wantedClassName = classSelector.replace(/^\./, "")
+  /**
+   * Class-token query supporting both ".class" and "tag.class" selectors
+   * (components use the compound form, e.g. "th.sortable" / "tr.session-row").
+   */
+  querySelectorAll(elementSelector: string): StubElement[] {
+    const compoundSelectorMatch = /^([a-zA-Z][a-zA-Z0-9]*)\.(.+)$/.exec(elementSelector)
+    const wantedTagName = compoundSelectorMatch !== null ? compoundSelectorMatch[1] : null
+    const wantedClassName = compoundSelectorMatch !== null
+      ? compoundSelectorMatch[2]
+      : elementSelector.replace(/^\./, "")
     const matchedElements: StubElement[] = []
     const walkChildren = (parentElement: StubElement): void => {
       for (const childElement of parentElement.stubChildren) {
-        if (childElement.classTokenList().includes(wantedClassName)) {
+        const classNameMatches = childElement.classTokenList().includes(wantedClassName)
+        const tagNameMatches = wantedTagName === null
+          || childElement.tagName.toLowerCase() === wantedTagName.toLowerCase()
+        if (classNameMatches && tagNameMatches) {
           matchedElements.push(childElement)
         }
         walkChildren(childElement)
@@ -605,4 +630,195 @@ test("pathLastSegment mirrors the backend directoryDisplayName value for value",
       `backend derivation of "${paritySample.directoryPath}"`,
     )
   }
+})
+
+/* --------------------- session-list component --------------------- */
+
+/**
+ * Session-list header sorting (v0.5.0 wiring of the v0.2-B server-side
+ * sort contract). Fixture summaries are fictional placeholders from the
+ * example-alpha series (发布清单 #3) — total: null is the real-source
+ * shape (normalizeSessionPage), which is what drives the sort footnote.
+ */
+interface SessionListFixtureSummary {
+  id: string
+  title: string
+  modelId: string
+  agent: string
+  directory: string
+  timeCreated: number
+  timeUpdated: number
+  tokens: number
+  cost: number
+}
+
+function sessionSortFixturePayload(): { total: null; sessions: SessionListFixtureSummary[] } {
+  return {
+    total: null,
+    sessions: [
+      { id: "ses_example_alpha", title: "alpha fixture", modelId: "glm-5.3", agent: "build", directory: "D:/projects/example-alpha", timeCreated: 1000, timeUpdated: 5000, tokens: 1500, cost: 1.0 },
+      { id: "ses_example_bravo", title: "bravo fixture", modelId: "glm-5.3", agent: "plan", directory: "D:/projects/example-alpha", timeCreated: 2000, timeUpdated: 9000, tokens: 600, cost: 2.5 },
+      { id: "ses_example_charlie", title: "charlie fixture", modelId: "claude-sonnet-4.6", agent: "build", directory: "D:/projects/example-alpha", timeCreated: 3000, timeUpdated: 7000, tokens: 900, cost: 0.5 },
+    ],
+  }
+}
+
+test("renderSessionList renders sortable headers, keeps wire order and states the active sort in the footnote", async () => {
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+  const container = freshContainer()
+
+  // Default state (time_updated desc — the wire default). It has no
+  // matching visible column (the list shows created time), so no header
+  // carries the sorted marker; the footnote names the server sort.
+  const noopSortChange = () => {}
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", noopSortChange)
+  const sortableHeaders = container.querySelectorAll("th.sortable")
+  assert.equal(sortableHeaders.length, 3, "title / created-time / tokens columns are sortable")
+  assert.deepEqual(
+    sortableHeaders.map((headerCell) => headerCell.dataset.sortKey),
+    ["title", "time_created", "tokens"],
+    "column → sort-key mapping must match the backend ?sort= whitelist",
+  )
+  assert.equal(
+    container.querySelectorAll("th.sorted").length,
+    0,
+    "the default time_updated sort has no visible column to mark",
+  )
+  assert.match(container.innerHTML, /按最近更新时间倒序/)
+  // No client-side re-sorting: rows render in the payload (server) order.
+  assert.deepEqual(
+    container.querySelectorAll("tr.session-row").map((row) => row.dataset.sessionId),
+    ["ses_example_alpha", "ses_example_bravo", "ses_example_charlie"],
+  )
+
+  // tokens desc: the tokens header carries the sorted marker and arrow.
+  renderSessionList(container, sessionSortFixturePayload(), null, "tokens", "desc", noopSortChange)
+  const tokensHeader = container
+    .querySelectorAll("th.sorted")
+    .find((headerCell) => headerCell.dataset.sortKey === "tokens")!
+  assert.ok(tokensHeader.classTokenList().includes("sortable"), "the sorted column is a sortable header")
+  assert.match(container.innerHTML, /Tokens\s*<span class="sort-arrow">▼<\/span>/)
+  assert.match(container.innerHTML, /按token 用量倒序/)
+
+  // title asc: the arrow flips and the footnote follows.
+  renderSessionList(container, sessionSortFixturePayload(), null, "title", "asc", noopSortChange)
+  assert.match(container.innerHTML, /标题\s*<span class="sort-arrow">▲<\/span>/)
+  assert.match(container.innerHTML, /按标题正序/)
+})
+
+test("renderSessionList header clicks emit the server-sort callback and flip direction on repeat", async () => {
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+  const container = freshContainer()
+  const sortChangeCalls: Array<{ sortKey: string; sortOrder: string }> = []
+  const captureSortChange = (nextSortKey: string, nextSortOrder: string) => {
+    sortChangeCalls.push({ sortKey: nextSortKey, sortOrder: nextSortOrder })
+  }
+
+  const clickHeader = (sortKeyValue: string) => {
+    const headerCell = container
+      .querySelectorAll("th.sortable")
+      .find((sortableHeader) => sortableHeader.dataset.sortKey === sortKeyValue)!
+    headerCell.click()
+  }
+
+  // From the default state, a new column starts at desc (model-table contract).
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", captureSortChange)
+  clickHeader("tokens")
+
+  // The app re-renders with the new sort before the next click; a repeat
+  // click on the same column flips the direction.
+  renderSessionList(container, sessionSortFixturePayload(), null, "tokens", "desc", captureSortChange)
+  clickHeader("tokens")
+  renderSessionList(container, sessionSortFixturePayload(), null, "tokens", "asc", captureSortChange)
+  clickHeader("tokens")
+
+  // Switching to a different column while sorted on another starts at desc.
+  renderSessionList(container, sessionSortFixturePayload(), null, "tokens", "asc", captureSortChange)
+  clickHeader("title")
+
+  assert.deepEqual(sortChangeCalls, [
+    { sortKey: "tokens", sortOrder: "desc" },
+    { sortKey: "tokens", sortOrder: "asc" },
+    { sortKey: "tokens", sortOrder: "desc" },
+    { sortKey: "title", sortOrder: "desc" },
+  ])
+
+  // Without a callback the headers stay inert — render must not throw and
+  // no interaction class is bound (pure display usage).
+  const displayOnlyContainer = freshContainer()
+  renderSessionList(displayOnlyContainer, sessionSortFixturePayload(), null)
+  assert.equal(displayOnlyContainer.querySelectorAll("th.sortable").length, 0)
+})
+
+test("getMockSessions mirrors the backend sort whitelist, fallback and id ASC tie-break", async () => {
+  const { getMockSessions } = await import("../src/web/public/mock-data.js")
+
+  const sessionIds = (sortKeyValue?: string, sortOrderValue?: string) =>
+    getMockSessions(sortKeyValue, sortOrderValue).sessions.map((sessionSummary) => sessionSummary.id)
+  const sessionSummaries = (sortKeyValue?: string, sortOrderValue?: string) =>
+    getMockSessions(sortKeyValue, sortOrderValue).sessions
+
+  // The mock's own default must be the contract default: time_updated desc.
+  const defaultSummaries = sessionSummaries()
+  const defaultIds = defaultSummaries.map((sessionSummary) => sessionSummary.id)
+  for (let sessionIndex = 1; sessionIndex < defaultSummaries.length; sessionIndex += 1) {
+    assert.ok(
+      defaultSummaries[sessionIndex - 1].timeUpdated >= defaultSummaries[sessionIndex].timeUpdated,
+      "the mock default must order by time_updated desc",
+    )
+  }
+
+  // Degrade-not-reject: non-whitelisted, hostile and prototype-chain keys
+  // all fall back to the default order (mirrors resolveSessionSortKey).
+  for (const hostileSortValue of [
+    "unknown_sort_key",
+    "; DROP TABLE session_v2 --",
+    "toString",
+    "__proto__",
+    "constructor",
+  ]) {
+    assert.deepEqual(
+      sessionSummaries(hostileSortValue, "upside-down"),
+      defaultSummaries,
+      `${hostileSortValue} must degrade to the default mock order`,
+    )
+  }
+  assert.deepEqual(sessionSummaries(undefined, undefined), defaultSummaries)
+
+  // Whitelisted combinations really change the order and follow direction.
+  assert.notDeepEqual(sessionIds("time_created", "asc"), defaultIds)
+  const tokensDescSummaries = sessionSummaries("tokens", "desc")
+  for (let sessionIndex = 1; sessionIndex < tokensDescSummaries.length; sessionIndex += 1) {
+    assert.ok(
+      tokensDescSummaries[sessionIndex - 1].tokens >= tokensDescSummaries[sessionIndex].tokens,
+      "tokens desc must be non-increasing",
+    )
+  }
+
+  // title asc orders by code-unit comparison (≈ SQLite BINARY), and the
+  // repeated pool titles (48 sessions over 30 titles) tie-break by id ASC
+  // exactly like the backend's ORDER BY …, id ASC.
+  const titleAscSummaries = sessionSummaries("title", "asc")
+  for (let sessionIndex = 1; sessionIndex < titleAscSummaries.length; sessionIndex += 1) {
+    assert.ok(
+      titleAscSummaries[sessionIndex - 1].title <= titleAscSummaries[sessionIndex].title,
+      "title asc must be code-unit non-decreasing",
+    )
+    if (titleAscSummaries[sessionIndex - 1].title === titleAscSummaries[sessionIndex].title) {
+      assert.ok(
+        titleAscSummaries[sessionIndex - 1].id < titleAscSummaries[sessionIndex].id,
+        "title ties must break by id ASC like the backend",
+      )
+    }
+  }
+
+  // Sorting works on a copy: the shared base payload keeps its order
+  // (compaction topSessions and the id lookup reuse it).
+  const firstRequestSummaries = getMockSessions("tokens", "asc").sessions
+  const secondRequestSummaries = getMockSessions("title", "desc").sessions
+  assert.ok(
+    firstRequestSummaries !== secondRequestSummaries,
+    "each request must return its own sorted copy",
+  )
+  assert.deepEqual(getMockSessions("tokens", "asc").sessions, firstRequestSummaries)
 })
