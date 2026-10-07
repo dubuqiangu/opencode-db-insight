@@ -25,6 +25,7 @@ import {
   querySessionSummaryById,
   querySessionSystemPrompt,
   queryTodoStats,
+  resolveSessionRange,
   resolveSessionSortKey,
   resolveSessionSortOrder,
 } from "../db/queries.ts"
@@ -53,7 +54,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.8.1"
+export const INSIGHT_VERSION = "0.9.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -63,6 +64,15 @@ export const SESSION_NOT_FOUND_MESSAGE = "session not found in current tables"
 
 /** 404 for sessions that exist in session_v2 but carry no messages (P2-7). */
 export const SESSION_EMPTY_MESSAGE = "session exists but has no messages"
+
+/**
+ * ?range= rejection (v0.9.0): an unknown non-empty preset answers a
+ * loud 400 — never a silent fallback to the full list, which the
+ * caller would mistake for a filtered result. Legal values that match
+ * nothing do not exist here (unlike ?directory=), because the range
+ * vocabulary is closed: 7d, 30d, 90d.
+ */
+export const INVALID_RANGE_MESSAGE = "invalid range parameter; expected one of: 7d, 30d, 90d"
 
 /** Opaque 500 error body; the real cause is logged, never sent (P2-11). */
 export const INTERNAL_ERROR_MESSAGE = "internal error"
@@ -275,6 +285,26 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         // at all. Unlike sort/order this is NOT a fallback dimension: a
         // directory with zero matches is a legitimate empty 200 result.
         const sessionDirectoryFilter = requestContext.searchParams.get("directory") ?? ""
+        // Time-range window (v0.9.0): tri-state resolution shared with
+        // the CSV export below — one vocabulary, one resolver, never
+        // two copies (contract #7). An unknown non-empty word is a
+        // LOUD 400 before any cache write, not the sort/order-style
+        // silent fallback: a typo'd range silently returning the full
+        // list is exactly the "自以为筛了" trap this contract rejects.
+        const sessionRangeParamValue = requestContext.searchParams.get("range") ?? ""
+        const sessionRangeResolution = resolveSessionRange(sessionRangeParamValue)
+        if (sessionRangeResolution.rangeKind === "invalid") {
+          return { statusCode: 400, body: { error: INVALID_RANGE_MESSAGE } }
+        }
+        const sessionRangeStartMs =
+          sessionRangeResolution.rangeKind === "window"
+            ? sessionRangeResolution.rangeStartMs
+            : null
+        // The cache key carries the RAW range word ("" for a missing
+        // parameter), not the computed threshold: the threshold moves
+        // every millisecond, so keying on it would spray a
+        // near-duplicate entry per request and defeat the cache; the
+        // word is the stable dimension (same discipline as directory).
         const sessionPage = cachedResult(
           buildCacheKey("sessions", [
             sessionLimit,
@@ -282,6 +312,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             sessionSortKey,
             sessionSortOrder,
             sessionDirectoryFilter,
+            sessionRangeParamValue,
           ]),
           () =>
             querySessionList(
@@ -291,6 +322,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
               sessionSortKey,
               sessionSortOrder,
               sessionDirectoryFilter,
+              sessionRangeStartMs,
             ),
         )
         return { statusCode: 200, body: sessionPage }
@@ -415,13 +447,31 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         // match, missing/empty = the whole list, a miss = a header-only
         // CSV — filter semantics, not fallback semantics.
         const exportDirectoryFilter = requestContext.searchParams.get("directory") ?? ""
+        // Time-range window (v0.9.0): the SAME tri-state resolution as
+        // the sessions list above (contract #7) — the export is a
+        // filtered-view snapshot. An unknown non-empty word is a loud
+        // 400 here too; a legal window that matches nothing would be a
+        // header-only CSV, but that cannot happen with the closed
+        // vocabulary unless the db is that young.
+        const exportRangeParamValue = requestContext.searchParams.get("range") ?? ""
+        const exportRangeResolution = resolveSessionRange(exportRangeParamValue)
+        if (exportRangeResolution.rangeKind === "invalid") {
+          return { statusCode: 400, body: { error: INVALID_RANGE_MESSAGE } }
+        }
+        const exportRangeStartMs =
+          exportRangeResolution.rangeKind === "window"
+            ? exportRangeResolution.rangeStartMs
+            : null
         const exportSummaries: SessionSummary[] = []
         // Full-pull semantics: page through at querySessionList's clamp
         // ceiling (limit 500 — its hard maximum, see
         // clampPaginationValue) until a short page. The live db
         // (~800 rows) therefore exports whole. The fixed ordering plus
         // the id ASC tie-break make the pagination deterministic: no
-        // duplicated or skipped rows across page boundaries.
+        // duplicated or skipped rows across page boundaries. The range
+        // window rides EVERY page (contract #3) — same threshold, same
+        // bind slot — so the no-dup/no-skip invariant holds on the
+        // filtered subset exactly as it does unfiltered.
         const exportPageSize = 500
         for (let pageOffset = 0; ; pageOffset += exportPageSize) {
           const summaryPage = querySessionList(
@@ -431,6 +481,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             DEFAULT_SESSION_SORT_KEY,
             DEFAULT_SESSION_SORT_ORDER,
             exportDirectoryFilter,
+            exportRangeStartMs,
           )
           // Unreachable with a non-null db; kept as belt-and-braces so a
           // mid-export null can never crash the handler.

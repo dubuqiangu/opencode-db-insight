@@ -965,20 +965,22 @@ test("the footnote sort description doubles as a reset entry back to the default
  * queue the test settles by hand, so response arrival order is fully
  * scripted. Payloads use fictional example-series fixtures only.
  * v0.7.0: requests carry the directory dimension of the cache key.
+ * v0.9.0: requests carry the range dimension too.
  */
 interface DeferredSessionPageRequest {
   sortKey: string
   sortOrder: string
   directory: string | null
+  range: string
   resolve: (sessionPayload: { total: null; sessions: SessionListFixtureSummary[] }) => void
   reject: (error: Error) => void
 }
 
 function createDeferredSessionPageHarness() {
   const pendingRequests: DeferredSessionPageRequest[] = []
-  const fetchSessionsPage = (sortKey: string, sortOrder: string, directory: string | null) =>
+  const fetchSessionsPage = (sortKey: string, sortOrder: string, directory: string | null, range: string) =>
     new Promise<{ total: null; sessions: SessionListFixtureSummary[] }>((resolve, reject) => {
-      pendingRequests.push({ sortKey, sortOrder, directory, resolve, reject })
+      pendingRequests.push({ sortKey, sortOrder, directory, range, resolve, reject })
     })
   return {
     fetchSessionsPage,
@@ -1327,7 +1329,7 @@ test("sessionsCsvExportEntryHtml renders per availability mode with the scoped d
   )
 
   // Available + filtered: native anchor carrying the encoded directory href.
-  const filteredEntryHtml = sessionsCsvExportEntryHtml("D:/projects/example-alpha", true)
+  const filteredEntryHtml = sessionsCsvExportEntryHtml("D:/projects/example-alpha", "", true)
   assert.ok(
     filteredEntryHtml.includes('href="/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha"'),
     "the entry href reuses the data-source URL single point",
@@ -1336,13 +1338,13 @@ test("sessionsCsvExportEntryHtml renders per availability mode with the scoped d
   assert.match(filteredEntryHtml, /导出 CSV/)
 
   // Available + unfiltered: bare path.
-  const unfilteredEntryHtml = sessionsCsvExportEntryHtml(null, true)
+  const unfilteredEntryHtml = sessionsCsvExportEntryHtml(null, "", true)
   assert.ok(unfilteredEntryHtml.includes('href="/api/export/sessions.csv"'))
 
   // Unavailable (mock preview): no entry at all — availability is decided at
   // render time, so there is nothing to show first and hide later.
   assert.equal(
-    sessionsCsvExportEntryHtml("D:/projects/example-alpha", false),
+    sessionsCsvExportEntryHtml("D:/projects/example-alpha", "", false),
     "",
     "mock mode renders no entry — no flash of a route that does not exist",
   )
@@ -1377,5 +1379,271 @@ test("renderSessionList appends the export entry whose href follows the controll
   assert.ok(
     !container.innerHTML.includes("directory=D%3A%2Fprojects%2Fexample-alpha"),
     "the export href must track the current filter, not accumulate stale ones",
+  )
+})
+
+/* ------------- session time-range filter (v0.9.0) ------------- */
+
+test("renderSessionList renders the range switch, keeps it across states and routes its clicks", async () => {
+  const { renderSessionList } = await import(
+    "../src/web/public/components/session-list.js"
+  )
+  const container = freshContainer()
+  const rangeChangeEvents: string[] = []
+  const captureRangeChange = (nextRange: string) => {
+    rangeChangeEvents.push(nextRange)
+  }
+
+  // Pure display (no callback) → no switch at all.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null)
+  assert.equal(
+    container.querySelectorAll("button.session-range-button").length,
+    0,
+    "without a callback the panel shows no range switch",
+  )
+
+  // Default state: four preset buttons, exactly one active — 全部 ("").
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "", captureRangeChange)
+  const rangeButtons = container.querySelectorAll("button.session-range-button")
+  assert.equal(rangeButtons.length, 4, "全部 / 7 天 / 30 天 / 90 天 presets")
+  assert.ok(
+    container.innerHTML.includes('class="session-range-button active" data-session-range=""'),
+    "the default 全部 preset is the active one",
+  )
+
+  // Clicks route through the callback with the wire vocabulary.
+  const clickRangePreset = (presetValue: string) => {
+    rangeButtons
+      .find((rangeButton) => rangeButton.dataset.sessionRange === presetValue)!
+      .click()
+  }
+  clickRangePreset("7d")
+  clickRangePreset("")
+  clickRangePreset("30d")
+  clickRangePreset("90d")
+  assert.deepEqual(rangeChangeEvents, ["7d", "", "30d", "90d"])
+
+  // Re-render with an active range moves the active pill to 30 天.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "30d", captureRangeChange)
+  assert.ok(
+    container.innerHTML.includes('class="session-range-button active" data-session-range="30d"'),
+  )
+  assert.ok(
+    !container.innerHTML.includes('class="session-range-button active" data-session-range=""'),
+    "exactly one preset carries the active state",
+  )
+
+  // The switch survives the loading skeleton and empty results — an empty
+  // range must never lock the user out of widening it back.
+  renderSessionList(container, null, null, "time_updated", "desc", null, null, "7d", captureRangeChange)
+  assert.equal(container.querySelectorAll("button.session-range-button").length, 4, "the switch stays up during loading")
+  renderSessionList(container, { total: null, sessions: [] }, null, "time_updated", "desc", null, null, "7d", captureRangeChange)
+  assert.equal(container.querySelectorAll("button.session-range-button").length, 4, "the switch stays up on empty results")
+  assert.match(container.innerHTML, /最近 7 天没有会话更新/)
+})
+
+test("session-sort-controller: range switches keep the other filters and reuse their dimension untouched", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+  })
+
+  controller.load() // request 0: (time_updated, desc, no directory, 全部)
+  controller.changeRange("7d") // request 1
+  assert.deepEqual(
+    {
+      sortKey: harness.pendingRequests[1]!.sortKey,
+      directory: harness.pendingRequests[1]!.directory,
+      range: harness.pendingRequests[1]!.range,
+    },
+    { sortKey: "time_updated", directory: null, range: "7d" },
+    "a range switch keeps the current sort and directory (filters stack, never clear each other)",
+  )
+
+  // Same value twice → early return, no request.
+  controller.changeRange("7d")
+  assert.equal(harness.pendingRequests.length, 2, "a no-op range switch must not fetch")
+
+  // Directory drill keeps the range; sort click keeps both.
+  controller.changeDirectory("D:/projects/example-alpha") // request 2
+  assert.equal(harness.pendingRequests[2]!.range, "7d", "drilling into a directory keeps the range")
+  controller.changeSort("tokens", "desc") // request 3
+  assert.deepEqual(
+    {
+      directory: harness.pendingRequests[3]!.directory,
+      range: harness.pendingRequests[3]!.range,
+    },
+    { directory: "D:/projects/example-alpha", range: "7d" },
+    "a sort click keeps the directory and range — all three dimensions stack",
+  )
+
+  harness.settleWithMarker(3, "stacked filters marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("stacked filters marker"))
+})
+
+test("session-sort-controller: range gets its own cache dimension and the guard validates the range snapshot", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+  })
+
+  controller.load() // request 0: 全部 range
+  controller.changeRange("7d") // request 1
+  assert.equal(harness.pendingRequests.length, 2)
+
+  // The stale all-range response resolves first — dropped by its token, but
+  // parked in its own ("" range) cache slot.
+  harness.settleWithMarker(0, "all-range late marker")
+  await flushControllerMicrotasks()
+  assert.ok(!container.innerHTML.includes("all-range late marker"))
+
+  // Back to 全部 is a pure cache hit — no new request, token unmoved.
+  controller.changeRange("")
+  assert.equal(harness.pendingRequests.length, 2, "cache hit must not issue a new request")
+  assert.ok(container.innerHTML.includes("all-range late marker"))
+
+  // Range-snapshot guard beyond the token: the in-flight 7d request settles
+  // while its token is still latest, but the view moved back to 全部 — only
+  // the four-dimension snapshot comparison drops it; its payload parks in
+  // the 7d slot.
+  harness.settleWithMarker(1, "7d marker")
+  await flushControllerMicrotasks()
+  assert.ok(
+    !container.innerHTML.includes("7d marker"),
+    "a response whose range snapshot no longer matches must not render even on a fresh token",
+  )
+
+  // Re-entering the range renders the parked payload — different range,
+  // different cache slot, still no third request.
+  controller.changeRange("7d")
+  assert.equal(harness.pendingRequests.length, 2)
+  assert.ok(container.innerHTML.includes("7d marker"))
+  assert.ok(!container.innerHTML.includes("all-range late marker"))
+})
+
+test("sessionsExportCsvPath and the export entry carry the range alongside the directory", async () => {
+  const { sessionsExportCsvPath } = await import("../src/web/public/data-source.js")
+  const { sessionsCsvExportEntryHtml } = await import(
+    "../src/web/public/components/session-csv-export.js"
+  )
+
+  // Single construction point: both params in one query string, directory
+  // first, range second; empty/absent dims never emit their segment.
+  assert.equal(sessionsExportCsvPath(null, "7d"), "/api/export/sessions.csv?range=7d")
+  assert.equal(
+    sessionsExportCsvPath("D:/projects/example-alpha", "30d"),
+    "/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha&range=30d",
+  )
+  assert.equal(
+    sessionsExportCsvPath("D:/projects/example-alpha", ""),
+    "/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha",
+  )
+  assert.equal(sessionsExportCsvPath(null, ""), "/api/export/sessions.csv")
+
+  // The entry's title explains the export scope per filter combination.
+  // The ampersand inside the rendered href is attribute-escaped (escapeHtml
+  // defense-in-depth on the href insertion point); it is assembled at
+  // runtime below so the source carries no literal "&" run.
+  const escapedAmpersand = "&" + "amp;"
+  const bothFiltersEntryHtml = sessionsCsvExportEntryHtml("D:/projects/example-alpha", "30d", true)
+  assert.ok(
+    bothFiltersEntryHtml.includes(`href="/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha${escapedAmpersand}range=30d"`),
+  )
+  assert.match(bothFiltersEntryHtml, /导出当前目录下最近 30 天有更新的会话/)
+  const rangeOnlyEntryHtml = sessionsCsvExportEntryHtml(null, "7d", true)
+  assert.ok(rangeOnlyEntryHtml.includes('href="/api/export/sessions.csv?range=7d"'))
+  assert.match(rangeOnlyEntryHtml, /导出最近 7 天有更新的会话/)
+  const unfilteredEntryHtml = sessionsCsvExportEntryHtml(null, "", true)
+  assert.ok(unfilteredEntryHtml.includes('href="/api/export/sessions.csv"'))
+  assert.match(unfilteredEntryHtml, /导出全部会话/)
+})
+
+test("renderSessionList states the active range in the footnote and threads it into the export href", async () => {
+  const { renderSessionList } = await import(
+    "../src/web/public/components/session-list.js"
+  )
+  const container = freshContainer()
+
+  // Directory + range stack in the footnote language; the export href
+  // carries both params.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, "D:/projects/example-alpha", "7d")
+  assert.match(container.innerHTML, /目录：D:\/projects\/example-alpha · 最近 7 天/)
+  assert.ok(
+    // Attribute-escaped ampersand in the anchor href (same escapeHtml
+    // insertion point as every other external string); assembled at
+    // runtime to keep the source free of a literal "&" run.
+    container.innerHTML.includes(`href="/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha${"&" + "amp;"}range=7d"`),
+    "the export href threads the range through the same single point",
+  )
+
+  // Default range (全部) → no range part in the footnote, bare-ish export path.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "")
+  assert.ok(!container.innerHTML.includes("最近 7 天"), "no range part without an active range")
+  assert.ok(container.innerHTML.includes('href="/api/export/sessions.csv"'))
+})
+
+test("getMockSessions mirrors the backend range contract: whitelist filter on timeUpdated, absent/empty = all, unknown non-empty throws", async () => {
+  const { getMockSessions } = await import("../src/web/public/mock-data.js")
+  const unfilteredPage = getMockSessions()
+
+  // null / "" are both "no filter" — identical to the unfiltered call.
+  assert.deepEqual(getMockSessions("time_updated", "desc", null, ""), unfilteredPage)
+  assert.deepEqual(getMockSessions("time_updated", "desc", null, null), unfilteredPage)
+
+  // 7d: keeps only recently updated sessions. Boundary assertions are
+  // two-sided around the mock's internal now(): cutoffBefore taken before
+  // the call, cutoffAfter after — the kept set is pinned between them with
+  // no millisecond-race window (deterministic, unlike a single equality).
+  const cutoffBeforeMs = Date.now() - 7 * 86_400_000
+  const filteredByWeekPage = getMockSessions("time_updated", "desc", null, "7d")
+  const cutoffAfterMs = Date.now() - 7 * 86_400_000
+  assert.ok(
+    filteredByWeekPage.sessions.every((session) => session.timeUpdated >= cutoffBeforeMs),
+    "every kept session was updated within the last 7 days",
+  )
+  const keptIds = new Set(filteredByWeekPage.sessions.map((session) => session.id))
+  for (const unfilteredSession of unfilteredPage.sessions) {
+    if (unfilteredSession.timeUpdated >= cutoffAfterMs) {
+      assert.ok(
+        keptIds.has(unfilteredSession.id),
+        "a session updated within the window must not be dropped by the 7d filter",
+      )
+    }
+  }
+  assert.equal(
+    filteredByWeekPage.total,
+    null,
+    "a range-filtered page carries no total — same degradation as the directory filter",
+  )
+
+  // The fixture spans roughly the last 8 days, so wider ranges keep all.
+  assert.equal(getMockSessions("time_updated", "desc", null, "30d").sessions.length, unfilteredPage.sessions.length)
+  assert.equal(getMockSessions("time_updated", "desc", null, "90d").sessions.length, unfilteredPage.sessions.length)
+
+  // Range stacks with the directory filter (AND).
+  const firstDirectory = unfilteredPage.sessions[0]!.directory
+  const stackedPage = getMockSessions("time_updated", "desc", firstDirectory, "90d")
+  assert.ok(stackedPage.sessions.length > 0)
+  assert.ok(stackedPage.sessions.every((session) => session.directory === firstDirectory))
+  assert.equal(stackedPage.total, null)
+
+  // Unknown non-empty range mirrors the backend 400 — mock refuses to
+  // serve dirty data for a value outside the wire vocabulary.
+  assert.throws(
+    () => getMockSessions("time_updated", "desc", null, "14d"),
+    /unknown range/,
   )
 })

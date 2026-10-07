@@ -9,11 +9,14 @@
  *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts ModelMetric）
  *   GET /api/agents    → buildAgentStats()（stats/agent-fingerprint.ts AgentStat）
  *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）；
- *                        getMockSessions(sort, order, directory) 在此之上
- *                        补齐 v0.4.0 排序契约（白名单/回退与后端
+ *                        getMockSessions(sort, order, directory, range)
+ *                        在此之上补齐 v0.4.0 排序契约（白名单/回退与后端
  *                        resolveSessionSortKey/Order（queries.ts）一致，
- *                        非法值回退默认不发 400）与 v0.7.0 目录过滤
- *                        契约（精确匹配，缺省/空=不过滤，匹配不到=空数组）
+ *                        非法值回退默认不发 400）、v0.7.0 目录过滤契约
+ *                        （精确匹配，缺省/空=不过滤，匹配不到=空数组）与
+ *                        v0.9.0 时间范围契约（range 词表 7d|30d|90d，
+ *                        timeUpdated 口径，缺省/空=全量，词表外非空值
+ *                        抛错镜像后端 400）
  *   GET /api/hour-heatmap?days=90  → buildHourHeatmap()（168 项零填充，
  *                        {weekday 0=周日..6, hour 0-23, steps}，weekday-major；
  *                        步数从逐日序列按作息权重重分摊，与 trend 口径一致）
@@ -616,18 +619,22 @@ export function getMockModelMetrics() { return modelMetricsPayload; }
 export function getMockAgentStats() { return agentStatsPayload; }
 
 /* ------------------------------------------------------------
- * GET /api/sessions?sort&order&directory —— v0.7.0 目录过滤语义
+ * GET /api/sessions?sort&order&directory&range —— v0.7.0 目录过滤 /
+ * v0.9.0 时间范围过滤语义
  * 排序白名单与回退对齐后端 resolveSessionSortKey / resolveSessionSortOrder
  * （db/queries.ts）：sort ∈ time_updated(默认)|time_created|tokens|cost|title，
  * 非白名单/缺省回退默认；order 仅 "asc" 翻转，其余回退 desc。
  * directory 为 null/"" 时不过滤（后端契约：缺省/空=无过滤）；非空时
  * 精确匹配 session.directory，匹配不到 → 空数组（过滤语义，合法结果，
- * 不抛错）。过滤态 total 置 null：mock 的 total 是全库假想计数，过滤后
- * 沿用会误导脚注，且真实源本就 total=null（裸数组）。并列决胜与后端
- * ORDER BY …, id ASC 一致：主键相等时按 id 升序。title 按码元序比较
- * （近似 SQLite BINARY 整序，不用 localeCompare）。每次请求在副本上
- * 过滤+排序，sessionsPayload 的基准次序不动（compaction topSessions 等
- * 共用它）。
+ * 不抛错）。range 词表 = 7d|30d|90d（缺省/空=全量），过滤口径
+ * timeUpdated（最近 N 天内更新，含边界日切点：now - N*86400_000）；
+ * 词表外的非空值抛错——镜像后端 400 防御，mock 不发脏数据（前端 UI
+ * 只从词表产生值，抛错仅钉契约）。任一过滤生效时 total 置 null：
+ * mock 的 total 是全库假想计数，过滤后沿用会误导脚注，且真实源本就
+ * total=null（裸数组）。并列决胜与后端 ORDER BY …, id ASC 一致：主键
+ * 相等时按 id 升序。title 按码元序比较（近似 SQLite BINARY 整序，
+ * 不用 localeCompare）。每次请求在副本上过滤+排序，sessionsPayload
+ * 的基准次序不动（compaction topSessions 等共用它）。
  * ------------------------------------------------------------ */
 const SESSION_SORT_FIELD_BY_KEY = {
   time_updated: "timeUpdated",
@@ -637,19 +644,32 @@ const SESSION_SORT_FIELD_BY_KEY = {
   title: "title",
 };
 
+const SESSION_RANGE_DAYS_BY_VALUE = { "7d": 7, "30d": 30, "90d": 90 };
+
 export function getMockSessions(
   sortKeyValue = "time_updated",
   sortOrderValue = "desc",
   directoryFilter = null,
+  rangeFilter = "",
 ) {
   const safeSortKey = Object.hasOwn(SESSION_SORT_FIELD_BY_KEY, sortKeyValue)
     ? sortKeyValue
     : "time_updated";
   const safeSortOrder = sortOrderValue === "asc" ? "asc" : "desc";
   const isDirectoryFiltered = directoryFilter !== null && directoryFilter !== "";
-  const baseSessions = isDirectoryFiltered
-    ? sessionsPayload.sessions.filter((session) => session.directory === directoryFilter)
-    : sessionsPayload.sessions;
+  // 词表外的非空 range 抛错（镜像后端 400）；空/缺省 = 全量。
+  const rangeDays = rangeFilter === null || rangeFilter === ""
+    ? null
+    : (Object.hasOwn(SESSION_RANGE_DAYS_BY_VALUE, rangeFilter)
+      ? SESSION_RANGE_DAYS_BY_VALUE[rangeFilter]
+      : undefined);
+  if (rangeDays === undefined) {
+    throw new Error(`unknown range "${String(rangeFilter)}"（契约词表：7d|30d|90d，缺省/空=全量）`);
+  }
+  const rangeCutoffMs = rangeDays === null ? 0 : Date.now() - rangeDays * 86_400_000;
+  const baseSessions = sessionsPayload.sessions.filter((session) =>
+    (!isDirectoryFiltered || session.directory === directoryFilter)
+    && (rangeDays === null || session.timeUpdated >= rangeCutoffMs));
   const sortField = SESSION_SORT_FIELD_BY_KEY[safeSortKey];
   const directionSign = safeSortOrder === "asc" ? 1 : -1;
   const sortedSessions = [...baseSessions].sort((left, right) => {
@@ -663,8 +683,9 @@ export function getMockSessions(
     // 与后端相同的 id ASC 决胜：方向无关，恒为升序
     return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   });
+  const isAnyFilterActive = isDirectoryFiltered || rangeDays !== null;
   return {
-    total: isDirectoryFiltered ? null : sessionsPayload.total,
+    total: isAnyFilterActive ? null : sessionsPayload.total,
     sessions: sortedSessions,
   };
 }

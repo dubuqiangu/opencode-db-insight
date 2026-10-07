@@ -16,7 +16,10 @@
  *                                  非法值后端回退默认不发 400；响应体零变化；
  *                                  v0.7.0 起支持 ?directory=<项目目录> 精确
  *                                  匹配过滤——缺省/空=不过滤，匹配不到=空数组
- *                                  200（过滤语义，合法结果））
+ *                                  200（过滤语义，合法结果）；v0.9.0 起支持
+ *                                  ?range=7d|30d|90d——过滤 timeUpdated
+ *                                  （最近 N 天内更新），缺省/空=全量，
+ *                                  未知非空值后端 400 防御）
  *   GET /api/session/:id/messages        → SessionMessageRecord[]
  *   GET /api/session/:id/system-prompt   → Record<instructionKey, text> | 404
  *   GET /api/hour-heatmap?days=90        → 168 项 {weekday,hour,steps}（零填充）
@@ -34,7 +37,9 @@
  *                                  timeCreated,timeUpdated,tokens,cost；
  *                                  RFC 4180 转义 + CRLF + UTF-8 BOM；
  *                                  ?directory= 过滤与 /api/sessions 同语义
- *                                  （精确匹配、缺省/空=全量、miss=仅表头）
+ *                                  （精确匹配、缺省/空=全量、miss=仅表头）；
+ *                                  v0.9.0 起 ?range= 与 /api/sessions 同
+ *                                  契约（7d|30d|90d，timeUpdated 口径）
  *
  * 真实/裸形状 → 组件所需形状的适配函数（normalizeTrendPayload 等）单独导出，
  * 供离线冒烟测试直接喂数验证。mock 分支保留用于离线演示。
@@ -68,6 +73,35 @@ export const DEFAULT_SESSION_SORT_KEY = "time_updated";
 export const DEFAULT_SESSION_SORT_ORDER = "desc";
 
 /**
+ * 会话面板时间范围词表（v0.9.0 契约）：rangeValue 即 ?range= 合法值。
+ * "" = 全部：缺省/空同为「不过滤」（与 directory 的归一逻辑一致）；
+ * 词表外的非空值后端 400 防御，前端 UI 只从这张表产生值。
+ * 过滤口径 = timeUpdated（「最近 N 天内有更新」）。
+ */
+export const SESSION_RANGE_OPTIONS = [
+  { rangeValue: "", label: "全部" },
+  { rangeValue: "7d", label: "7 天" },
+  { rangeValue: "30d", label: "30 天" },
+  { rangeValue: "90d", label: "90 天" },
+];
+export const DEFAULT_SESSION_RANGE = "";
+
+/** 词表查展示 label；非词表值回退 null（调用方自行降级文案）。 */
+export function sessionRangeLabel(rangeValue) {
+  const matchedRangeOption = SESSION_RANGE_OPTIONS.find((rangeOption) => rangeOption.rangeValue === rangeValue);
+  return matchedRangeOption === undefined ? null : matchedRangeOption.label;
+}
+
+/**
+ * ?range= 参数段（不含 ?/& 前缀）；null / 空串 → ""。
+ * 与 directoryQueryParam 同为参数编码单点（词表值本无特殊字符，
+ * encodeURIComponent 只作纵深）。
+ */
+function rangeQueryParam(range) {
+  return range === null || range === "" ? "" : `range=${encodeURIComponent(range)}`;
+}
+
+/**
  * ?directory= 参数段（不含 ?/& 前缀）；null / 空串 → ""。
  * 后端契约：缺省与空串同为「不过滤/全量」，两端归一。这是 directory
  * 参数编码的**唯一出处**——fetchSessions 与 CSV 导出地址共用，杜绝
@@ -78,15 +112,16 @@ function directoryQueryParam(directory) {
 }
 
 /**
- * GET /api/export/sessions.csv 的下载地址（v0.8.0）。directory 过滤走
- * directoryQueryParam 单点：无过滤 = 裸路径，有过滤 = ?directory=…
- * 与 fetchSessions 的请求路径构造保持同一语义。
+ * GET /api/export/sessions.csv 的下载地址（v0.8.0 起；v0.9.0 增 range）。
+ * 多参数拼接单点在此：directory / range 两段统一拼成一个 query string，
+ * 调用方绝不自行拼 ? 和 &。
  */
-export function sessionsExportCsvPath(directory = null) {
-  const directoryParam = directoryQueryParam(directory);
-  return directoryParam === ""
-    ? `${API_BASE}/export/sessions.csv`
-    : `${API_BASE}/export/sessions.csv?${directoryParam}`;
+export function sessionsExportCsvPath(directory = null, range = DEFAULT_SESSION_RANGE) {
+  const exportParamSegments = [directoryQueryParam(directory), rangeQueryParam(range)]
+    .filter((paramSegment) => paramSegment !== "");
+  const queryString = exportParamSegments.join("&");
+  const csvExportPath = `${API_BASE}/export/sessions.csv`;
+  return queryString === "" ? csvExportPath : `${csvExportPath}?${queryString}`;
 }
 
 /**
@@ -254,9 +289,10 @@ export async function fetchAgents() {
 }
 
 /**
- * GET /api/sessions?limit&offset&sort&order&directory —— 会话列表（真实源
- * total 未知）。directory 为 null/"" 时不携带该参数：默认请求路径与 0.6.1
- * 逐字节一致（后端对缺省与空串同为「不过滤」，两端归一）。
+ * GET /api/sessions?limit&offset&sort&order&directory&range —— 会话列表
+ * （真实源 total 未知）。directory 为 null/"" 时不携带该参数：默认请求
+ * 路径与 0.6.1 逐字节一致（后端对缺省与空串同为「不过滤」，两端归一）。
+ * range（v0.9.0）同语义：""/null = 全量，过滤口径 timeUpdated。
  */
 export async function fetchSessions(
   limit = 15,
@@ -264,8 +300,9 @@ export async function fetchSessions(
   sortKey = DEFAULT_SESSION_SORT_KEY,
   sortOrder = DEFAULT_SESSION_SORT_ORDER,
   directory = null,
+  range = DEFAULT_SESSION_RANGE,
 ) {
-  if (USE_MOCK) return resolveWithLatency(getMockSessions(sortKey, sortOrder, directory));
+  if (USE_MOCK) return resolveWithLatency(getMockSessions(sortKey, sortOrder, directory, range));
   // 默认组合不携带 sort/order 参数：默认请求路径与 0.4.1 逐字节一致
   // （后端对缺省与显式默认解析结果相同，省参数还少一次字符串拼接）。
   let requestPath = `/sessions?limit=${limit}&offset=${offset}`;
@@ -273,6 +310,8 @@ export async function fetchSessions(
   if (sortOrder !== DEFAULT_SESSION_SORT_ORDER) requestPath += `&order=${encodeURIComponent(sortOrder)}`;
   const directoryParam = directoryQueryParam(directory);
   if (directoryParam !== "") requestPath += `&${directoryParam}`;
+  const rangeParam = rangeQueryParam(range);
+  if (rangeParam !== "") requestPath += `&${rangeParam}`;
   const sessionPage = await fetchJson(requestPath);
   return normalizeSessionPage(sessionPage);
 }

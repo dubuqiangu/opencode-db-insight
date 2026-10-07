@@ -214,21 +214,33 @@ export function createFakeInsightDatabase(
       // test/session-list-sorting.test.ts (发布清单 #2: SQL semantics
       // must be locked against real SQLite, not a fake JS mirror).
       // The v0.7.0 directory drill-down IS mirrored here (exact match
-      // on the directory column) — only so filtered route tests get
-      // meaningful rows and the bind-parameter positions stay right;
-      // its authoritative semantics live in
-      // test/session-directory-filter.test.ts.
+      // on the directory column) and so is the v0.9.0 range window
+      // (epoch-ms time_updated >= threshold) — only so filtered route
+      // tests get meaningful rows and the bind-parameter positions
+      // stay right (without the range mirror, the threshold would
+      // consume the limit slot); their authoritative semantics live in
+      // test/session-directory-filter.test.ts and
+      // test/session-range-filter.test.ts.
       const hasDirectoryFilter = sql.includes("WHERE directory = ?")
+      const hasRangeFilter = sql.includes("time_updated >= ?")
       return {
         all: (...parameters: unknown[]) => {
-          const parameterList = hasDirectoryFilter ? parameters.slice(1) : parameters
-          const filterValue = hasDirectoryFilter ? String(parameters[0] ?? "") : null
-          const matchedSessionRows =
-            filterValue === null
-              ? sessionRows
-              : sessionRows.filter((sessionRow) => sessionRow.directory === filterValue)
-          const limit = Number(parameterList[0]) || 50
-          const offset = Number(parameterList[1]) || 0
+          let remainingParameters = [...parameters]
+          let matchedSessionRows = sessionRows
+          if (hasDirectoryFilter) {
+            const directoryFilterValue = String(remainingParameters.shift() ?? "")
+            matchedSessionRows = matchedSessionRows.filter(
+              (sessionRow) => sessionRow.directory === directoryFilterValue,
+            )
+          }
+          if (hasRangeFilter) {
+            const rangeStartMs = Number(remainingParameters.shift())
+            matchedSessionRows = matchedSessionRows.filter(
+              (sessionRow) => Number(sessionRow.time_updated) >= rangeStartMs,
+            )
+          }
+          const limit = Number(remainingParameters[0]) || 50
+          const offset = Number(remainingParameters[1]) || 0
           return matchedSessionRows.slice(offset, offset + limit)
         },
         get: () => undefined,

@@ -5,24 +5,33 @@
 
 import { escapeHtml } from "../format.js";
 
-/** 加载骨架：若干条微光文本块。 */
-export function renderLoading(container, blockCount = 3) {
+/**
+ * 加载骨架 HTML。renderLoading 的字符串形态：需要把占位和其他片段
+ * （如 v0.9.0 会话面板的时间范围选择器）拼进同一次 innerHTML 的调用方
+ * 用这个，避免占位一渲染就把选择器抹掉。
+ */
+export function buildLoadingHtml(blockCount = 3) {
   const blocks = [];
   for (let index = 0; index < blockCount; index += 1) {
     const widthPercent = index === blockCount - 1 ? 55 : 88 - index * 12;
     blocks.push(`<div class="skeleton-block skeleton-text" style="width:${widthPercent}%"></div>`);
   }
-  container.innerHTML = `<div aria-busy="true">${blocks.join("")}</div>`;
+  return `<div aria-busy="true">${blocks.join("")}</div>`;
+}
+
+/** 加载骨架：若干条微光文本块。 */
+export function renderLoading(container, blockCount = 3) {
+  container.innerHTML = buildLoadingHtml(blockCount);
 }
 
 /**
- * 空数据占位。hint 可选补充说明。
+ * 空数据占位 HTML。renderEmpty 的字符串形态（用途同 buildLoadingHtml）。
  * 契约：message / hint 是「可直接进 innerHTML 的 HTML」——拼了外部数据
  * （模型名等）的调用方必须先 escapeHtml（与 renderError 内部转义不同，
  * 这里保留调用方插 <b> 等富文本的空间）。
  */
-export function renderEmpty(container, message = "这段范围内没有数据", hint = "") {
-  container.innerHTML = `
+export function buildEmptyHtml(message = "这段范围内没有数据", hint = "") {
+  return `
     <div class="state-view">
       <svg class="state-icon" width="34" height="34" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 7h16M4 12h10M4 17h7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
@@ -30,6 +39,14 @@ export function renderEmpty(container, message = "这段范围内没有数据", 
       <div>${message}</div>
       ${hint ? `<div class="state-hint">${hint}</div>` : ""}
     </div>`;
+}
+
+/**
+ * 空数据占位。hint 可选补充说明。
+ * message / hint 的 HTML 契约见 buildEmptyHtml。
+ */
+export function renderEmpty(container, message = "这段范围内没有数据", hint = "") {
+  container.innerHTML = buildEmptyHtml(message, hint);
 }
 
 /**

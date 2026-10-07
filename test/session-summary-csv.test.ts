@@ -38,9 +38,12 @@ import {
 } from "../src/web/session-summary-csv.ts"
 import {
   handleApiRequest,
+  INVALID_RANGE_MESSAGE,
   type ApiRequestContext,
 } from "../src/web/api.ts"
 import { matchApiRoute } from "../src/web/router.ts"
+import { SESSION_RANGE_WINDOW_MS_PER_DAY } from "../src/db/queries.ts"
+import { clearResultCache, resultCacheSize } from "../src/stats/cache.ts"
 
 // ---------------------------------------------------------------------------
 // Pure-function helpers
@@ -543,6 +546,143 @@ test(
       // The test reaching these assertions is itself the termination
       // proof: an off-by-one loop here would spin forever (the next
       // full page would repeat, never producing a short page).
+    } finally {
+      database.close()
+    }
+  },
+)
+
+/** A fresh in-memory database with a range-shaped session_v2 table. */
+function createRangeShapedDatabase(
+  fixtureRows: { id: string; directory: string; timeUpdated: number }[],
+): SqliteReadWriteConnection {
+  const database = new readWriteConstructor!(":memory:")
+  database.exec(
+    "CREATE TABLE session_v2 (" +
+      "id TEXT, title TEXT, model TEXT, agent TEXT, directory TEXT, " +
+      "time_created INTEGER, time_updated INTEGER, " +
+      "tokens_input REAL, tokens_output REAL, tokens_cache_read REAL, cost REAL);",
+  )
+  const insertSession = database.prepare(
+    "INSERT INTO session_v2 (id, title, model, agent, directory, time_created, time_updated, " +
+      "tokens_input, tokens_output, tokens_cache_read, cost) " +
+      "VALUES (?, 'range row', ?, 'fixer', ?, 1000, ?, 1, 1, 1, 0.1)",
+  )
+  for (const fixtureRow of fixtureRows) {
+    insertSession.run(fixtureRow.id, MODEL_COLUMN_TEXT, fixtureRow.directory, fixtureRow.timeUpdated)
+  }
+  return database
+}
+
+test(
+  "real-SQL export: the range window filters the CSV snapshot and never touches the cache (v0.9.0)",
+  { skip: skipReason },
+  () => {
+    // The export shares the sessions list's resolver and contract: a
+    // legal window narrows the snapshot; an unknown word is a loud 400.
+    const nowMs = Date.now()
+    const dayMs = SESSION_RANGE_WINDOW_MS_PER_DAY
+    const database = createRangeShapedDatabase([
+      { id: "ses_csv_rng_1d", directory: "D:/projects/example-alpha", timeUpdated: nowMs - 1 * dayMs },
+      { id: "ses_csv_rng_8d", directory: "D:/projects/example-alpha", timeUpdated: nowMs - 8 * dayMs },
+      { id: "ses_csv_rng_29d", directory: "D:/projects/example-beta", timeUpdated: nowMs - 29 * dayMs },
+      { id: "ses_csv_rng_31d", directory: "D:/projects/example-beta", timeUpdated: nowMs - 31 * dayMs },
+    ])
+    try {
+      const dataIdsFor = (queryString: string): string[] => {
+        clearResultCache()
+        const exportResponse = handleApiRequest(csvContextFor(database, queryString))
+        assert.equal(exportResponse.statusCode, 200)
+        return parseCsvDocument(exportResponse.rawText!.text)
+          .slice(1)
+          .map((record) => record[0])
+      }
+
+      clearResultCache()
+      assert.deepEqual(dataIdsFor("range=7d"), ["ses_csv_rng_1d"], "7d: only the freshest row")
+      assert.deepEqual(
+        dataIdsFor("range=30d"),
+        ["ses_csv_rng_1d", "ses_csv_rng_8d", "ses_csv_rng_29d"],
+        "30d: the 31d row stays out",
+      )
+      assert.deepEqual(
+        dataIdsFor("range=90d"),
+        ["ses_csv_rng_1d", "ses_csv_rng_8d", "ses_csv_rng_29d", "ses_csv_rng_31d"],
+        "90d: every row",
+      )
+      assert.deepEqual(
+        dataIdsFor(""),
+        ["ses_csv_rng_1d", "ses_csv_rng_8d", "ses_csv_rng_29d", "ses_csv_rng_31d"],
+        "no range: the full snapshot",
+      )
+
+      // A typo'd range is a loud 400 on the export too — never a
+      // silent full-list CSV the caller would mistake for a filtered
+      // snapshot.
+      clearResultCache()
+      const invalidResponse = handleApiRequest(csvContextFor(database, "range=week"))
+      assert.equal(invalidResponse.statusCode, 400)
+      assert.deepEqual(invalidResponse.body, { error: INVALID_RANGE_MESSAGE })
+
+      // One-shot export, still uncached with the range dimension: none
+      // of the requests above left a TTL entry behind.
+      assert.equal(resultCacheSize(), 0, "the range export never touches the result cache")
+    } finally {
+      clearResultCache()
+      database.close()
+    }
+  },
+)
+
+test(
+  "real-SQL export: the pagination loop carries the range window on every page (v0.9.0)",
+  { skip: skipReason },
+  () => {
+    // 600 in-window rows + 300 ancient rows. The export pages at the
+    // 500-row clamp ceiling, so this snapshot crosses a page boundary
+    // INSIDE the window: if any later page dropped the range condition,
+    // it would return ancient rows (offset 500 of the unfiltered list
+    // is 100 fresh + 400 stale) and the count/id locks below would
+    // catch it immediately.
+    const nowMs = Date.now()
+    const dayMs = SESSION_RANGE_WINDOW_MS_PER_DAY
+    const fixtureRows: { id: string; directory: string; timeUpdated: number }[] = []
+    for (let freshIndex = 0; freshIndex < 600; freshIndex += 1) {
+      fixtureRows.push({
+        id: `ses_csv_rngpage_new_${String(freshIndex).padStart(3, "0")}`,
+        directory: "D:/projects/example-alpha",
+        timeUpdated: nowMs - 1 * dayMs,
+      })
+    }
+    for (let ancientIndex = 0; ancientIndex < 300; ancientIndex += 1) {
+      fixtureRows.push({
+        id: `ses_csv_rngpage_old_${String(ancientIndex).padStart(3, "0")}`,
+        directory: "D:/projects/example-beta",
+        timeUpdated: nowMs - 91 * dayMs,
+      })
+    }
+    const database = createRangeShapedDatabase(fixtureRows)
+    try {
+      const exportResponse = handleApiRequest(csvContextFor(database, "range=90d"))
+      assert.equal(exportResponse.statusCode, 200)
+      const exportRecords = parseCsvDocument(exportResponse.rawText!.text)
+
+      // Header + exactly the 600 in-window rows: the second page (the
+      // short one) contributed the remaining 100 fresh rows and not a
+      // single ancient row.
+      assert.equal(exportRecords.length, 601, "header + every fresh row, ancient rows all excluded")
+
+      const exportedIds = exportRecords.slice(1).map((record) => record[0])
+      assert.equal(new Set(exportedIds).size, 600, "no duplicated id across the page boundary")
+      assert.ok(
+        exportedIds.every((rowId) => rowId.startsWith("ses_csv_rngpage_new_")),
+        "no ancient row leaked into the filtered export",
+      )
+
+      // All 600 share one time_updated, so the id ASC tie-break owns
+      // the whole ordering — first and last rows pinned.
+      assert.equal(exportRecords[1][0], "ses_csv_rngpage_new_000")
+      assert.equal(exportRecords[600][0], "ses_csv_rngpage_new_599")
     } finally {
       database.close()
     }

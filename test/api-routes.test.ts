@@ -12,6 +12,7 @@ import {
   handleApiRequest,
   INSIGHT_VERSION,
   INTERNAL_ERROR_MESSAGE,
+  INVALID_RANGE_MESSAGE,
   SESSION_EMPTY_MESSAGE,
   SESSION_NOT_FOUND_MESSAGE,
   type ApiRequestContext,
@@ -719,6 +720,145 @@ test("the sessions.csv export answers 200 with the CSV headers, the BOM document
     // One-shot click export, deliberately uncached: the requests above
     // must not have left a single TTL entry behind.
     assert.equal(resultCacheSize(), 0, "the export never touches the result cache")
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("sessions and the CSV export with a range parameter still answer 503 while the db is missing (v0.9.0)", () => {
+  const sessionsRoute = matchApiRoute("/api/sessions")
+  const exportCsvRoute = matchApiRoute("/api/export/sessions.csv")
+  assert.notEqual(sessionsRoute, null)
+  assert.notEqual(exportCsvRoute, null)
+  for (const route of [sessionsRoute!, exportCsvRoute!]) {
+    const apiResponse = handleApiRequest({
+      route,
+      // A range word that would be a 400 with a live db must never even
+      // reach parameter parsing on the way to the 503 — the db
+      // short-circuit fires first (same discipline as ?directory=).
+      searchParams: new URLSearchParams("range=week"),
+      database: null,
+      databasePath: "test://no-database",
+      serverPort: 18789,
+    })
+    assert.equal(apiResponse.statusCode, 503)
+    assert.deepEqual(apiResponse.body, { error: DATABASE_UNAVAILABLE_MESSAGE })
+  }
+})
+
+test("sessions cache keys carry the range dimension: words get entries, empty shares the default, invalid adds none (v0.9.0)", () => {
+  clearResultCache()
+  try {
+    const nowMs = Date.now()
+    const dayMs = 86_400_000
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_range_cache_fresh",
+          timeCreated: nowMs - 1 * dayMs,
+          timeUpdated: nowMs - 1 * dayMs,
+        }),
+        buildFakeSessionSummary({
+          id: "ses_range_cache_stale",
+          timeCreated: nowMs - 91 * dayMs,
+          timeUpdated: nowMs - 91 * dayMs,
+        }),
+      ],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+    const sessionsRoute = matchApiRoute("/api/sessions")!
+    const contextWithQuery = (queryString: string): ApiRequestContext => ({
+      route: sessionsRoute,
+      searchParams: new URLSearchParams(queryString),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+
+    // The default entry (no range parameter).
+    handleApiRequest(contextWithQuery(""))
+    assert.equal(resultCacheSize(), 1)
+
+    // The raw word is the cache dimension — never the Date.now()-based
+    // threshold, which moves every millisecond and would spray
+    // near-duplicate entries (contract #4).
+    handleApiRequest(contextWithQuery("range=7d"))
+    assert.equal(resultCacheSize(), 2, "7d is its own entry")
+    handleApiRequest(contextWithQuery("range=30d"))
+    assert.equal(resultCacheSize(), 3, "30d is its own entry")
+
+    // An empty ?range= shares the "no filter" key with no parameter at
+    // all — the same equivalence as ?directory=.
+    handleApiRequest(contextWithQuery("range="))
+    assert.equal(resultCacheSize(), 3, "empty range shares the default key")
+
+    // An invalid word is rejected with a loud 400 BEFORE any cache
+    // write — no near-duplicate garbage entries.
+    const invalidResponse = handleApiRequest(contextWithQuery("range=week"))
+    assert.equal(invalidResponse.statusCode, 400)
+    assert.deepEqual(invalidResponse.body, { error: INVALID_RANGE_MESSAGE })
+    assert.equal(resultCacheSize(), 3, "the 400 wrote no cache entry")
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("the sessions route rejects unknown range words with a loud 400 and filters real windows otherwise (v0.9.0)", () => {
+  clearResultCache()
+  try {
+    const nowMs = Date.now()
+    const dayMs = 86_400_000
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_range_route_fresh",
+          timeCreated: nowMs - 1 * dayMs,
+          timeUpdated: nowMs - 1 * dayMs,
+        }),
+        buildFakeSessionSummary({
+          id: "ses_range_route_stale",
+          timeCreated: nowMs - 91 * dayMs,
+          timeUpdated: nowMs - 91 * dayMs,
+        }),
+      ],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+    const sessionsRoute = matchApiRoute("/api/sessions")!
+    const contextWithQuery = (queryString: string): ApiRequestContext => ({
+      route: sessionsRoute,
+      searchParams: new URLSearchParams(queryString),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+    const bodyIds = (apiResponse: { body: unknown }): string[] =>
+      (apiResponse.body as { id: string }[]).map((sessionSummary) => sessionSummary.id)
+
+    // The whole typo family answers the same loud 400 — a silent
+    // full-list fallback would read as "filtered" to the caller.
+    for (const invalidRangeWord of ["7days", "24h", "week", "7D", "__proto__"]) {
+      const invalidResponse = handleApiRequest(
+        contextWithQuery(`range=${encodeURIComponent(invalidRangeWord)}`),
+      )
+      assert.equal(invalidResponse.statusCode, 400, `"${invalidRangeWord}" must 400`)
+      assert.deepEqual(invalidResponse.body, { error: INVALID_RANGE_MESSAGE })
+    }
+
+    // A legal window really filters (and exercises the fake's minimal
+    // range mirror — bind slots stay right, limit is not consumed).
+    const filteredResponse = handleApiRequest(contextWithQuery("range=30d"))
+    assert.equal(filteredResponse.statusCode, 200)
+    assert.deepEqual(bodyIds(filteredResponse), ["ses_range_route_fresh"])
+
+    // Without a window the stale row is back.
+    const defaultResponse = handleApiRequest(contextWithQuery(""))
+    assert.equal(defaultResponse.statusCode, 200)
+    assert.deepEqual(bodyIds(defaultResponse), [
+      "ses_range_route_fresh",
+      "ses_range_route_stale",
+    ])
   } finally {
     clearResultCache()
   }

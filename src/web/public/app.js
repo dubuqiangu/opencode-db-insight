@@ -204,14 +204,14 @@ const SESSION_LIST_PAGE_LIMIT = 15;
 /**
  * 排序状态/缓存/序列守卫都在 session-sort-controller 里；这里只注入：
  * 单页请求闭包（limit/offset 钉死，见该模块头部 N-2 注释）、模型过滤
- * 只读访问器、顶栏失败计数回调。渲染时机（初始/列头/重置/过滤/主题）
- * 全部转交控制器。v0.7.0：请求闭包透传 directory（目录下钻维度，
- * 空串/缺省在 fetchSessions 内归一为不携带参数）。
+ * 只读访问器、顶栏失败计数回调。渲染时机（初始/列头/重置/过滤/范围/
+ * 主题）全部转交控制器。v0.7.0：请求闭包透传 directory；v0.9.0：
+ * 透传 range（两者空值在 fetchSessions 内归一为不携带参数）。
  */
 const sessionSortController = createSessionSortController({
   containerElement: sessionListElement,
-  fetchSessionsPage: (sortKey, sortOrder, directory) =>
-    fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder, directory),
+  fetchSessionsPage: (sortKey, sortOrder, directory, range) =>
+    fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder, directory, range),
   getModelFilter: () => state.modelFilter,
   markSectionSucceeded: () => markSection("sessions", true),
   markSectionFailed: () => markSection("sessions", false),

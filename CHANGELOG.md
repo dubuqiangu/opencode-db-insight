@@ -8,6 +8,18 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.9.0] - 2026-10-07 · 时间范围筛选（双车道）
+
+### Added
+- **`?range=7d|30d|90d` 时间窗过滤**（后端）：过滤 `time_updated >= 请求时刻 − N×86400000`（epoch-ms 数值绑定——time_updated 为 epoch-ms 整数列，与既有 scan 层先例同形态，无需 CAST；ISO 文本形态的跨类型静默回退已被真实夹具测试排除）；词表单点 `SESSION_RANGE_WINDOW_DAYS_BY_RANGE_KEY`；三态解析器 `resolveSessionRange`（缺省/空=全量 / 合法=窗口 / **未知非空 → 400** 响亮失败，`Object.hasOwn` 防原型链键 500，400 响应体含词表提示）；503 短路在参数解析之前（两路由测试锁）
+- **生效面**：`/api/sessions` 与 `/api/export/sessions.csv` 同契约（导出是过滤视图快照）；导出全量翻页循环**每页**带同一阈值（无重无漏不变量扩展到过滤子集——600 窗内+300 窗外行夹具锁：第二页丢条件会被计数断言当场抓获）；与 `?directory=` 组合 AND 交集；**目录面板零影响**（面板间零耦合）
+- **SQL 组织**：`SESSION_RANGE_FILTER_SQL` 与 `SESSION_DIRECTORY_FILTER_SQL` 并列单点常量；绑定顺序 `directory → range 阈值 → limit → offset`（SQL 捕获测试四形态字节级锁定，无过滤分支与 0.9.0 前字节一致）
+- **缓存键四维**：`sessions:[limit,offset,sort,order,directory,range]`——range 维用**原始词**（非 Date.now() 派生阈值，阈值每毫秒漂移会摧毁缓存），空串与缺省共享键，非法词 400 在缓存写入之前（键数零增，测试锁）
+- **前端**（复用趋势图 `.range-switch` 胶囊样式，零新体系）：面板顶部 `全部 | 7 天 | 30 天 | 90 天` 分段控件（词表单点 `SESSION_RANGE_OPTIONS`，UI 只产合法值）；三态贯穿（加载骨架/空态/表格均保留选择器，空结果不锁死用户）；controller 缓存键四维扩维 `sort:order:directory:range`——**键内 directory 走 URL 编码**（盘符 `:` 消除分段歧义）+ 四维快照竞态守卫（「token 仍新但 range 已切走」的晚到者被弹掉，新测试钉住）；三维正交（切范围不清目录/排序、下钻不清范围）；导出 URL 双参数单点拼接（directory 在前 range 在后，`rangeQueryParam`/`directoryQueryParam` 并列）；导出按钮 title 四组合按过滤态更新；脚注追加范围段（服务端参数先于客户端模型过滤的既有顺序）；mock 词表外非空值抛错（镜像 400，不发脏数据）、total 置 null 降级（同 v0.7.0 理由）
+- fake-insight-db 补 range 最小镜像（否则阈值侵占 limit 绑定槽——v0.7.0 directory 镜像同先例）
+- 测试 282 → **299**（+17：三态解析器+冻结时钟阈值算术+9 非法词+原型链敌意键、真实 SQL 各窗命中+边界 `>=` 钉死、directory×range 四象限交集、SQL 捕获四形态、API 400 词族、503 先行、缓存键维度、导出快照+翻页带 range、组件四态切换/缓存分键/快照守卫/导出单点/脚注/mock 双侧边界）
+- 真实库探针 16/16：7d/30d/90d 单调命中（284/387/500）、行行在窗、空串=全量、400 含词表、导出行数=列表行数（284=284 全量翻页不截断）、directory×range 叠加行行双条件、目录面板零影响
+
 ## [0.8.1] - 2026-10-07 · v0.8.0 增量审查修复
 
 @oracle 对 v0.8.0 增量的审查（P0 零 / P1 零 / P2×2）发现项的修复版本。导出链路核心承诺全部审查确认：转义完备（活库 828 行实测含引号/逗号/CJK 标题，引号包裹+翻倍形态正确）、BOM+CRLF 字节级正确（EF BB BF）、全量翻页确定性终止、注入面闭合（SQL 参数绑定 + href 双重编码）、缓存零占用、.md 路由零扰动。

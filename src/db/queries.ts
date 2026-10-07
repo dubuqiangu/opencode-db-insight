@@ -207,13 +207,78 @@ const SESSION_LIST_SELECT_SQL =
        FROM session_v2`
 
 /**
- * Directory drill-down filter (v0.7.0): parameterized exact match on the
- * session_v2.directory column. The value is a free-form string (NOT a
+ * Directory drill-down condition (v0.7.0): parameterized exact match on
+ * the session_v2.directory column. The value is a free-form string (NOT a
  * whitelist key like ?sort=), so it only ever reaches SQLite as a bind
  * parameter — every other token of the constructed SQL stays a
  * compile-time literal.
  */
-const SESSION_DIRECTORY_FILTER_SQL = "WHERE directory = ?"
+const SESSION_DIRECTORY_FILTER_SQL = "directory = ?"
+
+/**
+ * Time-range window condition (v0.9.0): parameterized floor on the
+ * epoch-ms session_v2.time_updated column (the same numeric-ms storage
+ * the scan layer already floors with `time_created >= ?` in this file).
+ * The threshold is computed server-side per request and only ever
+ * reaches SQLite as a bind parameter.
+ */
+const SESSION_RANGE_FILTER_SQL = "time_updated >= ?"
+
+/** One day in milliseconds, for the ?range= window presets. */
+export const SESSION_RANGE_WINDOW_MS_PER_DAY = 86_400_000
+
+/**
+ * Vocabulary of the ?range= presets (v0.9.0): each allowed key maps to
+ * the window length in days. Like the ?sort= whitelist this is a fixed
+ * map — raw query-string text never reaches the SQL string, only the
+ * days count does, via the computed threshold bind.
+ */
+export const SESSION_RANGE_WINDOW_DAYS_BY_RANGE_KEY = {
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+} as const
+
+export type SessionRangeKey = keyof typeof SESSION_RANGE_WINDOW_DAYS_BY_RANGE_KEY
+
+/**
+ * Tri-state resolution of ?range= (v0.9.0):
+ * - "none": missing, null or empty parameter → no window at all;
+ * - "window": a vocabulary key → the epoch-ms floor (now − N days);
+ * - "invalid": an unknown non-empty value → the caller answers a loud
+ *   400. Deliberately NOT the sort/order fallback semantics: a typo'd
+ *   range that silently returned the full list would read as "filtered"
+ *   to the caller — the exact "自以为筛了" trap this contract rejects.
+ * Unlike a directory miss (a legitimate empty result for a legal value),
+ * an illegal range word is rejected outright.
+ */
+export type SessionRangeResolution =
+  | { rangeKind: "none" }
+  | { rangeKind: "window"; rangeStartMs: number }
+  | { rangeKind: "invalid" }
+
+/**
+ * Resolve ?range= per the tri-state contract above. Own-property check
+ * (`Object.hasOwn`, not `in`) so prototype-chain keys like "toString" /
+ * "__proto__" resolve to "invalid" — the P1-1 (v0.4.1) discipline
+ * applied to this vocabulary too.
+ */
+export function resolveSessionRange(
+  rangeParamValue: string | null | undefined,
+): SessionRangeResolution {
+  if (rangeParamValue === null || rangeParamValue === undefined || rangeParamValue === "") {
+    return { rangeKind: "none" }
+  }
+  if (!Object.hasOwn(SESSION_RANGE_WINDOW_DAYS_BY_RANGE_KEY, rangeParamValue)) {
+    return { rangeKind: "invalid" }
+  }
+  const windowDays =
+    SESSION_RANGE_WINDOW_DAYS_BY_RANGE_KEY[rangeParamValue as SessionRangeKey]
+  return {
+    rangeKind: "window",
+    rangeStartMs: Date.now() - windowDays * SESSION_RANGE_WINDOW_MS_PER_DAY,
+  }
+}
 
 /**
  * Session list for GET /api/sessions. `tokens` comes from the session_v2
@@ -234,6 +299,14 @@ const SESSION_DIRECTORY_FILTER_SQL = "WHERE directory = ?"
  * sort. Missing, null or empty-string means no filter at all, and the
  * no-filter SQL stays byte-identical to the pre-0.7.0 statement (locked
  * by test/session-directory-filter.test.ts).
+ *
+ * Time-range window (v0.9.0): a numeric `rangeStartMs` adds an
+ * epoch-ms floor (`time_updated >= ?`), computed per request by
+ * resolveSessionRange. It composes with the directory filter in the
+ * same WHERE (AND), and like the directory value it only ever reaches
+ * SQLite as a bind parameter. Bind order (v0.9.0, locked by
+ * test/session-range-filter.test.ts): directory, range threshold,
+ * limit, offset.
  */
 export function querySessionList(
   db: SqliteReadConnection | null,
@@ -242,6 +315,7 @@ export function querySessionList(
   sortKeyValue: string | null | undefined = DEFAULT_SESSION_SORT_KEY,
   sortOrderValue: string | null | undefined = DEFAULT_SESSION_SORT_ORDER,
   directoryValue: string | null | undefined = null,
+  rangeStartMs: number | null | undefined = null,
 ): SessionSummary[] | null {
   if (db === null) return null
   const safeLimit = clampPaginationValue(limit, 1, 500)
@@ -251,23 +325,36 @@ export function querySessionList(
   const primarySortSql = SESSION_SORT_SQL_BY_SORT_KEY[safeSortKey]
   const primaryDirectionSql = safeSortOrder === "asc" ? "ASC" : "DESC"
   const hasDirectoryFilter = typeof directoryValue === "string" && directoryValue !== ""
+  const hasRangeFilter = typeof rangeStartMs === "number" && Number.isFinite(rangeStartMs)
+
+  // Filter conditions compose in a fixed order (directory first, then
+  // the range window) so the bind-parameter order is deterministic:
+  // [directory,] [range threshold,] limit, offset.
+  const sessionFilterConditionsSql: string[] = []
+  const sessionFilterBindValues: unknown[] = []
+  if (hasDirectoryFilter) {
+    sessionFilterConditionsSql.push(SESSION_DIRECTORY_FILTER_SQL)
+    sessionFilterBindValues.push(directoryValue)
+  }
+  if (hasRangeFilter) {
+    sessionFilterConditionsSql.push(SESSION_RANGE_FILTER_SQL)
+    sessionFilterBindValues.push(rangeStartMs)
+  }
+  // The "\n       " prefix keeps the filtered shapes byte-identical to
+  // the pre-0.9.0 statements (locked by the directory-filter and
+  // sorting tests); the empty no-filter case keeps the pre-0.7.0 shape.
+  const sessionFilterWhereSql =
+    sessionFilterConditionsSql.length === 0
+      ? ""
+      : `\n       WHERE ${sessionFilterConditionsSql.join(" AND ")}`
 
   const rawRows = db
     .prepare(
-      hasDirectoryFilter
-        ? `${SESSION_LIST_SELECT_SQL}
-       ${SESSION_DIRECTORY_FILTER_SQL}
-       ORDER BY ${primarySortSql} ${primaryDirectionSql}, id ASC
-       LIMIT ? OFFSET ?`
-        : `${SESSION_LIST_SELECT_SQL}
+      `${SESSION_LIST_SELECT_SQL}${sessionFilterWhereSql}
        ORDER BY ${primarySortSql} ${primaryDirectionSql}, id ASC
        LIMIT ? OFFSET ?`,
     )
-    .all(
-      ...(hasDirectoryFilter
-        ? [directoryValue, safeLimit, safeOffset]
-        : [safeLimit, safeOffset]),
-    )
+    .all(...sessionFilterBindValues, safeLimit, safeOffset)
 
   const sessionSummaries: SessionSummary[] = []
   for (const rawRow of rawRows) {
