@@ -148,12 +148,14 @@ test("computeModelMetrics sets tokenShare to each model's raw fraction of all mo
   assert.equal(modelMetrics[0].tokenShare, 1_600 / 1_700)
   assert.equal(modelMetrics[1].tokenShare, 100 / 1_700)
 
-  // Same source rows, same denominator → the shares sum to exactly 1.
+  // Same source rows, same denominator → the shares sum to 1, up to
+  // floating-point rounding (each division rounds by ≤ 0.5 ulp; a strict
+  // === 1 would only pass by fixture-number luck).
   const tokenShareSum = modelMetrics.reduce(
     (sum: number, modelMetric) => sum + modelMetric.tokenShare,
     0,
   )
-  assert.equal(tokenShareSum, 1)
+  assert.ok(Math.abs(tokenShareSum - 1) < 1e-9)
 })
 
 test("computeModelMetrics returns tokenShare 0 for every model when all tokens are 0", () => {

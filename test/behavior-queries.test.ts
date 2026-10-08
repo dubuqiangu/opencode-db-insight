@@ -94,7 +94,9 @@ test("queryHourHeatmap buckets one assistant step into its local weekday/hour ce
 })
 
 test("queryHourHeatmap respects the days window: old steps drop out, fresh ones stay", () => {
-  const freshStepTime = Date.now() - 60 * 60 * 1000 // one hour ago
+  const freshStepTime = Date.now() // "now" is always ≥ today's local midnight, hence inside the days=1 window
+  // (a "one hour ago" anchor falls below the window start when the suite runs
+  // between 00:00 and 01:00 local time and the fresh step would drop out).
   const staleStepTime = Date.now() - 10 * DAY_MS // ten days ago
   const fakeDatabase = createFakeInsightDatabase({
     ...emptyScenario(),

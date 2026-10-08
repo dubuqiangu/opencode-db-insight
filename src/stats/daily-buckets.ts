@@ -25,8 +25,9 @@ export interface DailyTrendPoint {
    * maps pivot 1:1 into the mock's `{ modelId, values[] }` series with
    * values aligned to the points (the mock is the pinned wire
    * contract, src/web/public/mock-data.js getMockTrend). Key order is
-   * deterministic — see the pinned sort below. Exception: a modelId that is a
-    * canonical numeric string (e.g. "42") is enumerated first by the JS
+   * deterministic — see the pinned sort below. Exception: a modelId that is
+    * an integer-valued array-index key (a canonical numeric string in
+    * [0, 2³²−2), e.g. "42") is enumerated first by the JS
     * integer-key rule, breaking insertion order in Object.keys — consumers
     * must not rely on key order (the frontend pivots with its own total
     * order: window total desc + id asc), so this stays informational.

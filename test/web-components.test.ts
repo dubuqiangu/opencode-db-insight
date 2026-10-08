@@ -2483,12 +2483,13 @@ test("renderModelTable renders the v0.12.0 token 占比 column next to 总 token
     .find((headerCell) => headerCell.dataset.key === "tokenShare")!
   assert.ok(tokenShareHeader.classTokenList().includes("num"))
 
-  // Share cells render as bare 1-decimal percents. 1 digit (not the 推理占比
-  // column's 0 digits) is deliberate: the mock's long tail sits near 0.4% —
-  // integer rounding would print a lying "0%" for models that did run.
-  assert.ok(container.innerHTML.includes('<td class="num">42.7%</td>'), "0.427 renders as 42.7%")
-  assert.ok(container.innerHTML.includes('<td class="num">30.1%</td>'))
-  assert.ok(container.innerHTML.includes('<td class="num">27.2%</td>'))
+  // Share cells render as bare 2-decimal percents. 2 digits (not 1, and not
+  // the 推理占比 column's 0 digits) is the v0.12.1 display ruling: a live
+  // 85-model window rendered 55 rows as a useless "0.0%" at 1 digit — the
+  // second decimal keeps the 0.05%–1% long tail readable.
+  assert.ok(container.innerHTML.includes('<td class="num">42.70%</td>'), "0.427 renders as 42.70%")
+  assert.ok(container.innerHTML.includes('<td class="num">30.10%</td>'))
+  assert.ok(container.innerHTML.includes('<td class="num">27.20%</td>'))
 
   // Default sort state (pinned above): exactly the tokens column sorted desc.
   const sortedHeaders = container.querySelectorAll("th.sorted")
@@ -2551,15 +2552,15 @@ test("renderModelTable degrades absent and NaN tokenShare (old-wire window) with
   renderModelTable(container, oldWireMetrics, null, noopModelSelect)
 
   // Absent and NaN both degrade to —; a missing share must never pose as a
-  // real "0.0%" (the top-ranked model claiming zero share is a lie).
+  // real "0.00%" (the top-ranked model claiming zero share is a lie).
   assert.equal(
     (container.innerHTML.match(/<td class="num">—<\/td>/g) ?? []).length,
     2,
     "absent (old wire) and NaN shares degrade to —",
   )
   assert.ok(
-    container.innerHTML.includes('<td class="num">0.0%</td>'),
-    "a finite zero share is a real value and renders as 0.0%",
+    container.innerHTML.includes('<td class="num">0.00%</td>'),
+    "a finite zero share is a real value and renders as 0.00%",
   )
   // The hitRate stays healthy in the fixture — proves the — cells belong to
   // the share column, not a degraded hitRate cell.
@@ -2599,11 +2600,11 @@ test("getMockModelMetrics mirrors the v0.12.0 tokenShare wire: per-model tokens/
   )
 
   // The mock path renders share cells in place: every model row carries a
-  // bare 1-decimal percent cell (the only such bare td — hitRate is span-
+  // bare 2-decimal percent cell (the only such bare td — hitRate is span-
   // wrapped and 推理占比 renders 0-digit integers).
   const container = freshContainer()
   renderModelTable(container, mockMetrics, null, noopModelSelect)
-  const shareCellMatches = container.innerHTML.match(/<td class="num">\d+\.\d%<\/td>/g) ?? []
+  const shareCellMatches = container.innerHTML.match(/<td class="num">\d+\.\d{2}%<\/td>/g) ?? []
   assert.equal(shareCellMatches.length, mockMetrics.length, "every model row renders its tokenShare cell")
   assert.ok(
     !container.innerHTML.includes('<td class="num">—</td>'),

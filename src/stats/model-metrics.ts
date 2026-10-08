@@ -18,7 +18,9 @@ export interface ModelMetric {
    * computeModelMetrics invocation (raw fraction 0..1, never rounded or
    * scaled — the display side formats it). 0 for every model when the
    * all-models denominator is ≤ 0 (empty input or all-zero tokens); the
-   * per-model shares sum to 1 whenever the denominator is > 0.
+   * per-model shares sum to 1 up to floating-point rounding (each
+   * division carries ≤ 0.5 ulp of rounding; an 85-model live database
+   * measured a 1 ulp total deviation).
    */
   tokenShare: number
   hitRate: number

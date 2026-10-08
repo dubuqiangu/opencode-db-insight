@@ -18,9 +18,10 @@ const COLUMNS = [
   { key: "steps", label: "步骤", numeric: true },
   { key: "tokens", label: "总 token", numeric: true },
   // v0.12.0 token 占比：0..1 原始分数（wire 契约，分母 0 时全 0）。
-  // 紧邻「总 token」——占比是其派生读数，相邻便于逐行对照。显示 1 位
-  // 小数：长尾模型份额常 <1%，取整会读成 "0%"。旧 wire（宿主更新窗口期
-  // 字段缺失）与脏值（NaN/Infinity）降级 "—"——分母未知时显示 0.0% 是
+  // 紧邻「总 token」——占比是其派生读数，相邻便于逐行对照。显示 2 位
+  // 小数：长尾模型份额常 <1%，1 位小数把活库 55/85 行渲染成 "0.0%"，
+  // 列的信息量失效；2 位让 0.05%–1% 长尾可读。旧 wire（宿主更新窗口期
+  // 字段缺失）与脏值（NaN/Infinity）降级 "—"——分母未知时显示 0.00% 是
   // 谎报；排序的 ?? 0 兜底由 compareMetric 数值路径既有逻辑覆盖，不炸。
   { key: "tokenShare", label: "token 占比", numeric: true },
   { key: "hitRate", label: "命中率", numeric: true },
@@ -102,7 +103,7 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
         <td>${escapeHtml(metric.providerId)}</td>
         <td class="num">${formatCount(metric.steps)}</td>
         <td class="num primary">${formatTokens(metric.tokens)}</td>
-        <td class="num">${formatPercent(metric.tokenShare, 1)}</td>
+        <td class="num">${formatPercent(metric.tokenShare, 2)}</td>
         <td class="num">${hitRateCell(metric)}</td>
         <td class="num">${formatTokens(metric.outputPerStep)}</td>
         <td class="num">${formatTokens(metric.contextMedian)}</td>
