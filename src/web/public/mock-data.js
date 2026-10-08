@@ -5,7 +5,13 @@
  *   GET /api/overview  → buildOverview()（types.ts OverviewStats + 前端卡片
  *                        所需的今日 in/out 分列、环比、sparkline、成本估算）
  *   GET /api/trend     → buildTrend(days)（stats/daily-buckets.ts DailyTrendPoint
- *                        + byModel 每模型日序列，供堆叠面积图分色）
+ *                        裸数组；v0.11.0 起每点携带点级 byModel
+ *                        Record<模型id, 当日 tokens>——镜像真实 wire 契约：
+ *                        窗口内观察到的模型每日稠密出现、无活动日为零，
+ *                        键序确定=全窗总量 desc + modelId asc。透视成
+ *                        [{ modelId, values }] 序列由 data-source 的
+ *                        normalizeTrendPayload 统一完成，mock 与真实
+ *                        路径共用同一适配）
  *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts ModelMetric）
  *   GET /api/agents    → buildAgentStats()（stats/agent-fingerprint.ts AgentStat）
  *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）；
@@ -219,18 +225,46 @@ function buildOverview() {
 }
 
 /* ------------------------------------------------------------
- * GET /api/trend?days=N —— 逐日序列 + 每模型拆分
+ * GET /api/trend?days=N —— 裸数组 + 点级 byModel（v0.11.0 真实 wire）
  * ------------------------------------------------------------ */
+
+/** modelId → 内部逐日序列（buildByModelSeries 的查找表）。 */
+const seriesByModelId = new Map(byModelSeries.map((series) => [series.modelId, series]));
+
 function buildTrend(days) {
   const boundedDays = Math.min(Math.max(days, 1), DAY_COUNT);
   const startDay = DAY_COUNT - boundedDays;
-  return {
-    points: simulated.points.slice(startDay),
-    byModel: byModelSeries.map((series) => ({
-      modelId: series.modelId,
-      values: series.values.slice(startDay),
-    })),
-  };
+  const windowPoints = simulated.points.slice(startDay);
+
+  // 窗口内观察到的模型（窗口总量 > 0），钉序镜像后端 daily-buckets.ts：
+  // 全窗总量 desc + modelId asc 字典序决胜。
+  const windowTotalByModelId = new Map();
+  for (const series of byModelSeries) {
+    let windowTotal = 0;
+    for (let dayIndex = startDay; dayIndex < DAY_COUNT; dayIndex += 1) {
+      windowTotal += series.values[dayIndex];
+    }
+    if (windowTotal > 0) windowTotalByModelId.set(series.modelId, windowTotal);
+  }
+  const orderedModelIds = [...windowTotalByModelId.keys()].sort(
+    (leftModelId, rightModelId) => {
+      const totalDifference =
+        (windowTotalByModelId.get(rightModelId) ?? 0) -
+        (windowTotalByModelId.get(leftModelId) ?? 0);
+      if (totalDifference !== 0) return totalDifference;
+      return leftModelId < rightModelId ? -1 : leftModelId > rightModelId ? 1 : 0;
+    },
+  );
+
+  // 每点稠密 byModel：窗口内每个模型都出现，无活动日为零。
+  return windowPoints.map((point, windowDayIndex) => {
+    const dayIndex = startDay + windowDayIndex;
+    const pointByModel = {};
+    for (const modelId of orderedModelIds) {
+      pointByModel[modelId] = seriesByModelId.get(modelId).values[dayIndex];
+    }
+    return { ...point, byModel: pointByModel };
+  });
 }
 
 /* ------------------------------------------------------------

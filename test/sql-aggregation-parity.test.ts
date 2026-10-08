@@ -280,6 +280,17 @@ function createFixtureDatabase(databasePath: string): SqliteReadWriteConnection 
   addMessage("ses_orphan", "assistant", localNoonMs(2),
     assistantPayload({ content: [{ type: "tool", name: true, state: {} }] }))
 
+  // v0.11.0 byModel window shape: this model's ONLY activity is 30 days
+  // back — inside the 90-day trend window, outside the 7/30-day ones —
+  // so the trend byModel maps must list it for days=90 and never for
+  // days=7/30 (window-pruning leak lock, both pipelines agree via the
+  // shared bucket-prune).
+  addMessage("ses_orphan", "assistant", localNoonMs(30),
+    assistantPayload({
+      model: { id: "example-model-leak", providerID: "example-provider" },
+      tokens: { input: 1000, output: 20, cacheRead: 0, write: 0 },
+    }))
+
   // P1-1 parity shapes: token values as text (prefix-numeric and pure
   // text), booleans and null must all count as zero tokens exactly like
   // the old coerceNumber — SQLite's own numeric coercion would

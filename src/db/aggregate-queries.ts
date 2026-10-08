@@ -185,6 +185,17 @@ export function queryOverview(db: SqliteReadConnection | null): OverviewStats | 
  * bucketDailyTrend (JS Date), which is why the series still matches the
  * old JS 口径 exactly. days <= 0 yields an empty series without touching
  * the database.
+ *
+ * v0.11.0 byModel: the same scan now also extracts `$.model.id` so
+ * bucketDailyTrend can bucket per (day, model). The per-model token
+ * 口径 is the SAME row-level assistant extraction as the point totals —
+ * the same three token paths coerced value-by-value in JS — and NOT the
+ * session_v2 session-summary columns (a session's tokens lag and belong
+ * to the session's primary model only). A missing or empty model id
+ * maps to the shared "unknown" fallback exactly like
+ * parseAssistantStepRow (rows.ts), so the SQL-side pipeline stays
+ * field-for-field parity with the full-row JS pipeline (locked by
+ * test/sql-aggregation-parity.test.ts).
  */
 export function queryDailyTrend(
   db: SqliteReadConnection | null,
@@ -198,7 +209,8 @@ export function queryDailyTrend(
   const rawRows = db
     .prepare(
       `SELECT time_created,
-              json_extract(data, '$.tokens.input', '$.tokens.output', '$.tokens.cache.read') AS token_fields
+              json_extract(data, '$.model.id',
+                                 '$.tokens.input', '$.tokens.output', '$.tokens.cache.read') AS trend_fields
        FROM session_message
        WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE} AND time_created >= ?`,
     )
@@ -208,9 +220,13 @@ export function queryDailyTrend(
   for (const rawRow of rawRows) {
     const rowRecord = asRecord(rawRow)
     if (rowRecord === null) continue
-    const [inputValue, outputValue, cacheReadValue] = parseExtractedFieldList(rowRecord["token_fields"])
+    const [modelIdValue, inputValue, outputValue, cacheReadValue] = parseExtractedFieldList(
+      rowRecord["trend_fields"],
+    )
+    const rawModelId = coerceText(modelIdValue)
     trendSamples.push({
       timeCreated: coerceNumber(rowRecord["time_created"]),
+      modelId: rawModelId === "" ? UNKNOWN_MODEL_ID : rawModelId,
       tokens: {
         input: coerceNumber(inputValue),
         cacheRead: coerceNumber(cacheReadValue),

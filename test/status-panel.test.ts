@@ -54,7 +54,9 @@ test("formatHitRatePercent clamps into [0,100] with one decimal", () => {
 // buildStatusPanelLines.
 
 function buildTrendPointFixture(dateKey: string, tokens: number): DailyTrendPoint {
-  return { date: dateKey, steps: 1, input: tokens, read: 0, output: 0, hitRate: 0 }
+  // byModel: {} — the panel ignores the per-model buckets (v0.11.0);
+  // the field is required on the wire type but irrelevant to this fixture.
+  return { date: dateKey, steps: 1, input: tokens, read: 0, output: 0, hitRate: 0, byModel: {} }
 }
 
 test("buildStatusPanelLines renders summary, model top5 and the trend", () => {

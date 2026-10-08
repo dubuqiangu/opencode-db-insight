@@ -5,8 +5,13 @@
  * 形状对照 src/web/api.ts）：
  *   GET /api/overview            → types.ts OverviewStats（今日 in/out 分列、
  *                                  环比、sparkline 在前端由 /api/trend 推导）
- *   GET /api/trend?days=N        → DailyTrendPoint[]（裸数组，无 byModel —
- *                                  后端未提供按模型拆分；趋势图降级为总量层）
+ *   GET /api/trend?days=N        → 裸数组 DailyTrendPoint[]（v0.11.0 起每点
+ *                                  增补点级 byModel：Record<模型id, 该模型
+ *                                  当日 tokens>，键序确定=全窗总量 desc +
+ *                                  modelId asc 字典序决胜，窗口内观察到的
+ *                                  模型每日稠密出现、无活动日为零；
+ *                                  旧版裸数组（无 byModel）仍兼容 →
+ *                                  normalize 后 byModel [] 降级为总量单层图）
  *   GET /api/models              → ModelMetric[]
  *   GET /api/agents              → AgentStat[]
  *   GET /api/sessions?limit&off  → SessionSummary[]（裸数组，无 total 包络；
@@ -203,12 +208,77 @@ async function fetchResponse(path) {
 /* ---------------- 形状适配（真实 → 组件） ---------------- */
 
 /**
- * /api/trend 返回裸 DailyTrendPoint[]；组件需要 { points, byModel }。
- * 后端暂无按模型拆分 → byModel 为空数组，趋势图自动降级为「总量」单层。
+ * /api/trend 返回体 → 组件所需 { points, byModel }（trend-chart 消费面）。
+ *
+ * v0.11.0 真实 wire 是裸数组 DailyTrendPoint[]，每点携带**点级** byModel
+ * Record<模型id, 该模型当日 tokens>（口径 = input+read+output）。这里把它
+ * **透视**成 trend-chart 消费的每模型序列 [{ modelId, values }]：
+ * - values 按点序对位（长度 === points 长度），模型清单 = 全窗 Record
+ *   键并集，某日缺键按 0 补齐；
+ * - 透视顺序确定：全窗总量 desc + modelId asc 字典序决胜——镜像后端
+ *   daily-buckets.ts 的钉序（trend-chart.rankModels 消费前仍会按同口径
+ *   自重排，此处钉序是双保险）；
+ * - 全部点无 byModel → byModel 置 []（v0.11.0 前的旧裸数组 wire），
+ *   趋势图降级为「总量」单层。
+ *
+ * 防御性归一（trend-chart 按 dayIndex 逐日对位消费，错位层会 NaN）：
+ * - 非数组载荷 → 空数据（图表走空态）；
+ * - 点级 byModel 缺失/非对象/是数组 → 该点视为无模型数据；
+ * - 键为空字符串不成层（后端已把缺失模型 id 归一为 "unknown"，空键
+ *   只可能来自契约破坏）；值非有限数按 0 计。
  */
-export function normalizeTrendPayload(trendPoints) {
-  const points = Array.isArray(trendPoints) ? trendPoints : [];
-  return { points, byModel: [] };
+export function normalizeTrendPayload(trendPayload) {
+  const points = Array.isArray(trendPayload) ? trendPayload : [];
+
+  // Pass 1：逐点清洗点级 byModel Record（Map 存当日键值，杜绝 __proto__
+  // 之类键名经对象字面量落到原型链上），同时累计全窗总量。
+  const dayModelTokens = []; // 每点的 Map<modelId, 当日 tokens>；无模型数据的点为 null
+  const windowTotalByModelId = new Map();
+  let hasAnyModelData = false;
+  for (const trendPoint of points) {
+    const rawByModel = trendPoint !== null && typeof trendPoint === "object"
+      && trendPoint.byModel !== null && typeof trendPoint.byModel === "object"
+      && !Array.isArray(trendPoint.byModel)
+      ? trendPoint.byModel
+      : null;
+    if (rawByModel === null) {
+      dayModelTokens.push(null);
+      continue;
+    }
+    const dayRecord = new Map();
+    for (const [modelId, dayTokens] of Object.entries(rawByModel)) {
+      if (modelId === "") continue;
+      const safeDayTokens = typeof dayTokens === "number" && Number.isFinite(dayTokens) ? dayTokens : 0;
+      dayRecord.set(modelId, safeDayTokens);
+      windowTotalByModelId.set(modelId, (windowTotalByModelId.get(modelId) ?? 0) + safeDayTokens);
+    }
+    if (dayRecord.size === 0) {
+      dayModelTokens.push(null);
+      continue;
+    }
+    dayModelTokens.push(dayRecord);
+    hasAnyModelData = true;
+  }
+
+  if (!hasAnyModelData) {
+    return { points, byModel: [] };
+  }
+
+  // Pass 2：键并集 → 钉序模型清单 → 按点序对位透视。
+  const orderedModelIds = [...windowTotalByModelId.keys()].sort(
+    (leftModelId, rightModelId) => {
+      const totalDifference =
+        (windowTotalByModelId.get(rightModelId) ?? 0) -
+        (windowTotalByModelId.get(leftModelId) ?? 0);
+      if (totalDifference !== 0) return totalDifference;
+      return leftModelId < rightModelId ? -1 : leftModelId > rightModelId ? 1 : 0;
+    },
+  );
+  const byModel = orderedModelIds.map((modelId) => ({
+    modelId,
+    values: dayModelTokens.map((dayRecord) => dayRecord?.get(modelId) ?? 0),
+  }));
+  return { points, byModel };
 }
 
 /** /api/sessions 返回裸 SessionSummary[]；total 未知 → null（列表脚注降级）。 */
@@ -264,13 +334,21 @@ export async function fetchOverview() {
   if (overviewBody === null || typeof overviewBody !== "object") {
     throw new Error("/api/overview 返回空数据");
   }
-  const trendPoints = await fetchJson(`/trend?days=${OVERVIEW_TREND_WINDOW_DAYS}`).catch(() => null);
+  // v0.11.0 起 /trend 是裸数组 + 点级 byModel Record（旧版为无 byModel 的
+  // 裸数组）——KPI 推导只吃 points，统一走 normalizeTrendPayload 拆包，
+  // 两种 wire 都安全。
+  const trendBody = await fetchJson(`/trend?days=${OVERVIEW_TREND_WINDOW_DAYS}`).catch(() => null);
+  const trendPoints = trendBody === null ? null : normalizeTrendPayload(trendBody).points;
   return deriveOverviewExtension(overviewBody, trendPoints);
 }
 
-/** GET /api/trend?days=N —— 逐日序列（+ mock 的 byModel）。 */
+/**
+ * GET /api/trend?days=N —— 逐日序列 + 点级 byModel。
+ * mock 分支与真实分支共用 normalizeTrendPayload：mock 的职责是镜像
+ * 真实 wire（裸数组 + 点级 Record），透视适配对两条路径同构。
+ */
 export async function fetchTrend(days) {
-  if (USE_MOCK) return resolveWithLatency(getMockTrend(days));
+  if (USE_MOCK) return resolveWithLatency(normalizeTrendPayload(getMockTrend(days)));
   return normalizeTrendPayload(await fetchJson(`/trend?days=${clampTrendDays(days)}`));
 }
 

@@ -22,8 +22,14 @@ const MAX_STACKED_MODELS = 7; // 超出的并入「其他」
 const hiddenModelIds = new Set();
 let hitRateVisible = true;
 
-/** 窗口内每个模型的总 token，降序取前 N；byModel 为空（真实 API 现状）时降级为「总量」单层。 */
-function rankModels(trendData) {
+/**
+ * 窗口内每个模型的总 token，降序取前 N；byModel 为空（v0.11.0 前旧 wire /
+ * 透视后无模型数据时）降级为「总量」单层。
+ * v0.11.0 起导出：这是堆叠图的 series 构建纯函数（无 canvas 依赖），
+ * 是 trend-chart 唯一可离线测试的层——渲染整体依赖 uPlot 运行时，
+ * 图表层回归靠真实路径探针兜底。
+ */
+export function rankModels(trendData) {
   const byModel = Array.isArray(trendData.byModel) ? trendData.byModel : [];
   if (byModel.length === 0) {
     return [{

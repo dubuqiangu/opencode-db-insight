@@ -282,3 +282,15 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 版本 0.10.1 三处同步；307/307（+1）；check 0
 - 按"审查收敛备忘"，0.10.1 为 oracle 处方修复，不再派下一代审查
 - v0.10.0 回放内搜索完整闭环：侦察 → 单车道实现 → 探针实证缺口补齐 → 审查 → 修复（0.10.1）
+
+## v0.11.0 趋势图 byModel 真实化（push #28，2026-10-08，双车道并行 + wire 对账）
+
+- [x] 用户拍板里程碑：看板数据增强（侦察后钉定性价比最高方向——趋势图按模型分层，前端堆叠图早已建好唯独缺真实数据）
+- [x] 契约钉死：/api/trend 逐日 byModel（点级 Record、每日稠密零填充、键序全窗总量 desc + id asc 决胜、Σ=点总量构造性、聚合在 JS、wire 保持裸数组向后兼容）；mock 为 wire 参照
+- [x] 后端（fix-15）：json_extract 增补 $.model.id 行级提取 + bucketDailyTrend 按 (日,模型) 分桶；DailyTrendPoint.byModel 必填 + DailyTrendSample.modelId；排序键注释+测试双锁；真实 SQLite 夹具手工对账 + parity 夹具自动扩展 + 窗口外模型不泄漏锁
+- [x] 前端（des-14）：normalizeTrendPayload 直通（初版对象封装形态）+ fetchOverview 交叉消费点改 normalize 拆包（KPI 推导端到端钉死）+ rankModels 序列构建面测试
+- [x] wire 形状对账（des-15，前一会话网络故障失联后新会话接手）：双车道 wire 分歧——独立服务探针实证真实 wire=裸数组+点级 Record，前端归一层改点级透视适配、封装分支 YAGNI 移除、mock 镜像真实 wire（不再领先一格）、测试按真实形状重整（降级路径保持）
+- [x] 测试 307 → 321（+14）
+- [x] 收敛复核：版本 0.11.0 三处同步（协调方统一 bump；lock 内 @pkgjs/parseargs 0.11.0 为传递依赖巧合非误改）+ 合并 321/321 独立复跑 + check 0 + 真实库探针 19/19（7/30 天双窗透视 10/34 层、逐日对位、Σ 模型层=点总量、确定性、消费面可吃、mock 同形）
+- [x] 文档：CHANGELOG 0.11.0
+- [ ] oracle 增量审查 0.11.0 delta → 有 P0/P1 则修后推 0.11.1

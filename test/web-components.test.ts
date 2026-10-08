@@ -1987,6 +1987,288 @@ test("the mock replay fixture drives the search end to end, including hits beyon
   assert.equal(container.querySelectorAll(".replay-hit-current").length, 1)
 })
 
+/* ------------- trend byModel real-data wiring (v0.11.0) ------------- */
+
+/** Fictional DailyTrendPoint fixture (example dates, example model ids). */
+function dailyTrendPointFixture(dateKey: string, inputTokens: number, readTokens: number, outputTokens: number) {
+  return {
+    date: dateKey,
+    steps: 10,
+    input: inputTokens,
+    read: readTokens,
+    output: outputTokens,
+    hitRate: 0.9,
+  }
+}
+
+test("normalizeTrendPayload pivots the v0.11.0 bare-array wire (per-point byModel Records) into aligned per-model series", async () => {
+  const { normalizeTrendPayload } = await import("../src/web/public/data-source.js")
+  const { getMockTrend } = await import("../src/web/public/mock-data.js")
+
+  // The mock mirrors the real wire: a bare DailyTrendPoint[] where every
+  // point carries a point-level byModel Record, dense (the same model set
+  // on every day, zero-filled on inactive days) with the pinned key order
+  // (window total desc + modelId asc).
+  const mockTrendPoints = getMockTrend(7)
+  assert.ok(Array.isArray(mockTrendPoints), "the mock mirrors the bare-array wire — no object envelope")
+  assert.equal(mockTrendPoints.length, 7)
+  const mockDayKeySets = mockTrendPoints.map((trendPoint) => Object.keys(trendPoint.byModel).join(","))
+  assert.ok(
+    new Set(mockDayKeySets).size === 1 && mockDayKeySets[0] !== "",
+    "the mock byModel is dense: the same model set appears on every day of the window",
+  )
+  for (const trendPoint of mockTrendPoints) {
+    for (const dayTokens of Object.values(trendPoint.byModel)) {
+      assert.ok(
+        typeof dayTokens === "number" && Number.isFinite(dayTokens) && dayTokens >= 0,
+        "point-level byModel values are non-negative finite numbers",
+      )
+    }
+  }
+
+  const normalizedMock = normalizeTrendPayload(mockTrendPoints)
+  assert.equal(normalizedMock.points.length, 7)
+  assert.ok(normalizedMock.byModel.length > 0, "the mock pivot yields at least one model series")
+  for (const modelSeries of normalizedMock.byModel) {
+    assert.equal(modelSeries.values.length, 7, "values align per-day with points")
+    assert.ok(
+      mockDayKeySets[0].split(",").includes(modelSeries.modelId),
+      "the model list comes from the Record key union",
+    )
+  }
+  // The pivot conserves the per-day mass: Σ series values === Σ Record values.
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const pivotDaySum = normalizedMock.byModel.reduce(
+      (dayAccumulator, modelSeries) => dayAccumulator + modelSeries.values[dayIndex],
+      0,
+    )
+    const recordDaySum = Object.values(mockTrendPoints[dayIndex].byModel).reduce(
+      (dayAccumulator, dayTokens) => dayAccumulator + dayTokens,
+      0,
+    )
+    assert.equal(pivotDaySum, recordDaySum)
+  }
+
+  // Hand fixture: multi-model multi-day Records → series with per-value
+  // day alignment. Pinned pivot order = window total desc (beta 1420 >
+  // alpha 700); day 3 keeps alpha as a dense zero layer. The day-2 Record
+  // deliberately lists its keys in the opposite insertion order — the
+  // pivot must be identical either way (determinism).
+  const wireTrendPoints = [
+    { ...dailyTrendPointFixture("2026-10-01", 100, 400, 50), byModel: { "model-example-alpha": 300, "model-example-beta": 250 } },
+    { ...dailyTrendPointFixture("2026-10-02", 120, 480, 60), byModel: { "model-example-beta": 400, "model-example-alpha": 400 } },
+    { ...dailyTrendPointFixture("2026-10-03", 140, 560, 70), byModel: { "model-example-alpha": 0, "model-example-beta": 770 } },
+  ]
+  const expectedPivot = {
+    points: wireTrendPoints,
+    byModel: [
+      { modelId: "model-example-beta", values: [250, 400, 770] },
+      { modelId: "model-example-alpha", values: [300, 400, 0] },
+    ],
+  }
+  assert.deepEqual(normalizeTrendPayload(wireTrendPoints), expectedPivot)
+  assert.deepEqual(
+    normalizeTrendPayload(wireTrendPoints.map((trendPoint) => ({
+      ...trendPoint,
+      byModel: Object.fromEntries(Object.entries(trendPoint.byModel).reverse()),
+    }))),
+    expectedPivot,
+    "Record key insertion order must not change the pivot (deterministic order)",
+  )
+
+  // Equal window totals tie-break by modelId ascending — the same pinned
+  // rule as the backend daily-buckets ordering.
+  const tiedTotalsPoints = [
+    { ...dailyTrendPointFixture("2026-10-04", 5, 0, 0), byModel: { "model-example-delta": 5, "model-example-charlie": 5 } },
+  ]
+  assert.deepEqual(
+    normalizeTrendPayload(tiedTotalsPoints).byModel.map((modelSeries) => modelSeries.modelId),
+    ["model-example-charlie", "model-example-delta"],
+    "equal window totals tie-break by modelId ascending lexicographic",
+  )
+
+  // A key absent from one day's Record is zero-filled at that dayIndex.
+  const sparseDayPoints = [
+    { ...dailyTrendPointFixture("2026-10-05", 1, 0, 0), byModel: { "model-example-alpha": 10 } },
+    { ...dailyTrendPointFixture("2026-10-06", 1, 0, 0), byModel: { "model-example-beta": 5 } },
+  ]
+  assert.deepEqual(
+    normalizeTrendPayload(sparseDayPoints).byModel,
+    [
+      { modelId: "model-example-alpha", values: [10, 0] },
+      { modelId: "model-example-beta", values: [0, 5] },
+    ],
+    "a sparse key is zero-filled on its missing days (alpha total 10 > beta 5)",
+  )
+})
+
+test("normalizeTrendPayload keeps the old-wire degradation and defends point-level byModel garbage", async () => {
+  const { normalizeTrendPayload } = await import("../src/web/public/data-source.js")
+
+  // Old wire (pre-v0.11.0 bare array, no byModel): points passthrough,
+  // byModel [] → the chart keeps its「总量」single-layer degradation.
+  const legacyPoints = [
+    dailyTrendPointFixture("2026-10-01", 100, 400, 50),
+    dailyTrendPointFixture("2026-10-02", 120, 480, 60),
+  ]
+  assert.deepEqual(normalizeTrendPayload(legacyPoints), { points: legacyPoints, byModel: [] })
+
+  // Point-level byModel missing / null / non-object / array → that day
+  // carries no model data; surviving days still pivot with the broken
+  // days zero-filled (trend-chart consumes by dayIndex — gaps would NaN
+  // the stack, so they are neutralized at the entry point).
+  const mixedDefensePoints = [
+    { ...dailyTrendPointFixture("2026-10-01", 100, 400, 50) },                  // byModel absent
+    { ...dailyTrendPointFixture("2026-10-02", 120, 480, 60), byModel: null },
+    { ...dailyTrendPointFixture("2026-10-03", 140, 560, 70), byModel: "not-an-object" },
+    { ...dailyTrendPointFixture("2026-10-04", 140, 560, 70), byModel: [1, 2] }, // an array is not a Record
+    { ...dailyTrendPointFixture("2026-10-05", 140, 560, 70), byModel: { "model-example-alpha": 9, "": 4 } }, // empty id never becomes a layer
+    { ...dailyTrendPointFixture("2026-10-06", 140, 560, 70), byModel: { "model-example-beta": "garbage" } }, // non-number → 0
+  ]
+  assert.deepEqual(
+    normalizeTrendPayload(mixedDefensePoints).byModel,
+    [
+      { modelId: "model-example-alpha", values: [0, 0, 0, 0, 9, 0] },
+      { modelId: "model-example-beta", values: [0, 0, 0, 0, 0, 0] },
+    ],
+    "broken days contribute zeros; the empty-string key never becomes a layer; a non-number value sanitizes to 0",
+  )
+
+  // Every day broken → the full [] degradation, same as the old wire.
+  const allBrokenPoints = [
+    { ...dailyTrendPointFixture("2026-10-01", 100, 400, 50) },
+    { ...dailyTrendPointFixture("2026-10-02", 120, 480, 60), byModel: "garbage" },
+  ]
+  assert.deepEqual(normalizeTrendPayload(allBrokenPoints), { points: allBrokenPoints, byModel: [] })
+
+  // The pre-release object envelope ({ points, byModel: [{ modelId,
+  // values }] }) was removed as dead code once the real wire turned out to
+  // be a bare array (YAGNI): it is no longer honored and degrades to empty
+  // data like every other non-array payload.
+  const removedEnvelopePayload = {
+    points: legacyPoints,
+    byModel: [{ modelId: "model-example-alpha", values: [100, 90] }],
+  }
+  assert.deepEqual(normalizeTrendPayload(removedEnvelopePayload), { points: [], byModel: [] })
+
+  // Garbage payloads degrade to empty data (the chart renders its empty state).
+  assert.deepEqual(normalizeTrendPayload(null), { points: [], byModel: [] })
+  assert.deepEqual(normalizeTrendPayload("garbage"), { points: [], byModel: [] })
+})
+
+test("rankModels stacks real byModel: desc by window total, top-7 cap with 其他 residual, total-layer fallback", async () => {
+  // The render body needs the uPlot runtime (canvas) and stays covered by the
+  // real-path probes; rankModels is the pure series-builder layer and the only
+  // offline-testable seam of trend-chart — exported for exactly that.
+  const { rankModels } = await import("../src/web/public/components/trend-chart.js")
+
+  const wirePoints = [
+    dailyTrendPointFixture("2026-10-01", 100, 400, 50),
+    dailyTrendPointFixture("2026-10-02", 120, 480, 60),
+    dailyTrendPointFixture("2026-10-03", 140, 560, 70),
+  ]
+
+  // Ranking: the frontend re-sorts by window total regardless of the wire's
+  // order — feed the series shuffled and assert desc stacking order.
+  const shuffledTrendData = {
+    points: wirePoints,
+    byModel: [
+      { modelId: "model-example-gamma", values: [10, 20, 30] },
+      { modelId: "model-example-alpha", values: [100, 100, 100] },
+      { modelId: "model-example-beta", values: [50, 50, 50] },
+    ],
+  }
+  const rankedLayers = rankModels(shuffledTrendData)
+  assert.deepEqual(
+    rankedLayers.map((layer: { modelId: string }) => layer.modelId),
+    ["model-example-alpha", "model-example-beta", "model-example-gamma"],
+    "layers stack in window-total desc order",
+  )
+  assert.equal(rankedLayers[0]!.total, 300)
+  assert.equal(rankedLayers[0]!.values.length, 3, "per-model values stay per-day aligned with points")
+
+  // Degradation: empty byModel (old wire) → single「总量」layer of day totals.
+  const fallbackLayers = rankModels({ points: wirePoints, byModel: [] })
+  assert.deepEqual(
+    fallbackLayers.map((layer: { modelId: string }) => layer.modelId),
+    ["总量"],
+  )
+  assert.deepEqual(fallbackLayers[0]!.values, [550, 660, 770], "day totals = input + read + output per point")
+
+  // Top-7 cap: nine models → seven named layers + 「其他」 carrying the
+  // per-day residual (day total − named sum, clamped at 0).
+  const nineModelTrendData = {
+    points: [dailyTrendPointFixture("2026-10-01", 45, 0, 0), dailyTrendPointFixture("2026-10-02", 45, 0, 0)],
+    byModel: Array.from({ length: 9 }, (_, modelIndex: number) => ({
+      modelId: `model-example-${String(modelIndex + 1).padStart(2, "0")}`,
+      values: [modelIndex + 1, modelIndex + 1],
+    })),
+  }
+  const cappedLayers = rankModels(nineModelTrendData)
+  assert.equal(cappedLayers.length, 8, "7 named layers + 1 其他")
+  assert.equal(cappedLayers[0]!.modelId, "model-example-09")
+  assert.equal(cappedLayers[7]!.modelId, "其他")
+  assert.deepEqual(cappedLayers[7]!.values, [3, 3], "residual = day total − named sum (45 − 42)")
+  assert.equal(cappedLayers[7]!.total, 6)
+})
+
+test("fetchOverview keeps deriving KPI fields from the v0.11.0 bare-array /trend wire", async () => {
+  // /api/trend has a second consumer: the KPI cards derive today/yesterday
+  // splits from the same endpoint. When the wire grew point-level byModel,
+  // a normalize that mistook the new bare array for the old one would hand
+  // back [] and every derived field would degrade to —. This locks the
+  // end-to-end path: bare-array wire (with per-point byModel Records) →
+  // normalizeTrendPayload().points → deriveOverviewExtension.
+  const { fetchOverview } = await import("../src/web/public/data-source.js")
+
+  const overviewBodyFixture = {
+    todayTokens: 90,
+    totalTokens: 1_000,
+    totalCost: 0,
+    sessionCount: 5,
+    stepCount: 42,
+    todayHitRate: 0.9,
+  }
+  const trendPointsFixture = [
+    dailyTrendPointFixture("2026-10-01", 100, 400, 50),
+    dailyTrendPointFixture("2026-10-02", 120, 480, 60),
+    dailyTrendPointFixture("2026-10-03", 140, 560, 70),
+  ]
+  // The real wire: a bare array whose points carry point-level byModel
+  // Records (the v0.11.0 shape the probe observed on the live route).
+  const trendWireFixture = trendPointsFixture.map((trendPoint, pointIndex) => ({
+    ...trendPoint,
+    byModel: { "model-example-alpha": 100 + pointIndex * 10, "model-example-beta": 90 - pointIndex * 10 },
+  }))
+
+  const savedFetch = globalThis.fetch
+  globalThis.fetch = (async (fetchInput: unknown) => {
+    const requestUrl = String(fetchInput)
+    if (requestUrl.includes("/overview")) {
+      return { ok: true, status: 200, json: async () => overviewBodyFixture }
+    }
+    if (requestUrl.includes("/trend")) {
+      return { ok: true, status: 200, json: async () => trendWireFixture }
+    }
+    return { ok: false, status: 404, json: async () => ({}) }
+  }) as unknown as typeof fetch
+
+  try {
+    const overviewExtension = await fetchOverview()
+    const lastPoint = trendPointsFixture[2]!
+    const previousPoint = trendPointsFixture[1]!
+    assert.equal(overviewExtension.todayInput, lastPoint.input, "today split derives from the last trend point")
+    assert.equal(overviewExtension.todayOutput, lastPoint.output)
+    assert.equal(overviewExtension.todaySteps, lastPoint.steps)
+    assert.equal(overviewExtension.yesterdayHitRate, previousPoint.hitRate)
+    assert.equal(overviewExtension.yesterdaySteps, previousPoint.steps)
+    assert.deepEqual(overviewExtension.sparklineTokens, [550, 660, 770], "the sparkline window derives from the same trend payload")
+    assert.equal(overviewExtension.sessionCount, 5, "overview-body fields still pass through")
+  } finally {
+    globalThis.fetch = savedFetch
+  }
+})
+
 test("sessionsExportCsvPath and the export entry carry the range alongside the directory", async () => {
   const { sessionsExportCsvPath } = await import("../src/web/public/data-source.js")
   const { sessionsCsvExportEntryHtml } = await import(
