@@ -295,3 +295,16 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 文档：CHANGELOG 0.11.0
 - [x] oracle 增量审查 0.11.0 delta（ora-6）：P0=0 / P1=0 / P2×4 信息级——无 0.11.1。审查证据：321/321 独立复跑 + 活库只读探针（30/366 天全链路、活库无 unknown 桶、残差 ≥0 逐日实证）+ delta 全文隐私扫描零命中
 - P2 备忘（ora-6，信息级不修，随下版处理）：① daily-buckets 契约注释补"纯数字 modelId 的 JS 整数键枚举序例外"（消费面全序自证不受影响）；② mock 与后端在零总量模型上语义分叉 + Math.round 近似守恒（量级不可见，可接受）；③ days=366 稠密 byModel 使 wire ~716KB 恰落在不用 byModel 的日历热力图消费点（模型数×数量级增长时再缓解，YAGNI）
+
+## v0.12.0 模型排行榜占比列（push #29，2026-10-08，双车道并行）
+
+- [x] 用户拍板里程碑：C 模型排行榜占比列（/api/models 增补 tokenShare + 前端占比列）
+- [x] 侦察（exp-4）：/api/models 无参数 JS 聚合路由、面板与 overview 同源同口径（Σ 模型 tokens ≡ overview.totalTokens）、reasoningShare 现成占比列模式、renderModelTable 组件测试零覆盖、mock getMockModelMetrics 在位
+- [x] 契约钉死：tokenShare 原始 0..1 分数（显示端格式化）、computeModelMetrics 纯函数层自 Σ 分母、分母 0 → 全 0、排序键不动（share desc ≡ tokens desc 数学等价）、SQL/路由/缓存键零改动
+- [x] 后端（fix-16）：ModelMetric + tokenShare、单次分组扫描内累加全模型分母、除零防护对齐 hitRate 写法；parity deepEqual 零断言改动自动扩展（实测 fixture+live 双绿）
+- [x] 前端（des-16）：占比列紧邻「总 token」1 位小数（与推理占比 0 位区分，长尾 0.45% 不谎报 0%）、旧 wire 缺失/NaN → "—"、compareMetric `?? 0` 自动继承、首点 desc 契约、mock 自洽镜像、renderModelTable 从零建 4 用例（含 pinModelSortState 钉模块级排序态自证）
+- [x] 测试 321 → 327（+6）
+- [x] 收敛复核：版本 0.12.0 三处同步（npm version 精确更新根条目——lock 内 @pkgjs/parseargs 0.11.0 恰撞版本号，盲替换会破坏传递依赖，改用 npm version 规避）+ 合并 327/327 独立复跑 + check 0 + 真实库探针 7/7（85 模型 Σ=1、跨面板口径逐字节相等 4,425,138,390、榜首 70.4%、活库无 unknown 桶）
+- [x] 文档：CHANGELOG 0.12.0
+- [ ] oracle 增量审查 0.12.0 delta → 有 P0/P1 则修后推 0.12.1
+- 随版处理：ora-6 的 P2-1 注释补丁（整数型键枚举序例外）已并入本版审查范围确认是否落地

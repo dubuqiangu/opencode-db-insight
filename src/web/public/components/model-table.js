@@ -2,6 +2,7 @@
  * 模型排行榜明细表（DESIGN §5 单点指标全列，列头点击排序）。
  * 行点击触发下钻回调（app.js 用它过滤会话列表）。
  * 通道不报缓存的模型命中率显示 "—" 并带说明徽标（DESIGN §10）。
+ * v0.12.0：新增「token 占比」列（窗口内 token 份额，紧邻「总 token」）。
  */
 
 import {
@@ -16,6 +17,12 @@ const COLUMNS = [
   { key: "providerId", label: "Provider", numeric: false },
   { key: "steps", label: "步骤", numeric: true },
   { key: "tokens", label: "总 token", numeric: true },
+  // v0.12.0 token 占比：0..1 原始分数（wire 契约，分母 0 时全 0）。
+  // 紧邻「总 token」——占比是其派生读数，相邻便于逐行对照。显示 1 位
+  // 小数：长尾模型份额常 <1%，取整会读成 "0%"。旧 wire（宿主更新窗口期
+  // 字段缺失）与脏值（NaN/Infinity）降级 "—"——分母未知时显示 0.0% 是
+  // 谎报；排序的 ?? 0 兜底由 compareMetric 数值路径既有逻辑覆盖，不炸。
+  { key: "tokenShare", label: "token 占比", numeric: true },
   { key: "hitRate", label: "命中率", numeric: true },
   { key: "outputPerStep", label: "步均输出", numeric: true },
   { key: "contextMedian", label: "中位上下文", numeric: true },
@@ -95,6 +102,7 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
         <td>${escapeHtml(metric.providerId)}</td>
         <td class="num">${formatCount(metric.steps)}</td>
         <td class="num primary">${formatTokens(metric.tokens)}</td>
+        <td class="num">${formatPercent(metric.tokenShare, 1)}</td>
         <td class="num">${hitRateCell(metric)}</td>
         <td class="num">${formatTokens(metric.outputPerStep)}</td>
         <td class="num">${formatTokens(metric.contextMedian)}</td>

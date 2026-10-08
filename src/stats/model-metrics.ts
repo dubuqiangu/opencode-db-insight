@@ -13,6 +13,14 @@ export interface ModelMetric {
   steps: number
   /** Σ total usage (input+output+cache.read) across this model's steps. */
   tokens: number
+  /**
+   * This model's tokens / Σ tokens of ALL models within the same
+   * computeModelMetrics invocation (raw fraction 0..1, never rounded or
+   * scaled — the display side formats it). 0 for every model when the
+   * all-models denominator is ≤ 0 (empty input or all-zero tokens); the
+   * per-model shares sum to 1 whenever the denominator is > 0.
+   */
+  tokenShare: number
   hitRate: number
   outputPerStep: number
   /** Context = input + cache.read + cache.write of one step. */
@@ -55,7 +63,12 @@ export function nearestRankPercentile(sortedAscending: number[], fraction: numbe
  */
 export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric[] {
   const stepRowsByModel = new Map<string, ModelUsageSample[]>()
+  // Token-share denominator: Σ tokens over ALL models of this invocation
+  // (same input rows, same input+output+cache.read 口径 as per-model tokens),
+  // accumulated during the single grouping scan below.
+  let totalTokensAllModels = 0
   for (const sampleRow of sampleRows) {
+    totalTokensAllModels += totalUsageTokens(sampleRow.tokens)
     const existingRows = stepRowsByModel.get(sampleRow.modelId)
     if (existingRows === undefined) {
       stepRowsByModel.set(sampleRow.modelId, [sampleRow])
@@ -98,6 +111,9 @@ export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric
       providerId: firstNonEmptyProviderId,
       steps: stepCount,
       tokens: tokenSum,
+      // Raw 0..1 share; 0 for every model when the denominator is ≤ 0
+      // (empty input or all-zero tokens) — never NaN/Infinity.
+      tokenShare: totalTokensAllModels > 0 ? tokenSum / totalTokensAllModels : 0,
       hitRate: hitRate(cacheReadSum, inputSum),
       outputPerStep: outputSum / stepCount,
       contextAvg: contextsPerStep.reduce((sum: number, value: number) => sum + value, 0) / stepCount,

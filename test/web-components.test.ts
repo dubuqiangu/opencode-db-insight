@@ -2382,3 +2382,231 @@ test("getMockSessions mirrors the backend range contract: whitelist filter on ti
     /unknown range/,
   )
 })
+
+/* ------------- model-table token 占比 column (v0.12.0) ------------- */
+
+/** Fictional ModelMetric fixture (example ids only). tokenShare is deliberately
+ * NOT defaulted: a fixture without the field is exactly the old wire. */
+function modelMetricFixture(overrides: Record<string, unknown>) {
+  return {
+    modelId: "model-example-alpha",
+    providerId: "provider-example",
+    steps: 120,
+    tokens: 10_000,
+    hitRate: 0.95,
+    outputPerStep: 800,
+    contextMedian: 64_000,
+    contextP95: 128_000,
+    reasoningShare: 0.2,
+    firstSeen: 1_700_000_000_000,
+    lastSeen: 1_760_000_000_000,
+    ...overrides,
+  }
+}
+
+type ModelMetricFixture = ReturnType<typeof modelMetricFixture>
+
+const noopModelSelect = () => {}
+
+function clickModelColumnHeader(container: StubElement, columnKey: string): void {
+  const headerCell = container
+    .querySelectorAll("th.sortable")
+    .find((sortableHeader) => sortableHeader.dataset.key === columnKey)!
+  headerCell.click()
+}
+
+/** Body-row model ids in DOM order. The shim parses opening tags flat in
+ * document order, so "tr" + data-model filtering yields the rendered sort
+ * order (thead tr carries no data-model and drops out). */
+function modelBodyRowOrder(container: StubElement): Array<string | undefined> {
+  return container
+    .querySelectorAll("tr")
+    .filter((rowElement) => rowElement.dataset.model !== undefined)
+    .map((rowElement) => rowElement.dataset.model)
+}
+
+/**
+ * 模块级 sortKey/sortDirection 跨测试残留（model-table 既有隐患）——每个
+ * 用例先把排序态定态到自证状态再断言：点击目标列后 sortKey 必落在该列，
+ * 方向未知（可能是残留翻转态），按渲染出的箭头方向补一次点击钉死。无论
+ * 进入用例时的残留是什么、其他测试以何种顺序执行，返回后状态必为
+ * (columnKey, wantedDirection)。
+ */
+async function pinModelSortState(
+  modelMetrics: ModelMetricFixture[],
+  columnKey: string,
+  wantedDirection: "asc" | "desc",
+): Promise<void> {
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+  const stateContainer = freshContainer()
+  renderModelTable(stateContainer, modelMetrics, null, noopModelSelect)
+  clickModelColumnHeader(stateContainer, columnKey)
+  // 点击后唯一的 sort-arrow 在目标列上（sortKey 已落定），▲ 即 asc。
+  const isAscendingAfterFirstClick = stateContainer.innerHTML.includes("▲")
+  if ((wantedDirection === "asc") !== isAscendingAfterFirstClick) {
+    clickModelColumnHeader(stateContainer, columnKey)
+  }
+}
+
+test("renderModelTable renders the v0.12.0 token 占比 column next to 总 token", async () => {
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+  // 先把模块级排序态定态到默认态（tokens desc），下述「默认渲染」断言才自证。
+  await pinModelSortState(
+    [
+      modelMetricFixture({ modelId: "model-example-alpha", tokens: 4270, tokenShare: 0.427 }),
+      modelMetricFixture({ modelId: "model-example-bravo", tokens: 3010, tokenShare: 0.301 }),
+      modelMetricFixture({ modelId: "model-example-charlie", tokens: 2720, tokenShare: 0.272 }),
+    ],
+    "tokens",
+    "desc",
+  )
+
+  const container = freshContainer()
+  renderModelTable(container, [
+    modelMetricFixture({ modelId: "model-example-alpha", tokens: 4270, tokenShare: 0.427 }),
+    modelMetricFixture({ modelId: "model-example-bravo", tokens: 3010, tokenShare: 0.301 }),
+    modelMetricFixture({ modelId: "model-example-charlie", tokens: 2720, tokenShare: 0.272 }),
+  ], null, noopModelSelect)
+
+  const sortableHeaders = container.querySelectorAll("th.sortable")
+  assert.equal(sortableHeaders.length, 11, "the v0.12.0 table carries 11 sortable columns")
+  assert.deepEqual(
+    sortableHeaders.map((headerCell) => headerCell.dataset.key),
+    [
+      "modelId", "providerId", "steps", "tokens", "tokenShare",
+      "hitRate", "outputPerStep", "contextMedian", "contextP95", "reasoningShare", "seenRange",
+    ],
+    "tokenShare sits immediately after tokens — a share reads against its absolute base",
+  )
+  // The new column is numeric: right-aligned via the num class like every other metric.
+  const tokenShareHeader = sortableHeaders
+    .find((headerCell) => headerCell.dataset.key === "tokenShare")!
+  assert.ok(tokenShareHeader.classTokenList().includes("num"))
+
+  // Share cells render as bare 1-decimal percents. 1 digit (not the 推理占比
+  // column's 0 digits) is deliberate: the mock's long tail sits near 0.4% —
+  // integer rounding would print a lying "0%" for models that did run.
+  assert.ok(container.innerHTML.includes('<td class="num">42.7%</td>'), "0.427 renders as 42.7%")
+  assert.ok(container.innerHTML.includes('<td class="num">30.1%</td>'))
+  assert.ok(container.innerHTML.includes('<td class="num">27.2%</td>'))
+
+  // Default sort state (pinned above): exactly the tokens column sorted desc.
+  const sortedHeaders = container.querySelectorAll("th.sorted")
+  assert.equal(sortedHeaders.length, 1)
+  assert.equal(sortedHeaders[0]!.dataset.key, "tokens")
+  assert.match(container.innerHTML, /总 token\s*<span class="sort-arrow">▼<\/span>/)
+})
+
+test("renderModelTable tokenShare header: first click desc (new-column contract), repeat click flips asc", async () => {
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+  // Shares deliberately NOT proportional to tokens: proves the comparator
+  // reads tokenShare itself (an accidental tokens sort would keep row order).
+  const shareSortMetrics = [
+    modelMetricFixture({ modelId: "model-example-alpha", tokens: 400, tokenShare: 0.4 }),
+    modelMetricFixture({ modelId: "model-example-bravo", tokens: 300, tokenShare: 0.5 }),
+    modelMetricFixture({ modelId: "model-example-charlie", tokens: 200, tokenShare: 0.1 }),
+  ]
+
+  // 先定态到 tokens desc：「新列首点 desc」契约必须在任意残留态下成立，
+  // 而不是只在默认态下碰巧成立。
+  await pinModelSortState(shareSortMetrics, "tokens", "desc")
+  const container = freshContainer()
+  renderModelTable(container, shareSortMetrics, null, noopModelSelect)
+  assert.deepEqual(
+    modelBodyRowOrder(container),
+    ["model-example-alpha", "model-example-bravo", "model-example-charlie"],
+    "tokens desc ranking before the interaction",
+  )
+
+  // First click on the fresh column → desc (the pinned model-table contract).
+  clickModelColumnHeader(container, "tokenShare")
+  assert.match(container.innerHTML, /token 占比\s*<span class="sort-arrow">▼<\/span>/)
+  assert.deepEqual(
+    modelBodyRowOrder(container),
+    ["model-example-bravo", "model-example-alpha", "model-example-charlie"],
+    "share desc: bravo 0.5 > alpha 0.4 > charlie 0.1 — reorders against the tokens ranking",
+  )
+
+  // Repeat click on the same column flips the direction.
+  clickModelColumnHeader(container, "tokenShare")
+  assert.match(container.innerHTML, /token 占比\s*<span class="sort-arrow">▲<\/span>/)
+  assert.deepEqual(
+    modelBodyRowOrder(container),
+    ["model-example-charlie", "model-example-alpha", "model-example-bravo"],
+    "share asc flips the ranking",
+  )
+})
+
+test("renderModelTable degrades absent and NaN tokenShare (old-wire window) without crashing", async () => {
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+  // Old wire (pre-v0.12.0 host: field absent) + a dirty NaN + an honest zero
+  // (the denominator-0 wire sends real zeros — those must render, not degrade).
+  const oldWireMetrics = [
+    modelMetricFixture({ modelId: "model-example-alpha", tokens: 900 }),                    // field absent
+    modelMetricFixture({ modelId: "model-example-bravo", tokens: 500, tokenShare: 0 }),     // honest zero
+    modelMetricFixture({ modelId: "model-example-charlie", tokens: 100, tokenShare: NaN }), // dirty value
+  ]
+
+  const container = freshContainer()
+  renderModelTable(container, oldWireMetrics, null, noopModelSelect)
+
+  // Absent and NaN both degrade to —; a missing share must never pose as a
+  // real "0.0%" (the top-ranked model claiming zero share is a lie).
+  assert.equal(
+    (container.innerHTML.match(/<td class="num">—<\/td>/g) ?? []).length,
+    2,
+    "absent (old wire) and NaN shares degrade to —",
+  )
+  assert.ok(
+    container.innerHTML.includes('<td class="num">0.0%</td>'),
+    "a finite zero share is a real value and renders as 0.0%",
+  )
+  // The hitRate stays healthy in the fixture — proves the — cells belong to
+  // the share column, not a degraded hitRate cell.
+  assert.ok(container.innerHTML.includes("95.0%"))
+
+  // Sorting interaction survives the old wire: every share falls back to
+  // ?? 0 in the comparator (NaN compares as +0 per spec) → all-tie → the
+  // stable sort keeps the wire order, whatever direction residue holds.
+  assert.doesNotThrow(() => clickModelColumnHeader(container, "tokenShare"))
+  assert.match(container.innerHTML, /token 占比\s*<span class="sort-arrow">[▼▲]<\/span>/)
+  assert.deepEqual(
+    modelBodyRowOrder(container),
+    ["model-example-alpha", "model-example-bravo", "model-example-charlie"],
+    "all-tie share sort keeps the wire order (stable sort)",
+  )
+})
+
+test("getMockModelMetrics mirrors the v0.12.0 tokenShare wire: per-model tokens/Σtokens, Σ shares = 1", async () => {
+  const { getMockModelMetrics } = await import("../src/web/public/mock-data.js")
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+
+  const mockMetrics = getMockModelMetrics()
+  const totalMockTokens = mockMetrics.reduce((sum, metric) => sum + metric.tokens, 0)
+  assert.ok(totalMockTokens > 0, "the mock window carries tokens, so the denominator is real")
+
+  // Wire shape: raw 0..1 fractions on every model — same form the backend sends.
+  assert.ok(mockMetrics.every((metric) =>
+    Number.isFinite(metric.tokenShare) && metric.tokenShare >= 0 && metric.tokenShare <= 1))
+
+  // Self-consistency: Σ shares = 1 and each share is the model's own fraction
+  // of the same window the tokens ranking reads.
+  const shareSum = mockMetrics.reduce((sum, metric) => sum + metric.tokenShare, 0)
+  assert.ok(Math.abs(shareSum - 1) < 1e-9, "share denominators cover the full window")
+  assert.ok(mockMetrics.every((metric) =>
+    Math.abs(metric.tokenShare * totalMockTokens - metric.tokens) < 1e-6),
+    "tokenShare = tokens / Σ tokens per model",
+  )
+
+  // The mock path renders share cells in place: every model row carries a
+  // bare 1-decimal percent cell (the only such bare td — hitRate is span-
+  // wrapped and 推理占比 renders 0-digit integers).
+  const container = freshContainer()
+  renderModelTable(container, mockMetrics, null, noopModelSelect)
+  const shareCellMatches = container.innerHTML.match(/<td class="num">\d+\.\d%<\/td>/g) ?? []
+  assert.equal(shareCellMatches.length, mockMetrics.length, "every model row renders its tokenShare cell")
+  assert.ok(
+    !container.innerHTML.includes('<td class="num">—</td>'),
+    "no share degrades on the mock path — all shares are real numbers",
+  )
+})

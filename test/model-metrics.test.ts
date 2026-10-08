@@ -29,6 +29,7 @@ test("computeModelMetrics computes every metric for a single step", () => {
   assert.equal(modelMetric.providerId, "provider-sample")
   assert.equal(modelMetric.steps, 1)
   assert.equal(modelMetric.tokens, 1_000) // 100 + 200 + 700
+  assert.equal(modelMetric.tokenShare, 1) // sole model owns the full denominator
   assert.equal(modelMetric.hitRate, 700 / 800)
   assert.equal(modelMetric.outputPerStep, 200)
   assert.equal(modelMetric.contextAvg, 1_000) // 100 + 700 + 200
@@ -60,6 +61,7 @@ test("computeModelMetrics uses nearest-rank median and p95 over sorted per-step 
 test("computeModelMetrics stays finite for steps that carry no tokens at all", () => {
   const modelMetric = computeModelMetrics([makeAssistantStepRow()])[0]
   assert.equal(modelMetric.tokens, 0)
+  assert.equal(modelMetric.tokenShare, 0) // all-zero denominator → share stays 0
   assert.equal(modelMetric.hitRate, 0)
   assert.equal(modelMetric.outputPerStep, 0)
   assert.equal(modelMetric.contextAvg, 0)
@@ -123,6 +125,49 @@ test("computeModelMetrics takes the model's first non-empty providerId (P2-17)",
     makeAssistantStepRow({ modelId: "model/sample", providerId: "" }),
   ]
   assert.equal(computeModelMetrics(emptyProviderRows)[0].providerId, "")
+})
+
+test("computeModelMetrics sets tokenShare to each model's raw fraction of all models' tokens", () => {
+  // Denominator = 1_600 + 100 = 1_700 (input+output+cache.read across every row).
+  const stepRows = [
+    makeAssistantStepRow({
+      modelId: "model/large",
+      tokens: makeTokenUsage({ input: 400, output: 400 }),
+    }),
+    makeAssistantStepRow({
+      modelId: "model/large",
+      tokens: makeTokenUsage({ input: 400, output: 400 }),
+    }),
+    makeAssistantStepRow({
+      modelId: "model/small",
+      tokens: makeTokenUsage({ input: 100 }),
+    }),
+  ]
+
+  const modelMetrics = computeModelMetrics(stepRows)
+  assert.equal(modelMetrics[0].tokenShare, 1_600 / 1_700)
+  assert.equal(modelMetrics[1].tokenShare, 100 / 1_700)
+
+  // Same source rows, same denominator → the shares sum to exactly 1.
+  const tokenShareSum = modelMetrics.reduce(
+    (sum: number, modelMetric) => sum + modelMetric.tokenShare,
+    0,
+  )
+  assert.equal(tokenShareSum, 1)
+})
+
+test("computeModelMetrics returns tokenShare 0 for every model when all tokens are 0", () => {
+  const zeroTokenRows = [
+    makeAssistantStepRow({ modelId: "model/alpha" }),
+    makeAssistantStepRow({ modelId: "model/beta" }),
+  ]
+
+  const modelMetrics = computeModelMetrics(zeroTokenRows)
+  assert.equal(modelMetrics.length, 2)
+  for (const modelMetric of modelMetrics) {
+    assert.equal(modelMetric.tokens, 0)
+    assert.equal(modelMetric.tokenShare, 0)
+  }
 })
 
 test("nearestRankPercentile clamps the rank into the sample for extreme fractions", () => {

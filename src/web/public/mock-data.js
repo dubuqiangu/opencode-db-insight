@@ -12,7 +12,9 @@
  *                        [{ modelId, values }] 序列由 data-source 的
  *                        normalizeTrendPayload 统一完成，mock 与真实
  *                        路径共用同一适配）
- *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts ModelMetric）
+ *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts ModelMetric；
+ *                        v0.12.0 起含 tokenShare：窗口 token 占比 0..1，
+ *                        mock 以 tokens/Σtokens 自洽生成，Σ 恒为 1）
  *   GET /api/agents    → buildAgentStats()（stats/agent-fingerprint.ts AgentStat）
  *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）；
  *                        getMockSessions(sort, order, directory, range)
@@ -321,6 +323,13 @@ function buildModelMetrics() {
       cacheSupported: model.cacheSupported !== false,
     };
   });
+
+  // v0.12.0 token 占比：tokens / Σ tokens 自洽生成——各模型 share 之和
+  // 恒等于 1，与真实 wire 同形（原始分数 0..1；分母 0 时全 0）。
+  const totalWindowTokens = metrics.reduce((sum, metric) => sum + metric.tokens, 0);
+  for (const metric of metrics) {
+    metric.tokenShare = totalWindowTokens > 0 ? metric.tokens / totalWindowTokens : 0;
+  }
 
   metrics.sort((left, right) => right.tokens - left.tokens);
   return metrics;

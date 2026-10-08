@@ -8,6 +8,15 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.12.0] - 2026-10-08 · 模型排行榜 token 占比列
+
+### Added
+- **`/api/models` 逐模型 `tokenShare`**（后端）：`ModelMetric` 增补必填 `tokenShare: number`（原始 0..1 分数不取整，显示端格式化）；计算全落 `computeModelMetrics` 纯函数层——分组扫描内自 Σ 分母（复用 totalUsageTokens 口径，input+output+cache.read），**零 SQL/路由/缓存键改动**；分母 ≤ 0 → 全 0（除零防护对齐 hitRate 写法）；分母 > 0 时 Σ tokenShare === 1 构造性成立；排序键不动（仍 tokens desc——share desc 与 tokens desc 数学等价）
+- **前端「token 占比」列**：紧邻「总 token」（第 5 列，绝对量 ↔ 份额逐行对照）；**1 位小数**（与推理占比 0 位刻意区分——mock 长尾低至 0.45%，0 位取整会谎报 "0%"）；旧 wire 缺失/NaN → "—"（不可得约定，复制 hitRate/cost 模式），诚实 0 渲染 "0.0%" 不降级；排序经 compareMetric `?? 0` 既有路径自动继承（缺失按 0 全并列保序）；「新列首点 desc」契约遵守
+- **mock 镜像**：buildModelMetrics 后处理 `tokenShare = tokens / Σ tokens`（与真实 wire 同形；Σ=1 浮点 1e-16 内自洽）
+- 测试 321 → **327**（+6：后端——多模型逐模型精确值/Σ=1/分母 0；前端——renderModelTable 从零建 4 用例：列清单+单元格渲染/排序交互（fixture 故意 share ∝̸ tokens 证明比较器读 share）/旧 wire 降级/mock 镜像；shim 扁平约束下 innerHTML.includes 断言 + `pinModelSortState` 钉模块级排序态自证）
+- 真实库探针 7/7：85 模型逐个 share ∈ [0,1]、Σ=1、**Σ 模型 tokens === overview.totalTokens 逐字节相等**（跨面板口径一致实证）、排序 tokens desc、share × Σ === tokens、榜首 space-bunny-free 70.4%、活库无 unknown 桶
+
 ## [0.11.0] - 2026-10-08 · 趋势图 byModel 真实化（双车道 + wire 形状对账）
 
 ### Added
