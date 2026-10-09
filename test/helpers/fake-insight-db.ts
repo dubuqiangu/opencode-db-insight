@@ -95,9 +95,9 @@ function toSessionV2Row(sessionSummary: SessionSummary): Record<string, unknown>
     directory: sessionSummary.directory,
     time_created: sessionSummary.timeCreated,
     time_updated: sessionSummary.timeUpdated,
-    tokens_input: sessionSummary.tokens,
-    tokens_output: 0,
-    tokens_cache_read: 0,
+    tokens_input: sessionSummary.tokensInput,
+    tokens_output: sessionSummary.tokensOutput,
+    tokens_cache_read: sessionSummary.tokensCacheRead,
     cost: sessionSummary.cost,
   }
 }
@@ -360,7 +360,14 @@ export function createFakeInsightDatabase(
   }
 }
 
-/** Convenience: a session summary fixture in the wire-derived shape. */
+/**
+ * Convenience: a session summary fixture in the wire-derived shape. The
+ * default token components are distinct non-zero values that sum to
+ * `tokens` exactly, so any passthrough bug in the v2-row round trip
+ * (e.g. folding all three components into tokens_input, or swapping
+ * two columns) shows up as a per-field mismatch instead of cancelling
+ * out in the folded total.
+ */
 export function buildFakeSessionSummary(
   overrides: Partial<SessionSummary> = {},
 ): SessionSummary {
@@ -373,6 +380,9 @@ export function buildFakeSessionSummary(
     timeCreated: new Date(2026, 9, 5, 15, 30).getTime(),
     timeUpdated: new Date(2026, 9, 5, 16, 15).getTime(),
     tokens: 123456,
+    tokensInput: 100000,
+    tokensOutput: 20000,
+    tokensCacheRead: 3456,
     cost: 0,
     ...overrides,
   }

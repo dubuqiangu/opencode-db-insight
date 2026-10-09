@@ -410,6 +410,14 @@ function buildSessionSummaries() {
     createdDate.setHours(nightHour, Math.floor(random() * 60), Math.floor(random() * 60), 0);
     const durationMs = randomInRange(8 * 60_000, 13 * 3_600_000);
     const tokens = Math.round(randomInRange(1_800_000, 72_000_000));
+    // v0.13.0 三分镜像（session_v2 三列直通的 wire 契约）：比例复刻日序列
+    // 的生成规律（cache.read 占大头、纯 input 是扣掉缓存后的实付、output
+    // 是零头），分项和严格 === tokens——余数兜底保证守恒（tokenShare 同款
+    // 纪律），与 KPI 卡「入 = 纯输入、出 = output」口径一致。
+    const sessionCacheHitRate = Math.min(0.982, Math.max(0.88, 0.922 + randomInRange(-0.016, 0.05)));
+    const tokensCacheRead = Math.round(tokens * sessionCacheHitRate);
+    const tokensInput = Math.round(tokens * (1 - sessionCacheHitRate));
+    const tokensOutput = tokens - tokensCacheRead - tokensInput;
 
     sessions.push({
       id: sessionIndex === 0 ? "ses_replay_demo" : "ses_" + (0x8f3a0000 + sessionIndex * 7919).toString(16).padStart(8, "0"),
@@ -420,6 +428,9 @@ function buildSessionSummaries() {
       timeCreated: createdDate.getTime(),
       timeUpdated: createdDate.getTime() + durationMs,
       tokens,
+      tokensInput,
+      tokensOutput,
+      tokensCacheRead,
       cost: 0,
     });
   }

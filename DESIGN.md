@@ -26,7 +26,7 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 ### 2.2 opencode.db 数据面（已完成实测）
 
 - 当前写入表为 `session_v2`（会话汇总）与 `session_message`（逐条消息）；旧表 `part`/`message` 已停写，不可作为数据源；
-- `session_v2.tokens_*` 汇总字段对**活跃会话滞后**，历史统计一律以 `session_message` 逐条累加为准，`session_v2` 仅用于会话列表与目录/agent 维度；
+- `session_v2.tokens_*` 汇总字段**含被压缩（compaction）修剪的消息级历史**，message 级聚合对压缩会话反而低估；活库实证 v2 从不低于 message 级（844 会话 0 落后/69 领先，28/28 压缩会话 v2 领先），但历史统计口径仍一律以 `session_message` 逐条累加为准（跨面板注意 v2 与 message 级存在 ~0.36% 系统差），`session_v2` 仅用于会话列表与目录/agent 维度；
 - token 结构（assistant 消息 `data.tokens`）：`input` / `output` / `reasoning` / `cache.read` / `cache.write`；
 - 角色类型齐全：`user` / `assistant`（内含 text、reasoning、tool 三种 part）/ `system`（指令更新通知）/ `model-switched` / `compaction` / `idle` / `synthetic`；
 - 系统提示词本体在 `instruction_blob`（按内容哈希存储，含环境块、工具目录、日期），可还原会话当时的指令注入；
@@ -188,7 +188,7 @@ opencode-db-insight/
 
 ## 10. 已知限制
 
-- `session_v2` 汇总滞后 → 所有统计以 `session_message` 累加为准，大库全量聚合首次请求可能达数百 ms，考虑进程内缓存（TTL 60s）；
+- `session_v2` 汇总**含被压缩（compaction）修剪的消息级历史**（message 级对压缩会话低估；活库实证 v2 从不低于 message 级，844 会话 0 落后/69 领先）→ 历史统计口径仍以 `session_message` 累加为准（跨面板注意两口径存在 ~0.36% 系统差），大库全量聚合首次请求可能达数百 ms，考虑进程内缓存（TTL 60s）；
 - 历史遗留旧表（`part`/`message`，止于 2026-09-23）**不在**统计范围（避免双计）；回放视图对旧会话显示"仅新表支持"；
 - claude-opus-5 / gpt-5.6-terra 等通道上报 0% 命中率是 provider 侧不报缓存，看板在模型行标注"通道不支持缓存"提示，避免误读；
 - 时区按运行机器本地时间分桶。

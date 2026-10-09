@@ -21,6 +21,9 @@ function buildSessionSummaryFixture(overrides: Partial<SessionSummary> = {}): Se
     timeCreated: Date.UTC(2026, 9, 5, 6, 30),
     timeUpdated: Date.UTC(2026, 9, 5, 7, 15),
     tokens: 123456,
+    tokensInput: 100000,
+    tokensOutput: 20000,
+    tokensCacheRead: 3456,
     cost: 0,
     ...overrides,
   }

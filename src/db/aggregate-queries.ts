@@ -190,8 +190,10 @@ export function queryOverview(db: SqliteReadConnection | null): OverviewStats | 
  * bucketDailyTrend can bucket per (day, model). The per-model token
  * 口径 is the SAME row-level assistant extraction as the point totals —
  * the same three token paths coerced value-by-value in JS — and NOT the
- * session_v2 session-summary columns (a session's tokens lag and belong
- * to the session's primary model only). A missing or empty model id
+ * session_v2 session-summary columns (a session's v2 tokens belong to
+ * the session's primary model only, and they keep the compaction-pruned
+ * message-level history, so they never split per (day, model) like the
+ * row-level extraction does). A missing or empty model id
  * maps to the shared "unknown" fallback exactly like
  * parseAssistantStepRow (rows.ts), so the SQL-side pipeline stays
  * field-for-field parity with the full-row JS pipeline (locked by

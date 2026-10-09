@@ -309,3 +309,15 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] oracle 增量审查 0.12.0 delta（ora-6 复用会话）：P0=0 / **P1=1**（非 delta 缺陷——behavior-queries fresh 夹具午夜窗口必红，oracle 独立复跑 326/327 实证）+ P2×3（Σ=1 过度声明/占比列 1 位小数长尾读零/注释措辞）
 - [x] 0.12.1 处方修复（fix-16 会话复用，处方型修复不派下一代审查）：P1-1 锚点改 now、P2-1 注释软化+容差断言、P2-2 占比列 2 位小数（活库 55/85 行 1 位读零实证）、P2-3 array-index 措辞收紧；版本 0.12.1 三处同步 + 327/327 独立复跑 + check 0
 - 随版处理：ora-6 上轮 P2-1 注释补丁（整数型键枚举序例外）已在 v0.12.0 落地并经本轮审查核实合格（P2-3 措辞收紧已随 0.12.1 处理）
+
+## v0.13.0 会话列表 tokens 双指标列（push #31，2026-10-09，双车道并行）
+
+- [x] 用户拍板里程碑：B 目录 tokens 双指标（"继续执行"采纳推荐项；cost 因活库 ≈0 留位——探针复核 Σcost=0.0000）
+- [x] 侦察（exp-5）：下钻与顶层共用 session-list 组件（加列两者生效）；SELECT 早已取出 v2 三列仅在 parse 折叠；**活库实证推翻"v2 滞后"假设**（844 会话 0 落后/69 领先，28/28 压缩会话全领先——session_message 被压缩修剪，消息级反而低估）→ 数据源钉 v2 零成本路线
+- [x] 契约钉死：SessionSummary 增 tokensInput/tokensOutput/tokensCacheRead（v2 三列 coerceNumber 直通），tokens 折叠/cost 行为零变化，SELECT/排序白名单/过滤/缓存键/CSV 零改动；前端「入」「出」两列口径与 KPI todayInput/todayOutput 严格一致（纯输入/纯输出，cache.read 不混入）；新列不 sortable；顺带修正四处+DESIGN 两处 lagging 注释债
+- [x] 后端（fix-17）：parseSessionSummaryRow 折叠+透传、类型+四处注释修正、fake 夹具真实分项分布（暴露直通错误）+ parity 列形状锁追加分项断言、api-routes 分项透传/折叠回归测试；CSV 夹具仅类型补齐三行（先例范围）
+- [x] 前端（des-17）：入/出列（更新时间与 Tokens 之间）、KPI 口径核对（deriveOverviewExtension todayInput=纯 input）、cache.read 走总量 title 分项提示、sortKey:null 原生非排序+column.title 口径 tooltip、`?? 0` 兜底、mock 三分项严格守恒、九列密度 scoped 收紧、3 组新测试（列序/兜底/自洽）
+- [x] 测试 327 → 331（+4）
+- [x] 收敛复核：DESIGN.md:191 残留滞后表述由协调方顺手修正（对齐 :29 实证措辞）+ 版本 0.13.0 三处同步 + 合并 331/331 独立复跑 + check 0 + 真实库探针 8/8（折叠恒等逐行、榜首真实分布 in 53M/out 3M/read 1.19B、下钻/range 分项随行、cost 留位复核）
+- [x] 文档：CHANGELOG 0.13.0 + DESIGN.md 注释债两处
+- [ ] oracle 增量审查 0.13.0 delta → 有 P0/P1 则修后推 0.13.1

@@ -573,6 +573,71 @@ test("sessions route serves directory-filtered requests with 200 and the exact-m
   }
 })
 
+test("sessions route passes the session_v2 token components through per-field, folding `tokens` unchanged (v0.13.0)", () => {
+  clearResultCache()
+  try {
+    // Two deliberately different component distributions: alpha is
+    // cache-read-heavy, bravo is input-heavy, and both differ from the
+    // fake's defaults. Any passthrough mistake (folding all three into
+    // tokens_input, or swapping two columns) breaks a per-field
+    // assertion here instead of hiding inside the folded total.
+    const alphaSummary = buildFakeSessionSummary({
+      id: "ses_tokens_route_alpha",
+      tokensInput: 100,
+      tokensOutput: 300,
+      tokensCacheRead: 500,
+      tokens: 900,
+    })
+    const bravoSummary = buildFakeSessionSummary({
+      id: "ses_tokens_route_bravo",
+      tokensInput: 900,
+      tokensOutput: 90,
+      tokensCacheRead: 9,
+      tokens: 999,
+    })
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [alphaSummary, bravoSummary],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+
+    const apiResponse = handleApiRequest(apiContextFor("/api/sessions", fakeDatabase))
+    assert.equal(apiResponse.statusCode, 200)
+
+    const servedSummaries = apiResponse.body as {
+      id: string
+      tokens: number
+      tokensInput: number
+      tokensOutput: number
+      tokensCacheRead: number
+    }[]
+    assert.deepEqual(
+      servedSummaries.map((servedSummary) => servedSummary.id),
+      ["ses_tokens_route_alpha", "ses_tokens_route_bravo"],
+    )
+
+    for (const expectedSummary of [alphaSummary, bravoSummary]) {
+      const servedSummary = servedSummaries.find(
+        (candidate) => candidate.id === expectedSummary.id,
+      )
+      assert.notEqual(servedSummary, undefined)
+      // Per-field passthrough of the session_v2 summary columns.
+      assert.equal(servedSummary!.tokensInput, expectedSummary.tokensInput)
+      assert.equal(servedSummary!.tokensOutput, expectedSummary.tokensOutput)
+      assert.equal(servedSummary!.tokensCacheRead, expectedSummary.tokensCacheRead)
+      // The folded `tokens` keeps its original computation: the sum of
+      // the same three coerced columns, value-for-value.
+      assert.equal(servedSummary!.tokens, expectedSummary.tokens)
+      assert.equal(
+        servedSummary!.tokens,
+        servedSummary!.tokensInput + servedSummary!.tokensOutput + servedSummary!.tokensCacheRead,
+      )
+    }
+  } finally {
+    clearResultCache()
+  }
+})
+
 test("sessions cache keys carry the directory dimension: distinct values get entries, empty string shares the default key (v0.7.0)", () => {
   clearResultCache()
   try {

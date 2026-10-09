@@ -1,7 +1,18 @@
 /**
- * 会话列表：标题 / 模型 / agent / 创建时间 / 更新时间 / tokens / cost。
+ * 会话列表：标题 / 模型 / agent / 创建时间 / 更新时间 / 入 / 出 / tokens / cost。
  * 行 hover 高亮，点击跳 #/session/:id（M4 回放页，暂为占位路由）。
  * 支持按模型过滤（模型排行榜行下钻）。
+ *
+ * v0.13.0 入/出双指标列：紧邻既有 Tokens 折叠总量列左侧（分项 → 总量的
+ * 聚合读序，绝对量相邻对照），口径与 KPI 卡同名指标严格一致——
+ * 入 = tokensInput（纯实付输入，不含 cache.read；KPI todayInput 取趋势点
+ * 的 $.tokens.input，同为纯输入三分口径）；出 = tokensOutput（KPI
+ * todayOutput 取 $.tokens.output）。cache.read 不混进入列，只在 Tokens
+ * 总量单元格的 title 里提示分项（总量 = 入 + 出 + cache.read）。两列不挂
+ * 排序：后端 ?sort= 白名单不扩（排序确定性契约归服务端），列头用 title
+ * 说明口径代替「点击排序」。宿主更新窗口期的旧 wire 可能缺三字段，
+ * 渲染一律 `?? 0` 兜底——tokens 0 是真数据，诚实渲染 "0"，不复刻 cost
+ * 的 "—" 降级（那是「未记录」语义，0.6.1 P2-1）。
  *
  * 列头点击排序（v0.5.0 接线 v0.4.0 的 /api/sessions 服务端排序）：
  * 排序归属服务端（分页确定性契约）——点击只产出下一组 sort/order 交给
@@ -10,7 +21,7 @@
  * desc，再点同列切方向。v0.6.0 补齐 更新时间/Cost 两列后，后端五个
  * 排序白名单键全部有可见列头（title / time_created / time_updated /
  * tokens / cost 与五列一一对应），默认 time_updated desc 初始渲染即
- * 带 desc 箭头与 .sorted 高亮；模型/Agent 无对应白名单键，不可排序。
+ * 带 desc 箭头与 .sorted 高亮；模型/Agent/入/出无对应白名单键，不可排序。
  *
  * P2-3（v0.5.1）：默认排序无回路——非默认排序态下，脚注的排序描述
  * 同时是「恢复默认排序」入口（.sort-reset，点击走同一个
@@ -49,13 +60,19 @@ import {
 
 const VISIBLE_ROWS = 15;
 
-/** 列定义：sortKey 与后端 ?sort= 白名单（db/queries.ts）一一对应；null 不可排序。 */
+/**
+ * 列定义：sortKey 与后端 ?sort= 白名单（db/queries.ts）一一对应；null 不可排序。
+ * 入/出（v0.13.0）：sortKey 恒 null——白名单不扩；title 字段是纯展示列的
+ * 口径提示（不可排序的列头没有「点击排序」可说，改说口径）。
+ */
 const COLUMNS = [
   { label: "标题", sortKey: "title", numeric: false },
   { label: "模型", sortKey: null, numeric: false },
   { label: "Agent", sortKey: null, numeric: false },
   { label: "创建时间", sortKey: "time_created", numeric: true },
   { label: "更新时间", sortKey: "time_updated", numeric: true },
+  { label: "入", sortKey: null, numeric: true, title: "入 = 纯输入 tokens.input（不含 cache.read，与 KPI 卡「入」同口径）" },
+  { label: "出", sortKey: null, numeric: true, title: "出 = tokens.output（与 KPI 卡「出」同口径）" },
   { label: "Tokens", sortKey: "tokens", numeric: true },
   { label: "Cost", sortKey: "cost", numeric: true },
 ];
@@ -214,23 +231,37 @@ export function renderSessionList(
       isSorted ? "sorted" : "",
     ].filter((classToken) => classToken !== "").join(" ");
     const arrow = isSorted ? `<span class="sort-arrow">${sortOrder === "asc" ? "▲" : "▼"}</span>` : "";
+    // 可排序列头提示交互；纯展示列（模型/Agent/入/出）改挂口径说明。
+    const headerTitle = isInteractive ? "点击排序" : (column.title ?? "");
     return `
-      <th class="${classTokens}"${column.sortKey !== null ? ` data-sort-key="${column.sortKey}"` : ""}${isInteractive ? ' title="点击排序"' : ""}>
+      <th class="${classTokens}"${column.sortKey !== null ? ` data-sort-key="${column.sortKey}"` : ""}${headerTitle !== "" ? ` title="${headerTitle}"` : ""}>
         ${column.label}${arrow}
       </th>`;
   }).join("");
 
   const now = Date.now();
-  const rowsHtml = sessions.slice(0, VISIBLE_ROWS).map((session) => `
+  const rowsHtml = sessions.slice(0, VISIBLE_ROWS).map((session) => {
+    // 窗口期旧 wire 可能缺三字段：?? 0 兜底，0 是真数据诚实渲染（非 cost 的
+    // "—" 未记录降级）。cache.read 已知时在 Tokens 总量 title 里报分项。
+    const tokensInput = session.tokensInput ?? 0;
+    const tokensOutput = session.tokensOutput ?? 0;
+    const tokensCacheRead = session.tokensCacheRead ?? 0;
+    const totalCellTitle = Number.isFinite(session.tokensCacheRead)
+      ? `总量 = 入 + 出 + cache.read（本会话 cache.read ${formatTokens(tokensCacheRead)}）`
+      : "总量 = 入 + 出 + cache.read";
+    return `
     <tr class="session-row" data-session-id="${escapeHtml(session.id)}" title="查看会话回放（M4）">
       <td class="primary"><span class="session-title-cell" title="${escapeHtml(session.title)}">${escapeHtml(session.title)}</span></td>
       <td><span class="model-cell"><span class="dot" style="background:${modelColor.get(session.modelId) ?? "transparent"}"></span><span class="name">${escapeHtml(session.modelId)}</span></span></td>
       <td><span class="badge">${escapeHtml(session.agent)}</span></td>
       <td class="num" title="${formatDateTime(session.timeCreated)}">${formatRelative(session.timeCreated, now)}</td>
       <td class="num" title="${formatDateTime(session.timeUpdated)}">${formatRelative(session.timeUpdated, now)}</td>
-      <td class="num primary">${formatTokens(session.tokens)}</td>
+      <td class="num" title="入 = 纯输入 tokens.input · cache.read 另计 · 与 KPI 卡「入」同口径">${formatTokens(tokensInput)}</td>
+      <td class="num" title="出 = tokens.output · 与 KPI 卡「出」同口径">${formatTokens(tokensOutput)}</td>
+      <td class="num primary" title="${totalCellTitle}">${formatTokens(session.tokens)}</td>
       <td class="num">${costCell(session.cost)}</td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 
   const hiddenAfterFilterCount = allSessions.length - sessions.length;
   const remainingCount = Math.max(0, sessions.length - VISIBLE_ROWS);
@@ -264,7 +295,7 @@ export function renderSessionList(
   if (csvExportEntryHtml !== "") footNoteParts.push(csvExportEntryHtml);
 
   container.innerHTML = `
-    ${rangeSelectorHtml}<table class="data-table" aria-label="会话列表">
+    ${rangeSelectorHtml}<table class="data-table session-table" aria-label="会话列表">
       <thead><tr>${headCells}</tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>

@@ -281,9 +281,15 @@ export function resolveSessionRange(
 }
 
 /**
- * Session list for GET /api/sessions. `tokens` comes from the session_v2
- * summary columns (lagging for active sessions — the list is the only
- * place they are used, DESIGN §2.2).
+ * Session list for GET /api/sessions. `tokens` comes from the
+ * session_v2 summary columns, and since v0.13.0 the three components
+ * (tokens_input / tokens_output / tokens_cache_read) also pass through
+ * per-field. session_v2 KEEPS the message-level history that
+ * compaction prunes, so the message-level aggregate UNDERCOUNTS
+ * compacted sessions against these columns — live-db probe: v2 is
+ * never below the message-level sum (844 sessions, 0 lagging / 69
+ * ahead, 28/28 compacted sessions ahead). Cross-panel caveat: the v2
+ * and message-level 口径 still differ by ~0.36% systematically.
  *
  * Ordering (v0.2-B): primary key from the ?sort= whitelist (default
  * time_updated), direction from ?order= (default desc). The `id ASC`
@@ -404,6 +410,9 @@ function parseSessionSummaryRow(rowRecord: Record<string, unknown>): SessionSumm
       coerceNumber(rowRecord["tokens_input"]) +
       coerceNumber(rowRecord["tokens_output"]) +
       coerceNumber(rowRecord["tokens_cache_read"]),
+    tokensInput: coerceNumber(rowRecord["tokens_input"]),
+    tokensOutput: coerceNumber(rowRecord["tokens_output"]),
+    tokensCacheRead: coerceNumber(rowRecord["tokens_cache_read"]),
     cost: coerceNumber(rowRecord["cost"]),
   }
 }

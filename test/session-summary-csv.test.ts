@@ -59,6 +59,11 @@ function buildCsvFixtureSummary(overrides: Partial<SessionSummary> = {}): Sessio
     timeCreated: 1000,
     timeUpdated: 2000,
     tokens: 123,
+    // Wire-shape completeness only: the nine CSV columns never read the
+    // components, but the SessionSummary contract requires them.
+    tokensInput: 100,
+    tokensOutput: 20,
+    tokensCacheRead: 3,
     cost: 0.5,
     ...overrides,
   }

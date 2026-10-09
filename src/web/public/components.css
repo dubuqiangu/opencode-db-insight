@@ -198,6 +198,18 @@
 }
 .session-row { cursor: pointer; }
 
+/* v0.13.0 九列密度（标题/模型/Agent/创建/更新/入/出/Tokens/Cost）：会话
+ * 表住在 .tables 半宽面板里（~1200px 视口下内容宽约 520px），七列变九列
+ * 做定向收紧——单元格水平内距 12→8、字号 12.5→12、标题/模型的省略上限
+ * 320/240→170/120（完整内容本就在 title 提示里），.num 右对齐 tabular-nums
+ * 由既有规则保证，不新增样式语言。九列在典型数据下不出横向滚动条；
+ * 极端长模型名等病态组合仍由 .table-body overflow-x 优雅降级（同排
+ * 模型排行榜 10 列的既有机制），面板网格布局永不破。 */
+.session-table { font-size: 12px; }
+.session-table th, .session-table td { padding-left: 8px; padding-right: 8px; }
+.session-table .session-title-cell { max-width: 170px; }
+.session-table .model-cell { max-width: 120px; }
+
 /* 会话列表脚注的排序重置入口（P2-3）：虚线下划线示意可点，
  * hover 提亮与 th.sortable:hover 同语言，不另起样式体系。 */
 .sort-reset { cursor: pointer; border-bottom: 1px dashed var(--border); }

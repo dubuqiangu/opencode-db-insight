@@ -342,6 +342,24 @@ test("fixture sessions round-trip through the list and by-id queries", { skip: s
   const byIdSession = querySessionSummaryById(database, listedSession.id)
   assert.deepEqual(byIdSession, listedSession)
   assert.equal(querySessionSummaryById(database, "ses_absent_everywhere"), null)
+
+  // v0.13.0 列形状锁: the three session_v2 token columns pass through
+  // per-field (coerced value-by-value), while `tokens` stays the fold
+  // of exactly those three columns. ses_build = 900/400/5000,
+  // ses_review = 100/50/0 — the distinct REAL SQLite values, not a fake
+  // JS mirror, so a column swap or fold-into-input bug fails here.
+  const expectedComponentsBySessionId: Record<string, [number, number, number]> = {
+    ses_build: [900, 400, 5000],
+    ses_review: [100, 50, 0],
+  }
+  for (const summary of sessionPage) {
+    const [expectedInput, expectedOutput, expectedCacheRead] =
+      expectedComponentsBySessionId[summary.id]
+    assert.equal(summary.tokensInput, expectedInput)
+    assert.equal(summary.tokensOutput, expectedOutput)
+    assert.equal(summary.tokensCacheRead, expectedCacheRead)
+    assert.equal(summary.tokens, expectedInput + expectedOutput + expectedCacheRead)
+  }
 })
 
 test("fixture database: SQL aggregation matches the old JS aggregation on every route", { skip: skipReason }, () => {

@@ -696,6 +696,10 @@ interface SessionListFixtureSummary {
   timeUpdated: number
   tokens: number
   cost: number
+  /** v0.13.0 三分指标：可选以覆盖宿主更新窗口期的旧 wire（缺字段 → 0 兜底）。 */
+  tokensInput?: number
+  tokensOutput?: number
+  tokensCacheRead?: number
 }
 
 function sessionSortFixturePayload(): { total: null; sessions: SessionListFixtureSummary[] } {
@@ -818,6 +822,151 @@ test("renderSessionList renders the updated-time and cost cells and routes their
     { sortKey: "time_updated", sortOrder: "asc" },
     { sortKey: "cost", sortOrder: "desc" },
   ])
+})
+
+test("renderSessionList renders the v0.13.0 入/出 columns beside the folded Tokens total (KPI-aligned, non-sortable)", async () => {
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+  const container = freshContainer()
+  const noopSortChange = () => {}
+
+  // KPI-aligned breakdown: 入 = pure paid input (tokens.input, cache.read
+  // excluded), 出 = tokens.output, folded total = 入 + 出 + cache.read.
+  const breakdownPayload = {
+    total: null as const,
+    sessions: [
+      {
+        id: "ses_example_golf", title: "golf fixture", modelId: "glm-5.3", agent: "build",
+        directory: "D:/projects/example-alpha", timeCreated: 1000, timeUpdated: 5000,
+        tokens: 900, cost: 1.0, tokensInput: 90, tokensOutput: 45, tokensCacheRead: 765,
+      },
+    ],
+  }
+
+  renderSessionList(container, breakdownPayload, null, "time_updated", "desc", noopSortChange)
+
+  // Nine headers total; the sortable set is still exactly the five backend
+  // whitelist keys — the new columns join the non-sortable display columns.
+  assert.equal(container.querySelectorAll("th").length, 9, "the session table now has nine columns")
+  assert.deepEqual(
+    container.querySelectorAll("th.sortable").map((headerCell) => headerCell.dataset.sortKey),
+    ["title", "time_created", "time_updated", "tokens", "cost"],
+    "the 入/出 columns must not add server-sort keys (whitelist unchanged)",
+  )
+
+  // Column order: the 入/出 pair sits between 更新时间 and the folded Tokens
+  // total — parts adjacent to their sum, Cost stays last.
+  assert.match(
+    container.innerHTML,
+    /更新时间[\s\S]*?>\s*入\s*<\/th>[\s\S]*?>\s*出\s*<\/th>[\s\S]*?>\s*Tokens\s*<\/th>[\s\S]*?>\s*Cost\s*<\/th>/,
+    "入/出 must render between the updated-time column and the folded Tokens total",
+  )
+
+  // Non-sortable headers carry the calibration tooltip instead of 点击排序.
+  const inputHeader = container.querySelectorAll("th").find(
+    (headerCell) => (headerCell.attributes.get("title") ?? "").startsWith("入 = "),
+  )!
+  const outputHeader = container.querySelectorAll("th").find(
+    (headerCell) => (headerCell.attributes.get("title") ?? "").startsWith("出 = "),
+  )!
+  assert.ok(!("sortKey" in inputHeader.dataset), "the 入 header must not carry a sort key")
+  assert.ok(!("sortKey" in outputHeader.dataset), "the 出 header must not carry a sort key")
+  assert.match(inputHeader.attributes.get("title") ?? "", /不含 cache\.read/, "the 入 header states the pure-input calibration")
+  assert.match(outputHeader.attributes.get("title") ?? "", /tokens\.output/, "the 出 header states the output calibration")
+
+  // Cells: formatTokens on the raw values, aligned to the .num slot.
+  assert.ok(
+    container.innerHTML.includes('<td class="num" title="入 = 纯输入 tokens.input · cache.read 另计 · 与 KPI 卡「入」同口径">90</td>'),
+    "the 入 cell renders formatTokens(tokensInput) with the KPI-alignment tooltip",
+  )
+  assert.ok(
+    container.innerHTML.includes('<td class="num" title="出 = tokens.output · 与 KPI 卡「出」同口径">45</td>'),
+    "the 出 cell renders formatTokens(tokensOutput) with the KPI-alignment tooltip",
+  )
+  // The folded total stays the .primary column; cache.read is reported as the
+  // breakdown hint in its title (not folded into 入).
+  assert.ok(
+    container.innerHTML.includes('<td class="num primary" title="总量 = 入 + 出 + cache.read（本会话 cache.read 765）">900</td>'),
+    "the Tokens total keeps its folded value and reports cache.read in its title",
+  )
+})
+
+test("renderSessionList falls back to 0 for window-period wire missing the three token fields (v0.13.0)", async () => {
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+  const container = freshContainer()
+
+  // v0.13.0 ship window: hosts may serve the old wire without the three
+  // fields — render must not crash and must show an honest 0. A tokens=0
+  // session renders "0" in every token column: token zero is real data, not
+  // the cost column's "not recorded" degradation.
+  const legacyWirePayload = {
+    total: null as const,
+    sessions: [
+      { id: "ses_example_hotel", title: "hotel fixture", modelId: "glm-5.3", agent: "build", directory: "D:/projects/example-alpha", timeCreated: 1000, timeUpdated: 5000, tokens: 1200, cost: 1.0 },
+      { id: "ses_example_india", title: "india fixture", modelId: "glm-5.3", agent: "plan", directory: "D:/projects/example-alpha", timeCreated: 2000, timeUpdated: 9000, tokens: 0, cost: 0 },
+    ],
+  }
+
+  renderSessionList(container, legacyWirePayload, null, "time_updated", "desc", null)
+
+  assert.ok(
+    container.innerHTML.includes('<td class="num" title="入 = 纯输入 tokens.input · cache.read 另计 · 与 KPI 卡「入」同口径">0</td>'),
+    "missing tokensInput falls back to an honest 0 in the 入 column",
+  )
+  assert.ok(
+    container.innerHTML.includes('<td class="num" title="出 = tokens.output · 与 KPI 卡「出」同口径">0</td>'),
+    "missing tokensOutput falls back to an honest 0 in the 出 column",
+  )
+  // Unknown cache.read: the total title states the formula without a
+  // fabricated per-session value.
+  assert.ok(
+    container.innerHTML.includes('<td class="num primary" title="总量 = 入 + 出 + cache.read">0</td>'),
+    "a tokens=0 session renders an honest 0 total (no cost-style — degradation)",
+  )
+  assert.ok(
+    container.innerHTML.includes('<td class="num primary" title="总量 = 入 + 出 + cache.read">1.2K</td>'),
+    "the legacy row keeps its folded total while the new columns read 0",
+  )
+})
+
+test("getMockSessions mirrors the v0.13.0 three-field breakdown with parts summing to the folded total", async () => {
+  const { getMockSessions } = await import("../src/web/public/mock-data.js")
+
+  const unfilteredPage = getMockSessions()
+  assert.ok(unfilteredPage.sessions.length > 0, "the mock session pool must be non-empty")
+  for (const sessionSummary of unfilteredPage.sessions) {
+    const partValues = [
+      sessionSummary.tokensInput as number,
+      sessionSummary.tokensOutput as number,
+      sessionSummary.tokensCacheRead as number,
+    ]
+    for (const partValue of partValues) {
+      assert.ok(
+        Number.isInteger(partValue) && partValue >= 0,
+        `token parts must be non-negative integers for ${sessionSummary.id}`,
+      )
+    }
+    assert.ok(
+      partValues[0] + partValues[1] + partValues[2] === sessionSummary.tokens,
+      `入 + 出 + cache.read must equal the folded total for ${sessionSummary.id} (tokenShare-style conservation)`,
+    )
+    // KPI-aligned shape: cache.read carries the bulk, paid input is the
+    // cache-excluded remainder — mirrors the daily-series generation law.
+    assert.ok(
+      sessionSummary.tokensCacheRead > sessionSummary.tokensInput,
+      `cache.read should dominate over paid input for ${sessionSummary.id}`,
+    )
+  }
+
+  // Filtered pages serve the same objects → the same discipline holds there.
+  const firstDirectory = unfilteredPage.sessions[0].directory as string
+  const filteredPage = getMockSessions("time_updated", "desc", firstDirectory)
+  for (const sessionSummary of filteredPage.sessions) {
+    assert.ok(
+      (sessionSummary.tokensInput as number) + (sessionSummary.tokensOutput as number)
+        + (sessionSummary.tokensCacheRead as number) === sessionSummary.tokens,
+      `filtered pages keep the parts-sum conservation for ${sessionSummary.id}`,
+    )
+  }
 })
 
 test("renderSessionList header clicks emit the server-sort callback and flip direction on repeat", async () => {

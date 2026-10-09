@@ -8,6 +8,17 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.13.0] - 2026-10-09 · 会话列表 tokens 双指标列（入/出分项 + 口径注释债修正）
+
+### Added
+- **`/api/sessions` 分项透传**（后端）：SessionSummary 增补必填 `tokensInput`/`tokensOutput`/`tokensCacheRead`（session_v2 三列经 coerceNumber 逐值直通）；**既有 `tokens` 折叠总和与 `cost` 行为零变化**（折叠表达式逐字保留）；SESSION_LIST_SELECT_SQL/排序白名单/directory+range 过滤/缓存键/CSV 九列全部零改动——零新增 SQL、零性能代价（三列本就已在 SELECT 中）
+- **「滞后」注释债修正（数据源决策修正）**：活库探针实证推翻既有"session_v2 lagging"假设——844 会话 **0 个 v2 落后 / 69 个 v2 领先**，28/28 带压缩会话 v2 全领先（session_message 被压缩修剪，消息级聚合对压缩会话**低估**）；四处注释 + DESIGN.md 两处改为如实表述，"历史统计仍以 message 级为准"的口径决策不变（跨面板两口径存在 ~0.36% 系统差，注释钉住）
+- **前端「入」「出」双指标列**：插在更新时间与 Tokens 总量之间（分项→总量聚合读序，沿用 0.12.0 占比紧邻总量的布局语言）；**口径与 KPI todayInput/todayOutput 严格一致**（入 = 纯输入不含 cache.read，出 = 纯输出——经 deriveOverviewExtension 核对）；cache.read 在 Tokens 总量单元格 title 报分项（旧 wire 未知分项只报公式不编造）；新列不 sortable（`sortKey: null` 原生支持，排序白名单不扩）；`?? 0` 兜底旧 wire，tokens=0 诚实渲染 "0"
+- **mock 镜像**：每会话三分项自洽（分项和 === tokens 严格守恒，tokenShare 同款纪律），cache.read > 纯输入的活库形态保真
+- **九列密度收紧**（scoped `.session-table`，不碰共享规则）：半宽面板内不出横向滚动条
+- 测试 327 → **331**（+4：后端——api-routes 分项透传/折叠回归 + parity 列形状锁追加分项断言；前端——入/出列渲染（9 列序/口径 title/精确单元格串）/旧 wire 兜底/mock 自洽）
+- 真实库探针 8/8：100 行三字段有限数、折叠恒等逐行成立、榜首 ses_f09126be 真实分布（in 53M/out 3M/read 1.19B）、directory 下钻与 range=7d 分项随行、cost Σ=0 留位复核
+
 ## [0.12.1] - 2026-10-09 · v0.12.0 增量审查修复
 
 ### Fixed

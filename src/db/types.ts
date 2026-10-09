@@ -74,8 +74,23 @@ export interface SessionSummary {
   directory: string
   timeCreated: number
   timeUpdated: number
-  /** Σ tokens_input+tokens_output+tokens_cache_read from the (lagging) session_v2 columns. */
+  /**
+   * Σ tokens_input+tokens_output+tokens_cache_read from the session_v2
+   * summary columns (the list is the only place they are used,
+   * DESIGN §2.2). session_v2 KEEPS the message-level history that
+   * compaction prunes, so the message-level aggregate UNDERCOUNTS
+   * compacted sessions against it; live-db probe: v2 is never below
+   * the message-level sum (844 sessions, 0 lagging / 69 ahead, and
+   * 28/28 compacted sessions ahead). Cross-panel caveat: v2 and the
+   * message-level 口径 still differ by ~0.36% systematically.
+   */
   tokens: number
+  /** session_v2.tokens_input, coerced value-by-value (v0.13.0). */
+  tokensInput: number
+  /** session_v2.tokens_output, coerced value-by-value (v0.13.0). */
+  tokensOutput: number
+  /** session_v2.tokens_cache_read, coerced value-by-value (v0.13.0). */
+  tokensCacheRead: number
   cost: number
 }
 
