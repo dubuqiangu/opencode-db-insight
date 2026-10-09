@@ -320,4 +320,5 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 测试 327 → 331（+4）
 - [x] 收敛复核：DESIGN.md:191 残留滞后表述由协调方顺手修正（对齐 :29 实证措辞）+ 版本 0.13.0 三处同步 + 合并 331/331 独立复跑 + check 0 + 真实库探针 8/8（折叠恒等逐行、榜首真实分布 in 53M/out 3M/read 1.19B、下钻/range 分项随行、cost 留位复核）
 - [x] 文档：CHANGELOG 0.13.0 + DESIGN.md 注释债两处
-- [ ] oracle 增量审查 0.13.0 delta → 有 P0/P1 则修后推 0.13.1
+- [x] oracle 增量审查 0.13.0 delta（ora-7）：P0=0 / P1=0 / P2×1（mock 余数吸收理论负 output——Math.round 双半值进位可致 −1，已被确定性 PRNG + 逐会话非负断言双层封死，可选加固不阻塞）+ 1 观察（前端"严格一致"限定口径措辞属实，接受）。口径对齐声明核实成立（KPI todayInput 纯 input 零错配）；深层翻页 1167 行无串行；榜首 v2 分布逐位吻合；隐私硬红线通过
+- P2 备忘（ora-7，可选加固随下版顺手）：mock-data.js:417-420 tokensOutput 为负时从 tokensCacheRead 回扣 1（或改 read 吸收余数）——触发条件为 Math.round 双半值进位，当前 SEED 下不可达
