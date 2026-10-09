@@ -11,7 +11,7 @@
 ## [0.14.0] - 2026-10-09 · /insight-refresh 刷新命令
 
 ### Added
-- **`GET /api/refresh`**（服务器）：读 `resultCacheSize()` → `clearResultCache()` → 200 JSON `{status:"ok", cleared:N}`——覆盖全部服务端缓存面（13 处 cachedResult 同一模块级 Map；CSV/.md 导出本就不走缓存）；路由自身不入缓存（空缓存时 cleared=0）、**db 无关**（db null 仍 200，503 名单不加）、GET/HEAD 门不放宽（POST → 405 既有行为）；cache.ts:57 预留注释的"future refresh command"伏笔兑现
+- **`GET /api/refresh`**（服务器）：读 `resultCacheSize()` → `clearResultCache()` → 200 JSON `{status:"ok", cleared:N}`——覆盖全部服务端缓存面（12 处 cachedResult 同一模块级 Map；CSV/.md 导出本就不走缓存）；路由自身不入缓存（空缓存时 cleared=0）、**db 无关**（db null 仍 200，503 名单不加）、GET/HEAD 门不放宽（POST → 405 既有行为）；cache.ts:57 预留注释的"future refresh command"伏笔兑现
 - **`/insight-refresh` 斜杠命令**（TUI，第 4 条命令）：**跨进程回环**——TUI 与 server 是两个插件 flavor 两个进程，命令内直接 import 清缓存是静默 no-op（侦察钉死），故走 `readInsightServerPort` + fetch `127.0.0.1:{port}/api/refresh`（AbortController ~5s 超时防御）；成功 toast「已清除 N 条统计缓存（看板刷新页面后生效）」——看板页面无自动轮询，刷新提示必要；端口缺失/超时/非 200/坏 JSON 全降级 error toast **永不抛**；依赖注入 `{fetchImpl?, readPortImpl?}` 供测试观察
 - 测试 331 → **340**（+9：路由——200 形状/精确计数/db-null/自身不入缓存/清空后重算行为锁；命令——端口缺失/fetch 失败/成功文案；注册——数量 4/slash 名单/runRefresh 注入）
 - 真实服务探针 10/10：铺 4 路由→refresh 精确清 4、空缓存→0、重算健康、405 GET 门、未知路由 404 不破坏、精确计数 2→2（探针末段一次自误断言经甄别为探针算术错误——overview 健康检查留的 1 条未计入，代码行为正确）
