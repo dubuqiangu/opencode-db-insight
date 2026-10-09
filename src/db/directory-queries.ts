@@ -109,6 +109,10 @@ export function queryDirectoryStats(
               COUNT(DISTINCT s.id) AS session_count,
               COALESCE(SUM(step_counts.step_count), 0) AS step_count,
               MAX(s.time_updated) AS last_active_ms,
+              -- SQL 侧 SUM 的类型假设（区别于 P1-1 禁令）：overview 禁在 SQL 内加
+              -- session_message.data 的 JSON 文本值（TEXT 前缀解析风险）；这三列是
+              -- opencode writer 恒写数值的 session_v2 结构列（活库探针 855/855 全
+              -- integer），勿把本模式复制到 message 数据上。
               SUM(s.tokens_input) AS tokens_input_sum,
               SUM(s.tokens_output) AS tokens_output_sum,
               SUM(s.tokens_cache_read) AS tokens_cache_read_sum
