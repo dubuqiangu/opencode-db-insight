@@ -334,3 +334,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 文档：CHANGELOG 0.14.0
 - [x] oracle 增量审查 0.14.0 delta（ora-7 会话复用）：P0=0 / P1=0 / P2×2 全文档级，无需 0.14.1——审查证据：340/340 独立复跑、四条降级路径逐一核实（fetch 零调用锁死/HTTP 状态精确插值/坏形状四变体/异常三变体）、api-routes 中间编辑事故独立核验自愈属实（23→26 test 块逐名 diff 零丢失）、全真链路活探（storage 键逐字一致、5000ms 超时真实触发）、隐私零命中（历次最干净 delta）
 - 两处 P2 已由协调方顺手处置（文档级一行）：P2-1 CHANGELOG"13 处 cachedResult"数字失实修正为 12（根因：协调方早前 grep 命中含 case "models" 一行）；P2-2 /api/refresh 副作用 GET 的跨源清缓存安全残留已补记 DESIGN.md §10（影响仅性能，接受现状）
+
+## v0.15.0 目录面板 tokens 汇总（push #33，2026-10-09，双车道）
+
+- [x] 用户拍板里程碑：目录面板 tokens 汇总（question 工具连续第八次成功转化）
+- [x] 侦察（exp-5 网络中断 errored 不可复用 → exp-7 重试成功）：扇出风险钉死——现有 LEFT JOIN 每会话 N 行，直接加 SUM 会按步数虚高，方案 A（step 子查询预聚合 GROUP BY session_id）结构性消除；同表证明（目录查询主表=session_v2，与 SESSION_LIST_SELECT_SQL 同表同三列零 join 差异）；目录面板无排序控制器（加列不触发白名单）；mock 目录段缺全部 tokens 字段；deepEqual 三处连锁；CSS 双断点
+- [x] 契约钉死：DirectoryStat 加 tokensInput/tokensOutput/tokensCacheRead 必填（行解析 ?? 0 coerce）；SQL 方案 A + 三 SUM 同一 GROUP BY；api.ts 零改动；空目录排除语义沿用；前端口径沿用 session-list title 模式 + 目录特有对账警示（~0.36% 系统差 · Σ目录≠全库）；目录 Σ ≠ KPI 全库不写相等断言
+- [x] 实施（双车道并行）：fix-18 后端（方案 A SQL + 三 SUM + 类型注释 + fake 镜像 SUM + 真实 :memory: 夹具扇出回归面 + 守恒手推断言 + deepEqual 两处）/ des-18 前端（入/出列两处 grid 模板 + 移动端 nth-child(7) 顺移修正 + title 口径 + mock 逐日三分各自最大余数法分摊——负 output 问题自然消解 + 跨视图守恒断言 + 3 用例）；des-18 越界 flag：index.html 副标题一行文案（加列后事实性缺漏）——协调方 copy 复核接受保留
+- [x] 测试 340 → 345（后端 +2 / 前端 +3）
+- [x] 收敛复核：版本 0.15.0 三处同步 + 合并 345/345 独立复跑 + check 0 + 活库探针 6/6（16 目录逐行与 SQL 直查三分全等——扇出若存在必红；Σ 守恒 in 331.9M/out 13.7M/read 4.19B；「空目录排除可观测」断言经甄别为探针假设错误——活库唯一空目录会话三分全 0，排除语义由 parity 夹具锁定，历史第四次探针自证纪律命中）；fixer 自报 SQL 模板缩进未命中事故经重试成功无残留（345/345 实证）
+- [x] 文档：CHANGELOG 0.15.0
+- [ ] oracle 增量审查 0.15.0 delta → 有 P0/P1 则修后推 0.15.1

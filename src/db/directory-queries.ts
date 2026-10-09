@@ -7,8 +7,18 @@
  * - The step count reuses the shared assistant-step predicate from
  *   scan-conventions.ts verbatim (P2-3 single source) — it rides inside
  *   the LEFT JOIN subquery so the unprefixed predicate text stays valid.
- * - COUNT(DISTINCT s.id) shields the session count from the join's
- *   row fan-out (one session joins N step rows).
+ * - The join is PRE-AGGREGATED (v0.15.0 方案 A): the subquery groups by
+ *   session_id first, so every session joins exactly one row and the
+ *   row fan-out of the old per-step-row join is gone by construction.
+ *   That is what makes the token SUMs below safe — under the old shape
+ *   SUM(s.tokens_input) would multiply a session's tokens by its step
+ *   count. COUNT(DISTINCT s.id) stays as a defensive no-op.
+ * - The per-directory token sums read the session_v2 summary columns
+ *   (v2 汇总口径): they include the compaction-pruned message-level
+ *   history, and differ from the message-level 口径 by ~0.36%
+ *   systematically (live-db probe 2026-10-06). Sessions with a NULL or
+ *   empty directory column are excluded from every sum, so Σ目录
+ *   tokens ≠ the whole-database total by design.
  * - Sessions with a NULL or empty directory column are excluded from
  *   the list AND from both totals (real db carries exactly one such
  *   row, probed 2026-10-06).
@@ -36,6 +46,18 @@ export interface DirectoryStat {
   sessions: number
   /** Assistant steps across those sessions (shared step 口径). */
   steps: number
+  /**
+   * Σ session_v2.tokens_input of the directory's sessions, coerced
+   * value-by-value. v2 汇总口径: includes the compaction-pruned
+   * message-level history and differs from the message-level 口径 by
+   * ~0.36% systematically. Excluded NULL/empty-directory sessions are
+   * not in this sum, so Σ目录 ≠ the whole-database total.
+   */
+  tokensInput: number
+  /** Σ session_v2.tokens_output, same v2 口径 and exclusions as tokensInput. */
+  tokensOutput: number
+  /** Σ session_v2.tokens_cache_read, same v2 口径 and exclusions as tokensInput. */
+  tokensCacheRead: number
   /** MAX(time_updated) of those sessions, epoch-ms; null when absent. */
   lastActiveMs: number | null
 }
@@ -85,12 +107,17 @@ export function queryDirectoryStats(
     .prepare(
       `SELECT s.directory AS directory_name,
               COUNT(DISTINCT s.id) AS session_count,
-              COUNT(step_messages.session_id) AS step_count,
-              MAX(s.time_updated) AS last_active_ms
+              COALESCE(SUM(step_counts.step_count), 0) AS step_count,
+              MAX(s.time_updated) AS last_active_ms,
+              SUM(s.tokens_input) AS tokens_input_sum,
+              SUM(s.tokens_output) AS tokens_output_sum,
+              SUM(s.tokens_cache_read) AS tokens_cache_read_sum
        FROM session_v2 s
-       LEFT JOIN (SELECT session_id FROM session_message
-                  WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}) step_messages
-         ON step_messages.session_id = s.id
+       LEFT JOIN (SELECT session_id, COUNT(*) AS step_count
+                  FROM session_message
+                  WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}
+                  GROUP BY session_id) step_counts
+         ON step_counts.session_id = s.id
        WHERE s.directory IS NOT NULL AND s.directory != ''
        GROUP BY s.directory
        ORDER BY step_count DESC, session_count DESC, directory_name ASC`,
@@ -112,6 +139,13 @@ export function queryDirectoryStats(
       name: directoryDisplayName(directoryPath),
       sessions: sessionCount,
       steps: coerceNumber(rowRecord["step_count"]),
+      // SUM over a group whose every joined row is NULL yields SQL NULL
+      // — the `?? 0` keeps the zero explicit instead of leaning on
+      // coerceNumber's null coercion (same per-column read discipline
+      // as parseSessionSummaryRow in queries.ts).
+      tokensInput: coerceNumber(rowRecord["tokens_input_sum"] ?? 0),
+      tokensOutput: coerceNumber(rowRecord["tokens_output_sum"] ?? 0),
+      tokensCacheRead: coerceNumber(rowRecord["tokens_cache_read_sum"] ?? 0),
       lastActiveMs: lastActiveRaw === null || lastActiveRaw === undefined ? null : coerceNumber(lastActiveRaw),
     })
   }

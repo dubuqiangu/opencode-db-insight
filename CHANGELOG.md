@@ -8,6 +8,19 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.15.0] - 2026-10-09 · 目录面板 tokens 汇总（入/出双列 + 口径警示）
+
+### Added
+- **目录聚合三 SUM**（`queryDirectoryStats`）：`DirectoryStat` 增补必填 `tokensInput/tokensOutput/tokensCacheRead`（v2 汇总口径，与 v0.13.0 会话列表同表同列零 join 差异——无混口径）；SQL 走**预聚合方案**——step 子查询改 `GROUP BY session_id`（每会话恰一行），扇出结构性消失，三 SUM 不被步数放大；外层步数改 `COALESCE(SUM(step_counts.step_count), 0)` 保零步目录语义；GROUP BY/空目录排除/JS 三键排序全部不动；`api.ts` 零改动（缓存键不含字段）
+- **目录面板入/出双列**（前端）：插在「步骤」与「最近活跃」之间，两处 grid 模板同步扩列（桌面 +2×56px 轨道、移动端七列变体 + 隐藏选择器 nth-child(5)→(7) 顺移修正）；title 沿用会话列口径文案 + 目录特有对账警示（会话级汇总 vs 消息级 ~0.36% 系统差 · 无目录会话不计入 → 各目录相加 ≠ 全库）；三字段 `?? 0` 诚实渲染；旧 wire 未知 cache.read 不伪装成 0
+- **mock 三分分摊**：buildDirectoryStats 逐日按目录权重对日序列三分**各自**走最大余数法分摊（与 steps 同款纪律）——output 永不为负（负值回扣问题自然消解）、Σ 目录三分 === Σ getMockTrend(366) 三分（跨视图守恒断言）
+- 测试 340 → **345**（+5：后端——真实 :memory: 夹具扇出回归面「多步会话 tokens 不被步数放大」+ 三分守恒手推精确断言 + fake 镜像 SUM + deepEqual 两处连锁；前端——列序/title 逐字/零值兜底/旧 wire 不伪装/mock 守恒三对总值）
+- 活库探针 6/6：16 目录逐行与 SQL 直查三分**全等**（扇出若存在必红）、Σ 目录三分守恒（in 331.9M/out 13.7M/read 4.19B）、榜首目录 in 302.9M 可见；「空目录排除在活库可观测」断言经甄别为探针假设错误——活库唯一空目录会话三分全 0（排除语义由 parity 夹具锁定），历史第四次探针自证纪律命中
+
+### Changed
+- directory-queries.ts 文件头口径注释：COUNT(DISTINCT) 防扇出表述更新为预聚合结构描述 + token 口径 bullet
+- index.html 目录面板副标题：「会话与步骤」→「会话、步骤与入/出 token」（加列后原句事实性缺漏，des-18 越界 flag 经协调方 copy 复核后接受保留）
+
 ## [0.14.0] - 2026-10-09 · /insight-refresh 刷新命令
 
 ### Added

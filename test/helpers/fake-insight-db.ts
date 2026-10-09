@@ -151,9 +151,11 @@ export function createFakeInsightDatabase(
         // JOIN of the assistant-step subquery, grouped per non-empty
         // directory. Sessions with NULL/empty directories drop out of
         // every bucket; steps mirror the assistant-object subquery by
-        // counting only assistant messages. Groups come back UNSORTED —
-        // the query's JS comparator owns the wire ordering, and serving
-        // insertion order here proves exactly that.
+        // counting only assistant messages, and the token sums mirror
+        // the v0.15.0 pre-aggregated join (each session contributes
+        // its tokens once). Groups come back UNSORTED — the query's JS
+        // comparator owns the wire ordering, and serving insertion
+        // order here proves exactly that.
         const assistantStepCountBySessionId = new Map<string, number>()
         for (const [sessionId, messageFixtures] of Object.entries(scenario.messagesBySessionId)) {
           assistantStepCountBySessionId.set(
@@ -174,7 +176,14 @@ export function createFakeInsightDatabase(
         }
         const statsByDirectoryName = new Map<
           string,
-          { session_count: number; step_count: number; last_active_ms: number | null }
+          {
+            session_count: number
+            step_count: number
+            last_active_ms: number | null
+            tokens_input_sum: number
+            tokens_output_sum: number
+            tokens_cache_read_sum: number
+          }
         >()
         for (const sessionRow of sessionRows) {
           const directoryColumn = sessionRow.directory
@@ -184,9 +193,18 @@ export function createFakeInsightDatabase(
               session_count: 0,
               step_count: 0,
               last_active_ms: null,
+              tokens_input_sum: 0,
+              tokens_output_sum: 0,
+              tokens_cache_read_sum: 0,
             }
           statsRecord.session_count += 1
           statsRecord.step_count += assistantStepCountBySessionId.get(String(sessionRow.id)) ?? 0
+          // Mirror the v0.15.0 token SUMs: each session contributes its
+          // session_v2 summary columns exactly ONCE (the pre-aggregated
+          // join shape — never multiplied by its step count).
+          statsRecord.tokens_input_sum += Number(sessionRow.tokens_input ?? 0)
+          statsRecord.tokens_output_sum += Number(sessionRow.tokens_output ?? 0)
+          statsRecord.tokens_cache_read_sum += Number(sessionRow.tokens_cache_read ?? 0)
           const timeUpdated = Number(sessionRow.time_updated)
           statsRecord.last_active_ms =
             statsRecord.last_active_ms === null
@@ -201,6 +219,9 @@ export function createFakeInsightDatabase(
               session_count: statsRecord.session_count,
               step_count: statsRecord.step_count,
               last_active_ms: statsRecord.last_active_ms,
+              tokens_input_sum: statsRecord.tokens_input_sum,
+              tokens_output_sum: statsRecord.tokens_output_sum,
+              tokens_cache_read_sum: statsRecord.tokens_cache_read_sum,
             })),
           get: () => undefined,
         }

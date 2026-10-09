@@ -370,6 +370,12 @@ test("v0.3-A directories route is registered and answers 200 with the contract b
           name: "example-alpha",
           sessions: 1,
           steps: 2,
+          // v0.15.0 token sums: the builder default components
+          // (100000/20000/3456), once per session — the 2 steps must
+          // NOT multiply them.
+          tokensInput: 100000,
+          tokensOutput: 20000,
+          tokensCacheRead: 3456,
           lastActiveMs: 2000,
         },
       ],

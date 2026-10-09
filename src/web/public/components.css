@@ -450,10 +450,13 @@
 .todo-counts { font-size: 12px; color: var(--text-dim); margin: 0; }
 
 /* ---------- 项目目录用量区块（v0.3-A） ---------- */
+/* v0.15.0 七列（目录/条形/会话/步骤/入/出/最近活跃）：新增两个 56px 数字
+ * 轨道，会话/步骤保持 64px、名称列 minmax 区间不变；条形仍吃 1fr 余量
+ * （span-both 全宽面板余量充足）。 */
 .directory-head-row,
 .directory-row {
   display: grid;
-  grid-template-columns: minmax(150px, 230px) 1fr 64px 64px 92px;
+  grid-template-columns: minmax(150px, 230px) 1fr 64px 64px 56px 56px 92px;
   gap: 12px;
   align-items: center;
 }
@@ -534,9 +537,14 @@
   flex-wrap: wrap;
 }
 @media (max-width: 720px) {
+  /* v0.15.0 移动端七列变体：藏最近活跃（第 7 轨，原第 5 轨随加列顺移），
+   * 数字轨道收紧 + gap 12→8，六个可见列在 ~375px 内容宽内不横向溢出。 */
   .directory-head-row,
-  .directory-row { grid-template-columns: minmax(110px, 1fr) 1fr 52px 52px; }
-  .directory-head-row span:nth-child(5),
+  .directory-row {
+    grid-template-columns: minmax(92px, 1fr) 1fr 40px 40px 44px 44px;
+    gap: 8px;
+  }
+  .directory-head-row span:nth-child(7),
   .directory-row .directory-last-active { display: none; }
 }
 

@@ -35,7 +35,8 @@
  *   GET /api/todo      → buildTodoStats()（queries.ts queryTodoStats 返回形状）
  *   GET /api/directories?limit=10 → buildDirectoryStats()（{totalDirectories,
  *                        totalSessions, directories[{directory, name, sessions,
- *                        steps, lastActiveMs|null}]}，长尾形态、trend 守恒）
+ *                        steps, tokensInput, tokensOutput, tokensCacheRead,
+ *                        lastActiveMs|null}]}，长尾形态、trend 三分守恒）
  *   GET /api/session/:id/* → 回放 fixtures 见 mock-replay-data.js
  *
  * 全部数据由同一个确定性随机源在模块加载时生成一次，
@@ -586,6 +587,11 @@ function buildTodoStats() {
  * 从统一逐日序列推导（与 hour-heatmap 同款纪律）：
  *  - steps：逐日按「目录权重」最大余数法分摊 → 各目录求和与
  *    getMockTrend(366) 的 steps 总和精确守恒（口径一致）。
+ *  - tokensInput/tokensOutput/tokensCacheRead（v0.15.0）：同款逐日守恒
+ *    分摊，但三个分项各自独立分摊——日序列的 input/read/output 本就
+ *    按 cache-hit-rate 模式三分生成，各目录直接继承该三分，无需二次
+ *    拆分；Σ 各目录每分项 === getMockTrend(366) 对应分项总和（跨视图
+ *    口径一致）。最大余数法只产非负整数，天然没有负 output 回扣问题。
  *  - sessions：与 overview/survival 同源（真实后端是同一条 COUNT(*)，
  *    三个视图恒等）——取 buildOverview().sessionCount 一次性按
  *    「权重 × 活跃天数」分摊，不做逐日取整，杜绝跨视图漂移。
@@ -616,6 +622,9 @@ function buildDirectoryStats() {
   const directoryTotals = SESSION_DIRECTORIES.map((_, directoryIndex) => ({
     steps: 0,
     sessions: sessionAllocations[directoryIndex],
+    tokensInput: 0,
+    tokensOutput: 0,
+    tokensCacheRead: 0,
     lastActiveDayIndex: -1,
   }));
 
@@ -626,8 +635,16 @@ function buildDirectoryStats() {
       return isDormant ? 0 : DIRECTORY_SESSION_WEIGHTS[directoryIndex];
     });
     const stepAllocations = distributeByLargestRemainder(dayPoint.steps, dayDirectoryWeights);
+    // v0.15.0 三分 tokens：input/read/output 各自按当日目录权重守恒分摊
+    //（与 steps 同一权重、同一最大余数法），日序列三分模式直接继承。
+    const inputAllocations = distributeByLargestRemainder(dayPoint.input, dayDirectoryWeights);
+    const cacheReadAllocations = distributeByLargestRemainder(dayPoint.read, dayDirectoryWeights);
+    const outputAllocations = distributeByLargestRemainder(dayPoint.output, dayDirectoryWeights);
     for (let directoryIndex = 0; directoryIndex < SESSION_DIRECTORIES.length; directoryIndex += 1) {
       directoryTotals[directoryIndex].steps += stepAllocations[directoryIndex];
+      directoryTotals[directoryIndex].tokensInput += inputAllocations[directoryIndex];
+      directoryTotals[directoryIndex].tokensOutput += outputAllocations[directoryIndex];
+      directoryTotals[directoryIndex].tokensCacheRead += cacheReadAllocations[directoryIndex];
       if (stepAllocations[directoryIndex] > 0) directoryTotals[directoryIndex].lastActiveDayIndex = dayIndex;
     }
   }
@@ -637,6 +654,9 @@ function buildDirectoryStats() {
     name: pathLastSegment(directoryPath),
     sessions: directoryTotals[directoryIndex].sessions,
     steps: directoryTotals[directoryIndex].steps,
+    tokensInput: directoryTotals[directoryIndex].tokensInput,
+    tokensOutput: directoryTotals[directoryIndex].tokensOutput,
+    tokensCacheRead: directoryTotals[directoryIndex].tokensCacheRead,
     lastActiveMs: directoryTotals[directoryIndex].lastActiveDayIndex < 0
       ? null
       : dateKeyToEpochLocal(simulated.dateKeys[directoryTotals[directoryIndex].lastActiveDayIndex]),

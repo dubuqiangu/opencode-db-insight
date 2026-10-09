@@ -6,9 +6,11 @@
  * (steps desc → sessions desc → directory asc).
  *
  * Conservation locks (P1-1 lesson): with a full unclamped grouping the
- * per-directory session sum must equal totalSessions, and the per-
- * directory step sum must equal the assistant-object rows attributed
- * to non-empty-directory sessions — no join fan-out, no slack leaks.
+ * per-directory session sum must equal totalSessions, the per-directory
+ * step sum must equal the assistant-object rows attributed to
+ * non-empty-directory sessions, and (v0.15.0) the three per-directory
+ * token sums must equal the listed sessions' session_v2 token columns
+ * once per session — no join fan-out, no slack leaks.
  */
 
 import { test } from "node:test"
@@ -132,13 +134,22 @@ function buildDirectoryScenario(): FakeInsightDatabaseScenario {
   }
 }
 
-/** The full expected listing, in the contract's deterministic order. */
+/**
+ * The full expected listing, in the contract's deterministic order. The
+ * token components follow the fake builder's defaults (100000/20000/3456
+ * per session, never multiplied by step count), summed per directory.
+ */
 const EXPECTED_DIRECTORY_ORDER: DirectoryStat[] = [
   {
     directory: "D:\\projects\\example-beta",
     name: "example-beta", // backslash path: last \ segment
     sessions: 2, // COUNT(DISTINCT s.id) survives the LEFT JOIN fan-out
     steps: 4,
+    // two sessions × defaults, NOT steps(4) × defaults — the fan-out
+    // regression face (a per-step-row join would answer 400000).
+    tokensInput: 200000,
+    tokensOutput: 40000,
+    tokensCacheRead: 6912,
     lastActiveMs: 8000,
   },
   {
@@ -146,6 +157,10 @@ const EXPECTED_DIRECTORY_ORDER: DirectoryStat[] = [
     name: "example-gamma",
     sessions: 1,
     steps: 4, // ties with example-beta on steps → sessions desc puts beta first
+    // one session with 4 steps: tokens stay the row-level value, not 4×.
+    tokensInput: 100000,
+    tokensOutput: 20000,
+    tokensCacheRead: 3456,
     lastActiveMs: 1000,
   },
   {
@@ -153,6 +168,9 @@ const EXPECTED_DIRECTORY_ORDER: DirectoryStat[] = [
     name: "example-user", // drive-root style path: last / segment
     sessions: 1,
     steps: 3,
+    tokensInput: 100000,
+    tokensOutput: 20000,
+    tokensCacheRead: 3456,
     lastActiveMs: 9000,
   },
   {
@@ -160,6 +178,9 @@ const EXPECTED_DIRECTORY_ORDER: DirectoryStat[] = [
     name: "alpha",
     sessions: 1,
     steps: 1, // ties with beta on steps AND sessions → directory asc
+    tokensInput: 100000,
+    tokensOutput: 20000,
+    tokensCacheRead: 3456,
     lastActiveMs: 5000,
   },
   {
@@ -167,6 +188,9 @@ const EXPECTED_DIRECTORY_ORDER: DirectoryStat[] = [
     name: "beta",
     sessions: 1,
     steps: 1,
+    tokensInput: 100000,
+    tokensOutput: 20000,
+    tokensCacheRead: 3456,
     lastActiveMs: 6000,
   },
   {
@@ -174,6 +198,11 @@ const EXPECTED_DIRECTORY_ORDER: DirectoryStat[] = [
     name: "quiet-project",
     sessions: 1,
     steps: 0, // session with zero assistant steps still listed
+    // zero steps → LEFT JOIN NULL row, but the session's tokens still
+    // count exactly once.
+    tokensInput: 100000,
+    tokensOutput: 20000,
+    tokensCacheRead: 3456,
     lastActiveMs: 2000,
   },
 ]
@@ -261,6 +290,11 @@ test("directory list conserves totalSessions and the step rows of listed session
   // assistant-object step rows only (the excluded sessions carry 3+1).
   const expectedSessionTotal = 7
   const expectedStepTotal = 13
+  // Every listed session carries the builder's default token components
+  // (100000/20000/3456) — the excluded two would add 200000/40000/6912.
+  const expectedTokensInputTotal = 7 * 100000
+  const expectedTokensOutputTotal = 7 * 20000
+  const expectedTokensCacheReadTotal = 7 * 3456
 
   const listedSessionSum = directoryStats.directories.reduce(
     (sessionAccumulator, directoryRow) => sessionAccumulator + directoryRow.sessions,
@@ -270,12 +304,37 @@ test("directory list conserves totalSessions and the step rows of listed session
     (stepAccumulator, directoryRow) => stepAccumulator + directoryRow.steps,
     0,
   )
+  const listedTokensInputSum = directoryStats.directories.reduce(
+    (tokensInputAccumulator, directoryRow) => tokensInputAccumulator + directoryRow.tokensInput,
+    0,
+  )
+  const listedTokensOutputSum = directoryStats.directories.reduce(
+    (tokensOutputAccumulator, directoryRow) => tokensOutputAccumulator + directoryRow.tokensOutput,
+    0,
+  )
+  const listedTokensCacheReadSum = directoryStats.directories.reduce(
+    (tokensCacheReadAccumulator, directoryRow) =>
+      tokensCacheReadAccumulator + directoryRow.tokensCacheRead,
+    0,
+  )
 
   assert.equal(directoryStats.totalSessions, expectedSessionTotal)
   assert.equal(listedSessionSum, expectedSessionTotal, "Σ sessions === totalSessions")
   assert.equal(listedStepSum, expectedStepTotal, "Σ steps === non-empty-directory step rows")
+  // The three token components conserve per component (三分守恒):
+  // Σ目录 tokens === the listed sessions' session_v2 values, once per
+  // session — no step-count multiplication, no NULL/empty leak.
+  assert.equal(listedTokensInputSum, expectedTokensInputTotal, "Σ tokensInput conserved")
+  assert.equal(listedTokensOutputSum, expectedTokensOutputTotal, "Σ tokensOutput conserved")
+  assert.equal(
+    listedTokensCacheReadSum,
+    expectedTokensCacheReadTotal,
+    "Σ tokensCacheRead conserved",
+  )
   // The excluded sessions' steps (3 + 1) must not leak into any bucket.
   assert.notEqual(listedStepSum, 17)
+  // ...and neither must their tokens.
+  assert.notEqual(listedTokensInputSum, 9 * 100000)
 })
 
 test("directory steps conserve the whole assistant-object row count when no session is excluded", () => {
@@ -293,10 +352,17 @@ test("directory steps conserve the whole assistant-object row count when no sess
     (stepAccumulator, directoryRow) => stepAccumulator + directoryRow.steps,
     0,
   )
+  const listedTokensInputSum = directoryStats.directories.reduce(
+    (tokensInputAccumulator, directoryRow) => tokensInputAccumulator + directoryRow.tokensInput,
+    0,
+  )
 
   assert.equal(directoryStats.totalDirectories, 8)
   assert.equal(directoryStats.totalSessions, 9)
   assert.equal(listedStepSum, 17, "Σ steps === the full assistant-object row count (1+1+2+2+4+0+3+3+1)")
+  // With nobody excluded the token sum covers the whole fixture: every
+  // session's default tokens, once each.
+  assert.equal(listedTokensInputSum, 9 * 100000, "Σ tokensInput === every session, exactly once")
 })
 
 // ---------------------------------------------------------------------------

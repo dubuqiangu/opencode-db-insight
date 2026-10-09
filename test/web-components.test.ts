@@ -647,6 +647,171 @@ test("renderDirectoryPanel degrades null and empty listings to the empty placeho
   assert.match(ghostTotalContainer.innerHTML, /还没有目录统计/)
 })
 
+test("renderDirectoryPanel renders the v0.15.0 入/出 columns with KPI-aligned titles and the cross-calibration caveat", async () => {
+  const { renderDirectoryPanel } = await import(
+    "../src/web/public/components/directory-panel.js"
+  )
+  const container = freshContainer()
+
+  renderDirectoryPanel(container, {
+    totalDirectories: 2,
+    totalSessions: 3,
+    directories: [
+      {
+        directory: "D:/projects/example-alpha",
+        name: "example-alpha",
+        sessions: 2,
+        steps: 4,
+        tokensInput: 2_400_000,
+        tokensOutput: 120_000,
+        tokensCacheRead: 4_800_000,
+        lastActiveMs: null,
+      },
+      {
+        // Zero-token directory: honest "0" in both new columns — token zero
+        // is real data, not a "not recorded" degradation.
+        directory: "D:/projects/example-beta",
+        name: "example-beta",
+        sessions: 1,
+        steps: 0,
+        tokensInput: 0,
+        tokensOutput: 0,
+        tokensCacheRead: 0,
+        lastActiveMs: null,
+      },
+    ],
+  })
+
+  const renderedHtml = container.innerHTML
+  // Column order: the 入/出 pair sits between 步骤 and 最近活跃 — the same
+  // token-metrics grouping as the v0.13.0 session-list columns.
+  assert.match(
+    renderedHtml,
+    /步骤<\/span>[\s\S]*?>入<\/span>[\s\S]*?>出<\/span>[\s\S]*?<span>最近活跃<\/span>/,
+    "the head row must order 目录/会话/步骤/入/出/最近活跃",
+  )
+  // Head tooltips: calibration mirrors the session-list wording, plus the
+  // directory-specific reconciliation caveat (session-level aggregation,
+  // ~0.36% system gap, empty-directory sessions excluded → Σ ≠ 全库 KPI).
+  assert.ok(
+    renderedHtml.includes('title="入 = 纯输入 tokens.input（不含 cache.read，与 KPI 卡「入」同口径）· 目录聚合为会话级汇总，与消息级统计存在约 0.36% 系统差 · 无目录的会话不计入，各目录相加不等于全库">入</span>'),
+    "the 入 header states the pure-input calibration and the cross-calibration caveat",
+  )
+  assert.ok(
+    renderedHtml.includes('title="出 = tokens.output（与 KPI 卡「出」同口径）· 目录聚合为会话级汇总（v2）">出</span>'),
+    "the 出 header states the output calibration",
+  )
+  // Cells: formatTokens on the raw values in the .num slot; cache.read is
+  // reported as the breakdown hint inside the 入 cell title (not folded in).
+  assert.ok(
+    renderedHtml.includes('<span class="directory-count num" title="入 = 纯输入 tokens.input · cache.read 4.8M 另计 · 与 KPI 卡「入」同口径">2.4M</span>'),
+    "the 入 cell renders formatTokens(tokensInput) with the cache.read breakdown in its title",
+  )
+  assert.ok(
+    renderedHtml.includes('<span class="directory-count num" title="出 = tokens.output · 与 KPI 卡「出」同口径">120K</span>'),
+    "the 出 cell renders formatTokens(tokensOutput) with the KPI-alignment title",
+  )
+  assert.ok(
+    renderedHtml.includes('<span class="directory-count num" title="入 = 纯输入 tokens.input · cache.read 0 另计 · 与 KPI 卡「入」同口径">0</span>'),
+    "a zero-token directory renders an honest 0 in the 入 column",
+  )
+})
+
+test("renderDirectoryPanel falls back to 0 for wire rows missing the three token fields (v0.15.0 window)", async () => {
+  const { renderDirectoryPanel } = await import(
+    "../src/web/public/components/directory-panel.js"
+  )
+  const container = freshContainer()
+
+  // Old wire (pre-v0.15.0 hosts) serves rows without the token fields: the
+  // render must not crash, and both new columns read an honest 0. The 入 cell
+  // title must not fabricate a cache.read value it does not know.
+  renderDirectoryPanel(container, {
+    totalDirectories: 1,
+    totalSessions: 2,
+    directories: [
+      { directory: "D:/projects/example-alpha", name: "example-alpha", sessions: 2, steps: 4, lastActiveMs: null },
+    ],
+  })
+
+  const renderedHtml = container.innerHTML
+  assert.ok(
+    renderedHtml.includes('<span class="directory-count num" title="入 = 纯输入 tokens.input · cache.read 另计 · 与 KPI 卡「入」同口径">0</span>'),
+    "missing tokensInput falls back to 0 and the title drops the unknown cache.read value",
+  )
+  assert.ok(
+    renderedHtml.includes('<span class="directory-count num" title="出 = tokens.output · 与 KPI 卡「出」同口径">0</span>'),
+    "missing tokensOutput falls back to an honest 0",
+  )
+  assert.ok(
+    !renderedHtml.includes("cache.read 0 另计"),
+    "an unknown cache.read must not be presented as a known 0",
+  )
+  // The drill-down interaction stays intact on the fallback wire.
+  const selectionEvents: Array<string | null> = []
+  renderDirectoryPanel(container, {
+    totalDirectories: 1,
+    totalSessions: 2,
+    directories: [
+      { directory: "D:/projects/example-alpha", name: "example-alpha", sessions: 2, steps: 4, lastActiveMs: null },
+    ],
+  }, null, (directoryPath) => selectionEvents.push(directoryPath))
+  assert.ok(container.querySelectorAll(".directory-row.selectable").length > 0)
+  assert.equal(container.querySelectorAll(".directory-row").length, 1)
+})
+
+test("getMockDirectoryStats mirrors the v0.15.0 three-part token wire with cross-view conservation", async () => {
+  const { getMockDirectoryStats, getMockTrend, CALENDAR_DAYS } = await import(
+    "../src/web/public/mock-data.js"
+  )
+
+  const directoryPage = getMockDirectoryStats()
+  assert.ok(directoryPage.directories.length > 0, "the mock directory pool must be non-empty")
+
+  for (const directoryEntry of directoryPage.directories) {
+    for (const partValue of [
+      directoryEntry.tokensInput as number,
+      directoryEntry.tokensOutput as number,
+      directoryEntry.tokensCacheRead as number,
+    ]) {
+      assert.ok(
+        Number.isInteger(partValue) && partValue >= 0,
+        `token parts must be non-negative integers for ${directoryEntry.directory}`,
+      )
+    }
+    // Largest-remainder allocation never produces negative output rebates.
+    assert.ok(
+      (directoryEntry.tokensOutput as number) >= 0,
+      `output must never be negative for ${directoryEntry.directory}`,
+    )
+  }
+
+  // Cross-view conservation (hour-heatmap discipline): each part summed over
+  // the directories must equal the same part summed over the daily series
+  // that getMockTrend(366) serves — per-day largest-remainder allocation
+  // conserves exactly, so the totals match to the token.
+  const trendPoints = getMockTrend(CALENDAR_DAYS) as Array<{ input: number; read: number; output: number }>
+  const trendPartTotals = trendPoints.reduce(
+    (partTotals, trendPoint) => ({
+      input: partTotals.input + trendPoint.input,
+      read: partTotals.read + trendPoint.read,
+      output: partTotals.output + trendPoint.output,
+    }),
+    { input: 0, read: 0, output: 0 },
+  )
+  const directoryPartTotals = directoryPage.directories.reduce(
+    (partTotals, directoryEntry) => ({
+      input: partTotals.input + (directoryEntry.tokensInput as number),
+      read: partTotals.read + (directoryEntry.tokensCacheRead as number),
+      output: partTotals.output + (directoryEntry.tokensOutput as number),
+    }),
+    { input: 0, read: 0, output: 0 },
+  )
+  assert.equal(directoryPartTotals.input, trendPartTotals.input, "Σ directories tokensInput must equal the trend input total")
+  assert.equal(directoryPartTotals.read, trendPartTotals.read, "Σ directories tokensCacheRead must equal the trend cache-read total")
+  assert.equal(directoryPartTotals.output, trendPartTotals.output, "Σ directories tokensOutput must equal the trend output total")
+})
+
 test("pathLastSegment mirrors the backend directoryDisplayName value for value", async () => {
   const { pathLastSegment } = await import("../src/web/public/format.js")
 
