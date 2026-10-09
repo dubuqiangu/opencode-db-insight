@@ -19,6 +19,7 @@ export type InsightRoute =
   | { routeName: "session-survival" }
   | { routeName: "compaction" }
   | { routeName: "directories" }
+  | { routeName: "refresh" }
   | { routeName: "sessionMessages"; sessionId: string }
   | { routeName: "sessionSystemPrompt"; sessionId: string }
   | { routeName: "sessionExport"; sessionId: string }
@@ -58,11 +59,15 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
     case "hour-heatmap":
     case "session-survival":
     case "compaction":
-    case "directories": {
+    case "directories":
+    // "refresh" is the cache-control plane (v0.14.0), not a panel, but
+    // it shares the same two-segment shape — and like the panel routes
+    // it never carries path parameters.
+    case "refresh": {
       if (pathSegments.length !== 2) return null
-      // routeSegment is narrowed to one of the literal panel route
-      // names listed above (matchApiRoute only reaches the body for
-      // exactly these cases).
+      // routeSegment is narrowed to one of the literal two-segment
+      // route names listed above (matchApiRoute only reaches the body
+      // for exactly these cases).
       return { routeName: routeSegment }
     }
     case "session": {

@@ -9,7 +9,9 @@
  * - session present in session_v2 but without messages →
  *   404 {error: "session exists but has no messages"} (P2-7);
  * - /api/health always answers 200 and carries dbStatus, derived from a
- *   live SELECT 1 probe rather than connection-null-ness (P1-4).
+ *   live SELECT 1 probe rather than connection-null-ness (P1-4);
+ * - /api/refresh always answers 200 too (v0.14.0): clearing the
+ *   process-local result cache needs no database and no cache slot.
  */
 
 import type { SessionMessageRecord, SessionSummary, SqliteReadConnection } from "../db/types.ts"
@@ -45,7 +47,7 @@ import {
   SESSION_SUMMARY_CSV_CONTENT_TYPE,
   SESSION_SUMMARY_CSV_FILENAME,
 } from "./session-summary-csv.ts"
-import { buildCacheKey, cachedResult } from "../stats/cache.ts"
+import { buildCacheKey, cachedResult, clearResultCache, resultCacheSize } from "../stats/cache.ts"
 import { MAX_TREND_DAYS } from "../stats/daily-buckets.ts"
 import {
   parseNonNegativeIntegerParam,
@@ -54,7 +56,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.13.0"
+export const INSIGHT_VERSION = "0.14.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -229,6 +231,19 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
   const { route } = requestContext
 
   if (route.routeName === "health") return healthResponse(requestContext)
+
+  // Cache control plane (v0.14.0): clearing the process-local result
+  // cache needs NO database, so this route deliberately sits in front
+  // of the db-null 503 short-circuit below. It is equally deliberately
+  // NOT wrapped in cachedResult — a cache-clearing route consuming one
+  // of the 64 cache slots would defeat itself. The count is read
+  // BEFORE clearing so the response reports how many entries the call
+  // actually evicted.
+  if (route.routeName === "refresh") {
+    const clearedEntryCount = resultCacheSize()
+    clearResultCache()
+    return { statusCode: 200, body: { status: "ok", cleared: clearedEntryCount } }
+  }
 
   const database = requestContext.database
   if (database === null) {

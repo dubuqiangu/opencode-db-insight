@@ -322,3 +322,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 文档：CHANGELOG 0.13.0 + DESIGN.md 注释债两处
 - [x] oracle 增量审查 0.13.0 delta（ora-7）：P0=0 / P1=0 / P2×1（mock 余数吸收理论负 output——Math.round 双半值进位可致 −1，已被确定性 PRNG + 逐会话非负断言双层封死，可选加固不阻塞）+ 1 观察（前端"严格一致"限定口径措辞属实，接受）。口径对齐声明核实成立（KPI todayInput 纯 input 零错配）；深层翻页 1167 行无串行；榜首 v2 分布逐位吻合；隐私硬红线通过
 - P2 备忘（ora-7，可选加固随下版顺手）：mock-data.js:417-420 tokensOutput 为负时从 tokensCacheRead 回扣 1（或改 read 吸收余数）——触发条件为 Math.round 双半值进位，当前 SEED 下不可达
+
+## v0.14.0 /insight-refresh 刷新命令（push #32，2026-10-09，单车道）
+
+- [x] 用户拍板里程碑：/insight-refresh 刷新命令（question 工具连续第七次成功转化）
+- [x] 侦察（exp-6）：**进程拓扑钉死最大坑**——TUI flavor（./tui）与 server flavor（.）两个进程，命令内直接 import clearResultCache 是静默 no-op，必须走服务器路由 + fetch 回环；cache.ts 模块级单例覆盖全部 13 处服务端缓存；看板页面无自动轮询（toast 文案需提示刷新页面）；tui-command-registry 测试的数量/索引断言是必改点
+- [x] 契约钉死：GET /api/refresh（清前读 resultCacheSize 报 N、自身不入缓存、db 无关不进 503 名单、GET/HEAD 门不放宽）；/insight-refresh 命令（读端口→fetch 回环→success toast「已清 N 条（刷新页面后生效）」，全降级永不抛，依赖注入 {fetchImpl?, readPortImpl?}）；注册第 4 条命令
+- [x] 实施（fix-18，fix-17 会话复用）：refresh-command.ts 新文件 + api.ts/router.ts 路由 + command-registry 注册 + 四面测试（路由形状/精确计数/db-null/行为锁 + 命令降级/文案 + 注册数量 4）；实施中一次 api-routes.test.ts 中间编辑事故已同轮自愈并经全量 grep + 340/340 实证无残留
+- [x] 测试 331 → 340（+9）
+- [x] 收敛复核：版本 0.14.0 三处同步 + 合并 340/340 独立复跑 + check 0 + 真实服务探针 10/10（4→4/0→0/2→2 精确计数三段吻合、重算健康、405 门、404 面不破坏；末段一次自误断言经甄别为探针算术错误——历史第三次探针自证纪律命中，代码零问题）
+- [x] 文档：CHANGELOG 0.14.0
+- [ ] oracle 增量审查 0.14.0 delta → 有 P0/P1 则修后推 0.14.1

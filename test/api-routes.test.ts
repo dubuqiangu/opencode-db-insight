@@ -512,6 +512,100 @@ test("sessions cache keys carry resolved sort/order: distinct combos get entries
   }
 })
 
+test("/api/refresh clears the process-local cache and reports the evicted count (v0.14.0)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [buildFakeSessionSummary({ id: "ses_refresh_route" })],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+    // Warm three distinct cache entries through three distinct routes.
+    handleApiRequest(apiContextFor("/api/overview", fakeDatabase))
+    handleApiRequest(apiContextFor("/api/models", fakeDatabase))
+    handleApiRequest(apiContextFor("/api/agents", fakeDatabase))
+    const warmCacheSize = resultCacheSize()
+    assert.ok(warmCacheSize >= 3, "the warming requests actually cached something")
+
+    const refreshResponse = handleApiRequest(apiContextFor("/api/refresh", fakeDatabase))
+    assert.equal(refreshResponse.statusCode, 200)
+    assert.deepEqual(refreshResponse.body, { status: "ok", cleared: warmCacheSize })
+    assert.equal(resultCacheSize(), 0, "every cached entry is gone")
+    // The refresh route itself must not consume a cache slot.
+    assert.equal(resultCacheSize(), 0, "handling the refresh created no new cache entry")
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("/api/refresh answers 200 even while the db is missing (cache control needs no db)", () => {
+  clearResultCache()
+  try {
+    // Warm one entry through a wired fake db first, so the count is
+    // observable and non-zero.
+    const warmDatabase = createFakeInsightDatabase({
+      sessions: [buildFakeSessionSummary({ id: "ses_refresh_no_db" })],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+    handleApiRequest(apiContextFor("/api/overview", warmDatabase))
+    const warmCacheSize = resultCacheSize()
+    assert.ok(warmCacheSize >= 1)
+
+    // db null: the refresh route must NOT take the 503 short-circuit —
+    // clearing the cache never needed a database.
+    const refreshResponse = handleApiRequest(requestContextFor("/api/refresh")!)
+    assert.notEqual(refreshResponse, null)
+    assert.equal(refreshResponse.statusCode, 200)
+    assert.deepEqual(refreshResponse.body, { status: "ok", cleared: warmCacheSize })
+    assert.equal(resultCacheSize(), 0)
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("after a refresh the cached routes immediately reflect new data (v0.14.0 behavior lock)", () => {
+  clearResultCache()
+  try {
+    const beforeRefreshDatabase = createFakeInsightDatabase({
+      sessions: [buildFakeSessionSummary({ id: "ses_refresh_before" })],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+    const afterRefreshDatabase = createFakeInsightDatabase({
+      sessions: [buildFakeSessionSummary({ id: "ses_refresh_after" })],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+
+    const firstResponse = handleApiRequest(apiContextFor("/api/sessions", beforeRefreshDatabase))
+    assert.equal(firstResponse.statusCode, 200)
+
+    // Same cache key, different (fresher) database: the 60s TTL still
+    // serves the stale page — this is the exact symptom /insight-refresh
+    // exists to fix.
+    const staleResponse = handleApiRequest(apiContextFor("/api/sessions", afterRefreshDatabase))
+    assert.deepEqual(staleResponse.body, firstResponse.body, "TTL window serves the cached page")
+
+    // One refresh later, the very same request sees the new data.
+    const refreshResponse = handleApiRequest(apiContextFor("/api/refresh", afterRefreshDatabase))
+    assert.equal(refreshResponse.statusCode, 200)
+    assert.equal(
+      (refreshResponse.body as { cleared: number }).cleared,
+      1,
+      "exactly the one warmed entry was evicted",
+    )
+    const freshResponse = handleApiRequest(apiContextFor("/api/sessions", afterRefreshDatabase))
+    assert.deepEqual(
+      (freshResponse.body as { id: string }[]).map((sessionSummary) => sessionSummary.id),
+      ["ses_refresh_after"],
+      "cleared cache means immediately visible new data",
+    )
+  } finally {
+    clearResultCache()
+  }
+})
+
 test("sessions with a directory parameter still answers 503 while the db is missing", () => {
   const sessionsRoute = matchApiRoute("/api/sessions")
   assert.notEqual(sessionsRoute, null)

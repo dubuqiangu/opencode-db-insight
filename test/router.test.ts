@@ -24,6 +24,8 @@ test("matchApiRoute recognizes every static API route", () => {
   assert.deepEqual(matchApiRoute("/api/session-survival"), { routeName: "session-survival" })
   assert.deepEqual(matchApiRoute("/api/compaction"), { routeName: "compaction" })
   assert.deepEqual(matchApiRoute("/api/directories"), { routeName: "directories" })
+  // v0.14.0 cache-control route: same two-segment shape, no parameters.
+  assert.deepEqual(matchApiRoute("/api/refresh"), { routeName: "refresh" })
 })
 
 test("matchApiRoute matches session routes and decodes the session id", () => {
@@ -54,6 +56,7 @@ test("matchApiRoute returns null for unknown, truncated or malformed paths", () 
   assert.equal(matchApiRoute("/api/"), null)
   assert.equal(matchApiRoute("/api/nope"), null)
   assert.equal(matchApiRoute("/api/overview/extra"), null)
+  assert.equal(matchApiRoute("/api/refresh/extra"), null, "refresh takes no sub-path")
   assert.equal(matchApiRoute("/api/session/ses_1"), null)
   assert.equal(matchApiRoute("/api/session/ses_1/unknown-subroute"), null)
   assert.equal(matchApiRoute("/api/session/%zz-bad-encoding/messages"), null)

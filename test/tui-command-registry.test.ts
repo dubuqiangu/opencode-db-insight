@@ -91,10 +91,11 @@ function buildFakeTuiContext(options: {
   }
 }
 
-test("registerInsightTuiCommands wires three slash commands into the keymap", () => {
+test("registerInsightTuiCommands wires four slash commands into the keymap", () => {
   const fakeContext = buildFakeTuiContext({})
   const openDashboardCalls: unknown[][] = []
   const exportCalls: unknown[][] = []
+  const refreshCalls: unknown[][] = []
 
   const commandsDispose = registerInsightTuiCommands(fakeContext.context, {
     runOpenDashboard: async (...openDashboardArguments) => {
@@ -104,6 +105,10 @@ test("registerInsightTuiCommands wires three slash commands into the keymap", ()
     runExport: async (...exportArguments) => {
       exportCalls.push(exportArguments)
       return null
+    },
+    runRefresh: async (...refreshArguments) => {
+      refreshCalls.push(refreshArguments)
+      return true
     },
   })
   assert.ok(commandsDispose !== undefined)
@@ -117,19 +122,27 @@ test("registerInsightTuiCommands wires three slash commands into the keymap", ()
     }>
   }
   assert.equal(layerSpec.mode, "global")
-  assert.equal(layerSpec.commands.length, 3)
+  assert.equal(layerSpec.commands.length, 4)
   assert.deepEqual(
     layerSpec.commands.map((command) => command.slash.name),
-    ["insight", "insight-status", "insight-export"],
+    ["insight", "insight-status", "insight-export", "insight-refresh"],
   )
   assert.equal(layerSpec.commands[2].slash.arguments, true, "export receives its argument text")
+  assert.equal(
+    layerSpec.commands[3].slash.arguments,
+    undefined,
+    "refresh is a whole-cache clear, it takes no arguments",
+  )
 
   // Run the commands; runners receive the context and (for export) the input.
   layerSpec.commands[0].run()
   layerSpec.commands[2].run("ses_explicit")
+  layerSpec.commands[3].run()
   assert.equal(openDashboardCalls.length, 1)
   assert.equal(exportCalls.length, 1)
   assert.equal(exportCalls[0][1], "ses_explicit")
+  assert.equal(refreshCalls.length, 1, "the refresh runner receives exactly one call")
+  assert.equal(refreshCalls[0].length, 1, "the refresh runner receives only the context")
 
   commandsDispose?.()
   assert.equal(fakeContext.layerDisposeCallCount.value, 1)

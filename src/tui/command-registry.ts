@@ -2,7 +2,7 @@
  * Command and slot registration for the insight TUI (DESIGN.md §8, M6).
  *
  * Everything except the JSX render lambda lives here so tests can drive a
- * fake context: the three slash commands, the panel-open call behind
+ * fake context: the four slash commands, the panel-open call behind
  * /insight-status, and the defensive session.panel slot claim.
  *
  * All context access is defensive: a host without keymap / ui.panel / ui.slot
@@ -12,6 +12,7 @@
 
 import { runExportCommand } from "./export-command.ts"
 import { runOpenDashboardCommand } from "./open-dashboard-command.ts"
+import { runRefreshCommand } from "./refresh-command.ts"
 import { showInsightToast } from "./tui-context.ts"
 
 /** Panel content name /insight-status opens via ui.panel.open. */
@@ -36,6 +37,13 @@ export interface InsightTuiCommandDependencies {
   runOpenDashboard?: (context: unknown) => Promise<boolean>
   runExport?: (context: unknown, explicitSessionId?: string) => Promise<string | null>
   /**
+   * /insight-refresh (v0.14.0): clears the SERVER process result cache
+   * via the loopback /api/refresh route — never a direct
+   * clearResultCache import (the TUI is a different process, so that
+   * would be a silent no-op).
+   */
+  runRefresh?: (context: unknown) => Promise<boolean>
+  /**
    * Notified when /insight-status successfully opened the panel — the
    * status-panel controller uses this to start its lazy refresh loop
    * (P2-13). Not called when the host refuses the panel.
@@ -44,9 +52,9 @@ export interface InsightTuiCommandDependencies {
 }
 
 /**
- * Register the three slash commands (/insight, /insight-status,
- * /insight-export) on the context keymap. Returns the dispose function
- * (or undefined when the host ships no keymap).
+ * Register the four slash commands (/insight, /insight-status,
+ * /insight-export, /insight-refresh) on the context keymap. Returns the
+ * dispose function (or undefined when the host ships no keymap).
  */
 export function registerInsightTuiCommands(
   context: unknown,
@@ -54,6 +62,7 @@ export function registerInsightTuiCommands(
 ): (() => void) | undefined {
   const openDashboardRunner = dependencies.runOpenDashboard ?? runOpenDashboardCommand
   const exportRunner = dependencies.runExport ?? runExportCommand
+  const refreshRunner = dependencies.runRefresh ?? runRefreshCommand
   const onStatusPanelOpened = dependencies.onStatusPanelOpened
 
   try {
@@ -97,6 +106,18 @@ export function registerInsightTuiCommands(
           slash: { name: "insight-export", aliases: [], arguments: true },
           run: (commandInput?: string) => {
             void exportRunner(context, commandInput)
+          },
+        },
+        {
+          id: "opencode-db-insight.refresh",
+          title: "刷新看板缓存",
+          bind: "",
+          palette: true,
+          // No arguments: the refresh clears the whole server-side
+          // cache, there is nothing to parameterize.
+          slash: { name: "insight-refresh", aliases: [] },
+          run: () => {
+            void refreshRunner(context)
           },
         },
       ],
