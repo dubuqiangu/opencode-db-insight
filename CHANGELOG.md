@@ -8,6 +8,17 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.15.1] - 2026-10-11 · 修复：TUI 四条斜杠命令在真实宿主上从未注册（bind 空串触发宿主形状校验）
+
+### Fixed
+- **P0：删除四条命令的 `bind: ""`**（command-registry.ts）。宿主 `keymap.tsx` 的 `groupCommands` 校验对有 id 的命令执行 `typeof bind === "string" && !bind → throw "Keymap command bindings cannot be empty"`（该字符串已在本机 opencode.exe 二进制中核实），`keymap.layer()` 初始形状校验同步抛错；旧代码的 catch 把异常**静默吞掉**返回 undefined → 四命令（/insight、/insight-status、/insight-export、/insight-refresh）**自 v0.11.0 起在真实宿主上从未注册成功**，宿主日志零报错——这正是五个版本未被发现的原因。修复为直接省略 `bind` 字段（类型 `bind?: false | string`，省略即无键位，与 oh-my-opencode-slim 参照实现一致）。
+- **静默吞错加固**：`registerInsightTuiCommands` 与 `registerStatusPanelSlot` 的 catch 在返回 undefined 前先 `console.error` 记录错误——保持 T6.3 永不抛契约，但注册失败从此可在宿主日志中诊断。
+
+### Added
+- **宿主校验镜像回归锁**（tui-command-registry.test.ts）：`buildHostValidatingKeymapHarness` 镜像宿主 `groupCommands` 关键规则（有 id + 空串 bind → 抛错；palette/slash 命令必须有非空 id），断言注册在镜像宿主规则的 fake 上成功——旧代码该测试红（layer 抛错被吞、返回 undefined），现有宽松 fake 不做形状校验正是回归曾潜伏五版的盲区。
+- **形状锁断言**：每个注册命令的 `bind` 必须为 undefined 或非空字符串。
+- 测试 345 → **347**（+2）。
+
 ## [0.15.0] - 2026-10-09 · 目录面板 tokens 汇总（入/出双列 + 口径警示）
 
 ### Added

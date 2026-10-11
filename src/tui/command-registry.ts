@@ -79,7 +79,6 @@ export function registerInsightTuiCommands(
         {
           id: "opencode-db-insight.open",
           title: "打开 db-insight 看板",
-          bind: "",
           palette: true,
           slash: { name: "insight", aliases: [] },
           run: () => {
@@ -89,7 +88,6 @@ export function registerInsightTuiCommands(
         {
           id: "opencode-db-insight.status",
           title: "显示 db-insight 用量面板",
-          bind: "",
           palette: true,
           slash: { name: "insight-status", aliases: [] },
           run: () => {
@@ -99,7 +97,6 @@ export function registerInsightTuiCommands(
         {
           id: "opencode-db-insight.export",
           title: "导出会话为 Markdown",
-          bind: "",
           palette: true,
           // arguments: true makes the raw text after "/insight-export "
           // reach run(input); an explicit session id skips the picker.
@@ -111,7 +108,6 @@ export function registerInsightTuiCommands(
         {
           id: "opencode-db-insight.refresh",
           title: "刷新看板缓存",
-          bind: "",
           palette: true,
           // No arguments: the refresh clears the whole server-side
           // cache, there is nothing to parameterize.
@@ -125,7 +121,11 @@ export function registerInsightTuiCommands(
     return () => {
       keymapDispose?.()
     }
-  } catch {
+  } catch (registrationError) {
+    // Never throw (T6.3: a host without the API degrades silently), but a
+    // swallowed registration failure must be diagnosable — a layer() shape
+    // rejection otherwise makes the slash commands vanish without a trace.
+    console.error("db-insight: TUI 命令注册失败", registrationError)
     return undefined
   }
 }
@@ -187,7 +187,10 @@ export function registerStatusPanelSlot(
           slotDispose()
         }
       : undefined
-  } catch {
+  } catch (slotRegistrationError) {
+    // Same contract as the command registration: degrade, never throw,
+    // but leave a diagnosable trace in the host log.
+    console.error("db-insight: TUI 状态面板插槽注册失败", slotRegistrationError)
     return undefined
   }
 }

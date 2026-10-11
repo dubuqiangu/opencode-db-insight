@@ -234,6 +234,97 @@ test("registerStatusPanelSlot degrades silently without ui.slot", () => {
   assert.equal(slotlessContext.recordedSlotClaims.length, 0)
 })
 
+/**
+ * A fake keymap.layer that mirrors the real host's groupCommands shape
+ * validation (opencode packages/tui/src/context/keymap.tsx): a command with
+ * an id whose bind is an empty string must throw, and palette/slash
+ * commands must carry a non-empty id. The lenient fake above accepts
+ * anything, which is exactly how the bind: "" regression hid for five
+ * releases — this harness is the regression lock.
+ */
+interface HostValidatedLayerCommand {
+  id?: unknown
+  bind?: unknown
+  palette?: unknown
+  slash?: unknown
+}
+
+interface HostValidatedLayerSpec {
+  commands?: unknown
+}
+
+function buildHostValidatingKeymapHarness(options: {
+  layerCallCount: { value: number }
+}): {
+  context: Record<string, unknown>
+} {
+  const validateLayerCommand = (layerCommand: HostValidatedLayerCommand): void => {
+    if (layerCommand.palette || layerCommand.slash) {
+      if (typeof layerCommand.id !== "string" || layerCommand.id === "") {
+        throw new Error("Keymap palette/slash commands must have a non-empty id")
+      }
+    }
+    // Mirror of the host rule that killed every db-insight command since
+    // v0.11.0: an id-bearing command with an empty string bind is rejected.
+    if (typeof layerCommand.id === "string" && layerCommand.bind === "") {
+      throw new Error("Keymap command bindings cannot be empty")
+    }
+  }
+
+  const context: Record<string, unknown> = {
+    keymap: {
+      layer: (buildLayer: () => unknown) => {
+        options.layerCallCount.value += 1
+        const layerSpec = buildLayer() as HostValidatedLayerSpec
+        for (const layerCommand of (layerSpec.commands ?? []) as HostValidatedLayerCommand[]) {
+          validateLayerCommand(layerCommand)
+        }
+        return () => {}
+      },
+    },
+  }
+  return { context }
+}
+
+test("registerInsightTuiCommands passes the host keymap shape validation", () => {
+  const layerCallCount = { value: 0 }
+  const hostValidatingContext = buildHostValidatingKeymapHarness({ layerCallCount })
+
+  const commandsDispose = registerInsightTuiCommands(hostValidatingContext.context, {
+    runOpenDashboard: async () => true,
+    runExport: async () => null,
+    runRefresh: async () => true,
+  })
+
+  // Before the fix, layer() threw on bind: "" and the swallowed error made
+  // this registration return undefined — the four commands never appeared.
+  assert.ok(typeof commandsDispose === "function", "registration must survive host validation")
+  assert.equal(layerCallCount.value, 1, "the host keymap layer must actually be called")
+  commandsDispose()
+})
+
+test("every registered command binds to undefined or a non-empty key", () => {
+  const fakeContext = buildFakeTuiContext({})
+  const commandsDispose = registerInsightTuiCommands(fakeContext.context, {
+    runOpenDashboard: async () => true,
+    runExport: async () => null,
+    runRefresh: async () => true,
+  })
+  assert.ok(commandsDispose !== undefined)
+
+  const layerSpec = fakeContext.recordedLayerSpecs[0] as {
+    commands: Array<{ id: string; bind?: unknown }>
+  }
+  assert.equal(layerSpec.commands.length, 4)
+  for (const registeredCommand of layerSpec.commands) {
+    assert.ok(
+      registeredCommand.bind === undefined || (typeof registeredCommand.bind === "string" && registeredCommand.bind !== ""),
+      `command ${registeredCommand.id} must omit bind or bind a non-empty key`,
+    )
+  }
+  commandsDispose?.()
+})
+
 test("shouldRenderStatusPanel only matches the insight panel name", () => {
   assert.equal(shouldRenderStatusPanel({ name: INSIGHT_STATUS_PANEL_NAME }), true)
   assert.equal(shouldRenderStatusPanel({ name: "usage-meter" }), false)
