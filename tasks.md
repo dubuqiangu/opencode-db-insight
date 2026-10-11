@@ -367,3 +367,13 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 发布：版本 0.15.2 同步（package.json + api.ts INSIGHT_VERSION）→ CHANGELOG 0.15.2 → 敏感扫描独立执行四项全干净 → commit fe21c1e → push → tag v0.15.2 远端核实 → plugin update → verify-install 6/6 PASS（0.15.2 @ fe21c1e，src 67/test 37 镜像）
 - [x] 审计遗留确认延后项维持原状（零总量分叉/Math.round 近似/days=366 wire/全 NULL 组夹具/主题切换重取/冷缓存串行——理由经审计核验仍在场）
 - [ ] 仍开放：TUI 四命令用户活体冒烟（tasks.md 上节末行）；审计建议项未立项——verify-install.ps1 增「宿主日志 grep 注册失败」检查、CSV 十二列立项决策、其余 6 个存量面板测试按 tooltip > kpi-card 之后的优先级排后续版本
+
+## v0.15.3 测试加固版（push #36，2026-10-11，双车道 fix-21/fix-22 + orchestrator 加固）
+
+- [x] 起因：用户「继续修复」——推进审计遗留队列第二波（0.15.2 已清 tooltip/kpi-card/文档/clamp，本波清剩余存量面板测试 + verify-install 增强建议项）
+- [x] 实施双车道（写域隔离）：fix-22 测试面（web-components.test.ts +633 行 +22 测试：calendar-heatmap×5/token-funnel×4/tool-bars×4/state-views×3/replay-turn-bar×3/theme×2/trend-chart 数据入口降级×1，红验证 ×2 在案——calendar-heatmap levelOfValue 改坏→红→恢复、token-funnel supply 改坏→3 红→恢复，两组件 git status 确认干净）；fix-21 脚本（verify-install.ps1 第 7 项 WARN 级注册失败检查：$env:USERPROFILE 动态构造路径、FileShare::ReadWrite 开活日志、\uXXXX 转义兼容 PS 5.1 无 BOM、WARN 不影响退出码）
+- [x] orchestrator 加固：命中计数排除 spawning process 命令回显行——fix-21 红探测自污染实证（opencode.log:86253 宿主把含匹配串的探测命令行记进日志），过滤后本机实跑 PASS；此类误报（任何嵌入匹配串的命令被宿主记账）自此结构性免疫
+- [x] 审查豁免依据：全部改动可溯源至 ora-8 审计处方（⚠️#2 完整销账 + 建议项），处方型免下一代审查（0.15.1/0.15.2 同例）
+- [x] 验证：374/374（352+22）+ check 0 + 红验证记录在案
+- [x] 发布：版本 0.15.3 同步 → CHANGELOG 0.15.3 → 敏感扫描独立执行全干净（含新脚本路径动态构造复核，无硬编码用户名）→ commit 6f0aa83 → push → tag v0.15.3 远端核实 → plugin update → verify-install 7/7 PASS（0.15.3 @ 6f0aa83，第 7 项检查本机 PASS）
+- [x] 审计遗留处置状态更新：⚠️#2 存量测试豁免区至此**全量销账**（v0.1.0 八面板 + trend-chart 深化全部入库）；剩余开放项仅 TUI 活体冒烟（用户侧）与 CSV 十二列立项决策（question 拍板）
