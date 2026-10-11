@@ -346,3 +346,13 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 文档：CHANGELOG 0.15.0
 - [x] oracle 增量审查 0.15.0 delta（ora-7 会话复用）：P0=0 / P1=0 / P2×1 注释级 + 观察×1，无需 0.15.1——审查证据：独立复跑 345/345（parity 实库未 skip）、活库三段抽查（typeof 审计 855/855 全 integer、预聚合性能反快 ~23% 中位 1121.6ms vs 旧形态 1462.3ms、JS 独立重算 16/16 目录三分逐位全等非循环论证）、nth-child(7) 与 head 7 span DOM 对齐核实、扇出回归面"回退旧形态必红"实证（gamma 4 步将答 16000≠4000）、mock 停用目录零权重槽余量递增永不触及的结构证明、隐私零命中
 - P2-1 已由协调方顺手处置（注释级一行进 src，非纯 docs）：SQL 侧 SUM 的类型假设写进 directory-queries.ts SQL 模板注释（区别于 P1-1 禁令：overview 加的是 session_message JSON 文本值，这里加的是 writer 恒写数值的 session_v2 结构列，勿复制到 message 数据）——定向 41/41 + check 0 实证注释零行为影响；观察项（全 NULL token 组无夹具覆盖，YAGNI 可不加）不挂账
+
+## v0.15.1 修复：TUI 四条斜杠命令从未注册（push #34，2026-10-11，orchestrator 主诊 + fixer 单车道）
+
+- [x] 起因：用户报告 /insight 输入后看不到任何 db-insight 斜杠命令（此前 TUI 三命令冒烟从未活体验证过——服务器面 3/3 通过掩盖了 TUI 面从未起效）
+- [x] 诊断（orchestrator 直诊，服务器/宿主双进程日志面排查）：宿主日志零 db-insight 失败记录（usage-meter 的 OPENTUI_FORCE_UNICODE 冲突失败系干扰项，与本问题无关）→ 宿主源码 anomalyco/opencode packages/tui/src/context/keymap.tsx groupCommands 校验：有 id 命令若 bind 为空字符串则从 layer() 同步抛错「Keymap command bindings cannot be empty」（该字符串在本机 opencode.exe 二进制核实 3 处命中）→ 我们四命令全传 bind: "" → 抛错被 command-registry.ts 的 catch 静默吞掉返回 undefined → 命令从未注册、宿主日志零报错（v0.11.0 起潜伏五版的根因链完整闭合）；参照 oh-my-opencode-slim（真实宿主可工作）palette/slash 命令不传 bind
+- [x] 实施处方型修复（fixer，红→绿 + 回归锁，免下一代审查）：删四处 bind: ""（省略字段，类型 bind?: false | string）+ 两个 catch 吞错前 console.error（T6.3 永不抛契约不变）+ 宿主校验镜像 fake（buildHostValidatingKeymapHarness，宽松 fake 不做形状校验正是盲区）+ 形状锁断言
+- [x] 验证：347/347（345+2）+ check 0；版本 0.15.1 同步（package.json + api.ts INSIGHT_VERSION）
+- [x] 文档：CHANGELOG 0.15.1
+- [x] 发布：敏感扫描独立执行（本机路径/用户名模式扫描，仅排除 npm 依赖名误报项，凭据/产物干净，待推送范围二次扫干净）→ commit 6d12860 → push → tag v0.15.1 远端核实 → plugin update → verify-install 6/6 PASS（0.15.1 @ 6d12860，src 67/test 37 镜像）
+- [ ] 用户活体验证（唯一待办）：重启 TUI → 输入 / 应出现四命令 → /insight 打开看板、/insight-status 面板、/insight-export csv、/insight-refresh 刷新 toast
