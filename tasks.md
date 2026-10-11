@@ -356,3 +356,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 文档：CHANGELOG 0.15.1
 - [x] 发布：敏感扫描独立执行（本机路径/用户名模式扫描，仅排除 npm 依赖名误报项，凭据/产物干净，待推送范围二次扫干净）→ commit 6d12860 → push → tag v0.15.1 远端核实 → plugin update → verify-install 6/6 PASS（0.15.1 @ 6d12860，src 67/test 37 镜像）
 - [ ] 用户活体验证（唯一待办）：重启 TUI → 输入 / 应出现四命令 → /insight 打开看板、/insight-status 面板、/insight-export csv、/insight-refresh 刷新 toast
+
+## v0.15.2 审计对账清账版（push #35，2026-10-11，双车道 fix-19/fix-20）
+
+- [x] 起因：用户要求按设计目标全量对账检查遗漏——oracle 全量审计（ora-8）：核心面零遗漏（❌ 空集），禁令核验 7/7 通过，两条发布纪律生效后无一版本违规；真实债务 = 文档失实（DESIGN 九版未回写/README 停 v0.1.x/§13 断头引用）+ v0.1.0 存量测试豁免区（tooltip XSS P0 无持久回归锁为最尖锐项）
+- [x] 用户拍板（question 第九次成功转化）：对账清账版（推荐项）
+- [x] 实施双车道（写域隔离）：fix-19 文档回写（README 四命令/CSV 导出/排行榜占比/byModel/回放搜索 + DESIGN 头部实况化/§5 tokens 三分/§6 两路由/wire 字段/§7 回放搜索/§8 第四命令/§13 备选清单新建/精度标签措辞收窄——决策：不补实现/§3.1 树 352 用例）；fix-20 测试与小修（tooltip XSS 持久回归锁 ×2 含红验证：临时恢复 P0 形态 fail 2 → 逐字节恢复 → 全绿；kpi-card 测试 ×5 面向精度标签/环比/sparkline/降级；mock 会话侧 tokensOutput clamp 一行 + 守恒不变式宽松界测试——注释钉死与 0.15.0 目录侧修复的区别；tasks.md 两处勾稽补勾 B1/0.3.0 审查；cache.ts:57 伏笔注释销账）
+- [x] 审查豁免依据：全部改动逐条可溯源至 ora-8 审计处方清单，处方型免下一代审查（0.15.1 同例）
+- [x] 验证：352/352（347+5）+ check 0 + 红验证记录在案
+- [x] 发布：版本 0.15.2 同步（package.json + api.ts INSIGHT_VERSION）→ CHANGELOG 0.15.2 → 敏感扫描独立执行四项全干净 → commit fe21c1e → push → tag v0.15.2 远端核实 → plugin update → verify-install 6/6 PASS（0.15.2 @ fe21c1e，src 67/test 37 镜像）
+- [x] 审计遗留确认延后项维持原状（零总量分叉/Math.round 近似/days=366 wire/全 NULL 组夹具/主题切换重取/冷缓存串行——理由经审计核验仍在场）
+- [ ] 仍开放：TUI 四命令用户活体冒烟（tasks.md 上节末行）；审计建议项未立项——verify-install.ps1 增「宿主日志 grep 注册失败」检查、CSV 十二列立项决策、其余 6 个存量面板测试按 tooltip > kpi-card 之后的优先级排后续版本
