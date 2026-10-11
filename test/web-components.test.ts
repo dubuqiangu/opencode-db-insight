@@ -3241,3 +3241,636 @@ test("renderKpiRow degrades flat and missing deltas, handles degenerate sparklin
   )
   assert.ok(nullOverviewContainer.innerHTML.includes('aria-busy="true"'))
 })
+
+/* ------- v0.1.0 legacy panels: audit ⚠#2 test-surface backfill -------
+ *
+ * The "new frontend panels must enter web-components.test.ts" rule
+ * shipped in v0.3.1, leaving the v0.1.0 panels permanently untested here
+ * (tooltip + kpi-card were backfilled in 0.15.2; this section covers the
+ * rest: calendar-heatmap, token-funnel, tool-bars, state-views,
+ * replay-turn-bar, theme — plus one more real seam on trend-chart).
+ * Same DOM shim, same flat-tag parser, same shared #tooltip stub as the
+ * sections above; fixtures stay in the example series (no real paths,
+ * user names or model ids).
+ */
+
+/* ------------- calendar-heatmap panel (v0.1.0) ------------- */
+
+/**
+ * Fictional daily trend points for the calendar fixtures: consecutive
+ * calendar days starting at firstDateKey, the given per-day token totals
+ * (all in input) and a distinguishable per-day step count.
+ */
+function calendarTrendFixture(dailyTotals: number[], firstDateKey: string) {
+  const [startYear, startMonth, startDay] = firstDateKey.split("-").map(Number)
+  return dailyTotals.map((dayTotal, dayIndex) => {
+    const calendarDate = new Date(startYear, startMonth - 1, startDay + dayIndex)
+    const dateKey = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, "0")}-${String(calendarDate.getDate()).padStart(2, "0")}`
+    return {
+      date: dateKey,
+      steps: dayIndex + 1,
+      input: dayTotal,
+      read: 0,
+      output: 0,
+      hitRate: 0.9,
+    }
+  })
+}
+
+test("renderCalendarHeatmap renders one themed cell per data day with Monday alignment and quantile color levels", async () => {
+  const { renderCalendarHeatmap } = await import("../src/web/public/components/calendar-heatmap.js")
+  const container = freshContainer()
+
+  // Seven days starting Wednesday 2026-01-07 with totals 100..700:
+  // quantile thresholds [200, 400, 600, 700] → levels 1,1,2,2,3,3,4.
+  renderCalendarHeatmap(container, { points: calendarTrendFixture([100, 200, 300, 400, 500, 600, 700], "2026-01-07") })
+
+  const cellElements = container.querySelectorAll("rect.heatmap-cell")
+  assert.equal(cellElements.length, 7, "exactly one cell renders per data day (no padding cells)")
+  assert.deepEqual(
+    cellElements.map((cell) => cell.dataset.dateIndex),
+    ["0", "1", "2", "3", "4", "5", "6"],
+    "cells carry the day index of their trend point",
+  )
+
+  // Level mapping: value quantiles drive the --heat-1..4 slots through cssVar.
+  assert.equal(cellElements[0]!.attributes.get("fill"), "stub-css(--heat-1)", "100 → level 1")
+  assert.equal(cellElements[2]!.attributes.get("fill"), "stub-css(--heat-2)", "300 → level 2")
+  assert.equal(cellElements[4]!.attributes.get("fill"), "stub-css(--heat-3)", "500 → level 3")
+  assert.equal(cellElements[6]!.attributes.get("fill"), "stub-css(--heat-4)", "700 → level 4")
+
+  // Monday alignment: a Wednesday start lands on the third weekday row of
+  // the first week column; 2026-01-12 (Monday) opens the next column.
+  assert.equal(cellElements[0]!.attributes.get("x"), "30", "week-0 column starts after the label gutter")
+  assert.equal(cellElements[0]!.attributes.get("y"), "48", "Wednesday = weekday row 2 (18 + 2×15)")
+  assert.equal(cellElements[5]!.attributes.get("x"), "45", "2026-01-12 rolls into the week-1 column")
+  assert.equal(cellElements[5]!.attributes.get("y"), "18", "Monday = first weekday row")
+
+  const renderedHtml = container.innerHTML
+  assert.ok(
+    renderedHtml.includes('过去一年 <b class="num">2.8K</b> tokens · 活跃 <b class="num">7</b> 天'),
+    "the meta line reports the year total (2800 → 2.8K) and the active-day count",
+  )
+  assert.equal(
+    container.querySelectorAll(".cell-sample").length,
+    5,
+    "the scale legend renders the zero slot plus the four level slots",
+  )
+  // Weekday row labels 一/三/五, and the month label appears once (the
+  // pre-range Monday padding days never reach the month-label branch).
+  assert.ok(renderedHtml.includes(">一<") && renderedHtml.includes(">三<") && renderedHtml.includes(">五<"))
+  assert.equal((renderedHtml.match(/>1月</g) ?? []).length, 1)
+})
+
+test("renderCalendarHeatmap labels the month when a week column first enters it", async () => {
+  const { renderCalendarHeatmap } = await import("../src/web/public/components/calendar-heatmap.js")
+  const container = freshContainer()
+
+  // Monday 2026-01-26 → Monday 2026-02-02 spans a month change inside
+  // the data range: week 0 opens with 1月, week 1 opens with 2月.
+  renderCalendarHeatmap(container, { points: calendarTrendFixture([10, 20, 30, 40, 50, 60, 70, 80], "2026-01-26") })
+
+  assert.equal(container.querySelectorAll("rect.heatmap-cell").length, 8)
+  const renderedHtml = container.innerHTML
+  assert.equal((renderedHtml.match(/>1月</g) ?? []).length, 1, "1月 is labeled exactly once")
+  assert.equal((renderedHtml.match(/>2月</g) ?? []).length, 1, "2月 is labeled exactly once")
+})
+
+test("renderCalendarHeatmap degrades null and empty points to the empty placeholder", async () => {
+  const { renderCalendarHeatmap } = await import("../src/web/public/components/calendar-heatmap.js")
+
+  const nullContainer = freshContainer()
+  renderCalendarHeatmap(nullContainer, null)
+  assert.match(nullContainer.innerHTML, /没有历史日历数据/)
+  assert.equal(nullContainer.querySelectorAll("rect.heatmap-cell").length, 0)
+
+  const emptyPointsContainer = freshContainer()
+  renderCalendarHeatmap(emptyPointsContainer, { points: [] })
+  assert.match(emptyPointsContainer.innerHTML, /没有历史日历数据/)
+  assert.equal(emptyPointsContainer.querySelectorAll("rect.heatmap-cell").length, 0)
+})
+
+test("renderCalendarHeatmap keeps a zero-activity window on the --heat-0 slot instead of vanishing", async () => {
+  const { renderCalendarHeatmap } = await import("../src/web/public/components/calendar-heatmap.js")
+  const container = freshContainer()
+
+  // All-zero days: no quantile thresholds exist, but the days still render.
+  renderCalendarHeatmap(container, { points: calendarTrendFixture([0, 0, 0], "2026-02-09") })
+
+  const zeroCellElements = container.querySelectorAll("rect.heatmap-cell")
+  assert.equal(zeroCellElements.length, 3, "zero-activity days still render their cells")
+  for (const zeroCell of zeroCellElements) {
+    assert.equal(zeroCell.attributes.get("fill"), "stub-css(--heat-0)")
+  }
+  assert.ok(container.innerHTML.includes('活跃 <b class="num">0</b> 天'), "the meta line reports zero active days")
+  assert.ok(container.innerHTML.includes('<b class="num">0</b> tokens'), "the year total degrades to 0")
+})
+
+test("renderCalendarHeatmap wires per-cell hover tooltips with date, token total and step count", async () => {
+  const { renderCalendarHeatmap } = await import("../src/web/public/components/calendar-heatmap.js")
+  const container = freshContainer()
+  renderCalendarHeatmap(container, { points: calendarTrendFixture([100, 200, 300, 400, 500, 600, 700], "2026-01-07") })
+
+  const lastDayCell = container.querySelectorAll("rect.heatmap-cell")[6]!
+  lastDayCell.fire("mouseenter")
+  assert.equal(sharedTooltipElement.hidden, false, "hovering a cell reveals the shared tooltip")
+  const tooltipHtml = sharedTooltipElement.innerHTML
+  assert.ok(tooltipHtml.includes("2026-01-13"), "the tooltip title carries the hovered date")
+  assert.ok(tooltipHtml.includes("token 总量"))
+  assert.ok(tooltipHtml.includes(">700</span>"), "the day token total is formatted into the tooltip")
+  assert.ok(tooltipHtml.includes("步骤数"))
+  assert.ok(tooltipHtml.includes(">7</span>"), "the day step count is formatted into the tooltip")
+  lastDayCell.fire("mouseleave")
+  assert.equal(sharedTooltipElement.hidden, true, "leaving the cell hides the tooltip again")
+})
+
+/* ------------- token-funnel panel (v0.1.0) ------------- */
+
+/** Single-day trend payload for the funnel fixtures (example date). */
+function funnelTrendFixture(inputTokens: number, readTokens: number, outputTokens: number) {
+  return { points: [dailyTrendPointFixture("2026-10-01", inputTokens, readTokens, outputTokens)] }
+}
+
+/** Top-edge width of a funnel polygon (the proportional narrative point). */
+function funnelPolygonTopWidth(polygonElement: StubElement): number {
+  const pointsText = polygonElement.attributes.get("points") ?? ""
+  const [topLeftPoint, topRightPoint] = pointsText.split(" ")
+  return Number(topRightPoint.split(",")[0]) - Number(topLeftPoint.split(",")[0])
+}
+
+test("renderTokenFunnel renders the four proportional layers and returns the window summary", async () => {
+  const { renderTokenFunnel } = await import("../src/web/public/components/token-funnel.js")
+  const container = freshContainer()
+
+  const funnelSummary = renderTokenFunnel(container, funnelTrendFixture(100, 300, 50))
+  assert.deepEqual(funnelSummary, { windowHitRate: 0.75, supply: 400, cached: 300, paid: 100, output: 50 })
+
+  const layerElements = container.querySelectorAll("g.funnel-layer")
+  assert.equal(layerElements.length, 4)
+  assert.deepEqual(
+    layerElements.map((layerElement) => layerElement.dataset.layer),
+    ["supply", "cached", "paid", "output"],
+    "layer order follows the fixed funnel narrative",
+  )
+  assert.deepEqual(
+    layerElements.map((layerElement) => layerElement.dataset.value),
+    ["400", "300", "100", "50"],
+    "each layer carries its window-summed token value",
+  )
+  assert.deepEqual(
+    layerElements.map((layerElement) => layerElement.dataset.share),
+    ["100.0", "75.0", "25.0", "12.5"],
+    "each layer carries its share of the supply layer",
+  )
+
+  // Layer widths scale with the values: with supply 400 / cached 300 /
+  // paid 100 / output 50 the top edges must keep the exact ratios.
+  const polygonElements = container.querySelectorAll("polygon")
+  assert.equal(polygonElements.length, 4, "every layer renders its trapezoid")
+  const paidTopWidth = funnelPolygonTopWidth(polygonElements[2]!)
+  assert.equal(funnelPolygonTopWidth(polygonElements[0]!), 4 * paidTopWidth, "supply width ∝ 400")
+  assert.equal(funnelPolygonTopWidth(polygonElements[1]!), 3 * paidTopWidth, "cached width ∝ 300")
+  assert.equal(funnelPolygonTopWidth(polygonElements[3]!), paidTopWidth / 2, "output width ∝ 50")
+
+  assert.ok(container.innerHTML.includes("300 · 75.0%"), "the cached layer text shows value · share")
+  assert.ok(container.innerHTML.includes("50 · 12.5%"), "the output layer text shows value · share")
+})
+
+test("renderTokenFunnel keeps a hairline for a zero-value layer instead of collapsing it", async () => {
+  const { renderTokenFunnel } = await import("../src/web/public/components/token-funnel.js")
+  const container = freshContainer()
+
+  const funnelSummary = renderTokenFunnel(container, funnelTrendFixture(100, 300, 0))
+  assert.equal((funnelSummary as { output: number }).output, 0)
+
+  const layerElements = container.querySelectorAll("g.funnel-layer")
+  assert.equal(layerElements.length, 4, "a zero output still renders all four layers")
+  assert.equal(layerElements[3]!.dataset.value, "0")
+  assert.equal(layerElements[3]!.dataset.share, "0.0")
+  const outputTopWidth = funnelPolygonTopWidth(container.querySelectorAll("polygon")[3]!)
+  assert.ok(
+    outputTopWidth > 0 && outputTopWidth < 2,
+    `the zero layer keeps a sub-pixel hairline, got ${outputTopWidth}`,
+  )
+})
+
+test("renderTokenFunnel degrades null, empty and all-zero windows to the empty placeholder and returns null", async () => {
+  const { renderTokenFunnel } = await import("../src/web/public/components/token-funnel.js")
+
+  const nullContainer = freshContainer()
+  assert.equal(renderTokenFunnel(nullContainer, null), null)
+  assert.match(nullContainer.innerHTML, /这段范围内没有 token 流水/)
+
+  const emptyPointsContainer = freshContainer()
+  assert.equal(renderTokenFunnel(emptyPointsContainer, { points: [] }), null)
+  assert.match(emptyPointsContainer.innerHTML, /这段范围内没有 token 流水/)
+
+  const allZeroContainer = freshContainer()
+  assert.equal(renderTokenFunnel(allZeroContainer, funnelTrendFixture(0, 0, 0)), null)
+  assert.match(allZeroContainer.innerHTML, /这段范围内没有 token 流水/)
+  assert.equal(allZeroContainer.querySelectorAll("g.funnel-layer").length, 0)
+})
+
+test("renderTokenFunnel wires per-layer hover tooltips with the token amount and supply share", async () => {
+  const { renderTokenFunnel } = await import("../src/web/public/components/token-funnel.js")
+  const container = freshContainer()
+  renderTokenFunnel(container, funnelTrendFixture(100, 300, 50))
+
+  const cachedLayer = container.querySelectorAll("g.funnel-layer")[1]!
+  cachedLayer.fire("mouseenter")
+  assert.equal(sharedTooltipElement.hidden, false, "hovering a layer reveals the shared tooltip")
+  const tooltipHtml = sharedTooltipElement.innerHTML
+  assert.ok(tooltipHtml.includes("缓存命中"), "the tooltip title names the layer")
+  assert.ok(tooltipHtml.includes("token 量"))
+  assert.ok(tooltipHtml.includes(">300</span>"), "the layer value is formatted into the tooltip")
+  assert.ok(tooltipHtml.includes("占供给"))
+  assert.ok(tooltipHtml.includes("75.0%"), "the supply share is formatted into the tooltip")
+  cachedLayer.fire("mouseleave")
+  assert.equal(sharedTooltipElement.hidden, true)
+})
+
+/* ------------- tool-bars panel (v0.1.0) ------------- */
+
+/** Two agents sharing one tool name: aggregation must sum across agents. */
+function toolBarsAgentStatsFixture() {
+  return [
+    { toolFingerprint: { "example-tool-read": 30, "example-tool-write": 20, "example-tool-short": 5 } },
+    { toolFingerprint: { "example-tool-read": 10, "example-tool-other": 4 } },
+  ]
+}
+
+test("renderToolBars aggregates tool counts across agents into descending bars with shares and the accent top row", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+  const container = freshContainer()
+
+  renderToolBars(container, toolBarsAgentStatsFixture())
+
+  const rowElements = container.querySelectorAll("g.toolbar-row")
+  assert.equal(rowElements.length, 4)
+  assert.deepEqual(
+    rowElements.map((rowElement) => rowElement.dataset.tool),
+    ["example-tool-read", "example-tool-write", "example-tool-short", "example-tool-other"],
+    "example-tool-read sums 30+10 across agents and ranks first",
+  )
+  assert.deepEqual(
+    rowElements.map((rowElement) => rowElement.dataset.count),
+    ["40", "20", "5", "4"],
+  )
+  assert.deepEqual(
+    rowElements.map((rowElement) => rowElement.dataset.share),
+    ["58.0", "29.0", "7.2", "5.8"],
+    "shares are relative to the TOP10 total of 69",
+  )
+
+  // The flat parser lists every rect in document order; per row the markup
+  // emits [track, bar], so bar of row i sits at 2i+1.
+  const rectElements = container.querySelectorAll("rect")
+  assert.equal(rectElements.length, 8, "each row renders its track plus its bar")
+  const barWidths = rowElements.map(
+    (_, rowIndex) => Number(rectElements[2 * rowIndex + 1]!.attributes.get("width")),
+  )
+  assert.equal(
+    barWidths[0],
+    Number(rectElements[0]!.attributes.get("width")),
+    "the top row's bar saturates its track",
+  )
+  for (let rowIndex = 1; rowIndex < barWidths.length; rowIndex += 1) {
+    assert.ok(
+      barWidths[rowIndex]! < barWidths[rowIndex - 1]!,
+      "bar widths strictly descend with the counts",
+    )
+  }
+  assert.equal(rectElements[1]!.attributes.get("fill"), "stub-css(--accent)", "the top row takes the accent color")
+  assert.equal(rectElements[3]!.attributes.get("fill"), "stub-css(--blue)", "lower rows take the regular bar color")
+  assert.ok(container.innerHTML.includes(">40</text>"), "the raw call count is rendered")
+  assert.ok(container.innerHTML.includes('aria-label="工具调用次数 TOP10"'))
+})
+
+test("renderToolBars caps the ranking at ten rows and clips long tool names for display", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+  const container = freshContainer()
+
+  const longToolName = "example-tool-with-a-very-long-name"
+  const toolFingerprint: Record<string, number> = { [longToolName]: 200 }
+  for (let rankIndex = 1; rankIndex <= 11; rankIndex += 1) {
+    toolFingerprint[`example-t-${String(rankIndex).padStart(2, "0")}`] = 100 - rankIndex
+  }
+
+  renderToolBars(container, [{ toolFingerprint }])
+
+  const rowElements = container.querySelectorAll("g.toolbar-row")
+  assert.equal(rowElements.length, 10, "only the TOP10 render no matter how many tools exist")
+  assert.equal(rowElements[0]!.dataset.tool, longToolName, "the ranking stays ordered by count desc")
+  assert.equal(rowElements[0]!.dataset.count, "200")
+  assert.equal(rowElements[1]!.dataset.tool, "example-t-01", "the runner-up is the second-highest count")
+  assert.equal(rowElements[9]!.dataset.tool, "example-t-09", "the cut happens after the tenth row")
+  assert.ok(
+    container.innerHTML.includes(">example-tool…</text>"),
+    "names longer than 13 characters clip to 12 characters plus an ellipsis for display",
+  )
+})
+
+test("renderToolBars degrades null, empty and fingerprint-less agent stats to the empty placeholder", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+
+  const nullContainer = freshContainer()
+  renderToolBars(nullContainer, null)
+  assert.match(nullContainer.innerHTML, /没有工具调用记录/)
+  assert.ok(nullContainer.innerHTML.includes("数据库里还没有带 tool part 的 assistant 消息"))
+
+  const emptyArrayContainer = freshContainer()
+  renderToolBars(emptyArrayContainer, [])
+  assert.match(emptyArrayContainer.innerHTML, /没有工具调用记录/)
+
+  const fingerprintLessContainer = freshContainer()
+  renderToolBars(fingerprintLessContainer, [{}, { toolFingerprint: {} }])
+  assert.match(fingerprintLessContainer.innerHTML, /没有工具调用记录/)
+  assert.equal(fingerprintLessContainer.querySelectorAll("g.toolbar-row").length, 0)
+})
+
+test("renderToolBars wires per-row hover tooltips with the call count and TOP10 share", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+  const container = freshContainer()
+  renderToolBars(container, toolBarsAgentStatsFixture())
+
+  const topRow = container.querySelectorAll("g.toolbar-row")[0]!
+  topRow.fire("mouseenter")
+  assert.equal(sharedTooltipElement.hidden, false, "hovering a row reveals the shared tooltip")
+  const tooltipHtml = sharedTooltipElement.innerHTML
+  assert.ok(tooltipHtml.includes("example-tool-read"), "the tooltip title carries the full tool name")
+  assert.ok(tooltipHtml.includes("调用次数"))
+  assert.ok(tooltipHtml.includes(">40</span>"))
+  assert.ok(tooltipHtml.includes("TOP10 占比"))
+  assert.ok(tooltipHtml.includes("58.0%"))
+  topRow.fire("mouseleave")
+  assert.equal(sharedTooltipElement.hidden, true)
+})
+
+/* ------------- state-views panel (v0.1.0) ------------- */
+
+test("renderLoading skeletons the tapering block widths and buildLoadingHtml mirrors it", async () => {
+  const { renderLoading, buildLoadingHtml } = await import("../src/web/public/components/state-views.js")
+  const container = freshContainer()
+
+  renderLoading(container)
+  const blockElements = container.querySelectorAll(".skeleton-block")
+  assert.equal(blockElements.length, 3, "the default skeleton renders three blocks")
+  assert.deepEqual(
+    blockElements.map((blockElement) => blockElement.attributes.get("style")),
+    ["width:88%", "width:76%", "width:55%"],
+    "block widths taper 88 → 76 → 55 percent",
+  )
+  assert.ok(container.innerHTML.includes('aria-busy="true"'), "the skeleton marks itself aria-busy")
+
+  const wideContainer = freshContainer()
+  renderLoading(wideContainer, 4)
+  assert.deepEqual(
+    wideContainer.querySelectorAll(".skeleton-block").map((blockElement) => blockElement.attributes.get("style")),
+    ["width:88%", "width:76%", "width:64%", "width:55%"],
+    "a custom block count keeps the taper and ends at 55 percent",
+  )
+  assert.equal(wideContainer.innerHTML, buildLoadingHtml(4), "renderLoading is buildLoadingHtml into the container")
+  assert.equal(
+    buildLoadingHtml(1),
+    '<div aria-busy="true"><div class="skeleton-block skeleton-text" style="width:55%"></div></div>',
+    "a single-block skeleton renders exactly one 55 percent block",
+  )
+})
+
+test("renderEmpty keeps the default copy, the rich-HTML message contract and the optional hint", async () => {
+  const { renderEmpty, buildEmptyHtml } = await import("../src/web/public/components/state-views.js")
+
+  const defaultContainer = freshContainer()
+  renderEmpty(defaultContainer)
+  assert.ok(defaultContainer.innerHTML.includes("这段范围内没有数据"), "no-arg calls use the default copy")
+  assert.ok(!defaultContainer.innerHTML.includes("state-hint"), "no hint element renders without a hint")
+
+  // Documented contract: message/hint are caller-owned HTML — the caller
+  // may pass <b>-style rich text, exactly like app.js does.
+  const richContainer = freshContainer()
+  renderEmpty(richContainer, "<b>example-empty</b> 没有记录", "example-hint-text")
+  assert.ok(richContainer.innerHTML.includes("<b>example-empty</b> 没有记录"))
+  assert.ok(richContainer.innerHTML.includes('<div class="state-hint">example-hint-text</div>'))
+  assert.equal(
+    richContainer.innerHTML,
+    buildEmptyHtml("<b>example-empty</b> 没有记录", "example-hint-text"),
+    "renderEmpty is buildEmptyHtml into the container",
+  )
+  assert.equal(richContainer.querySelectorAll(".state-view").length, 1)
+})
+
+test("renderError escapes the message, degrades non-Error values and routes the retry click", async () => {
+  const { renderError } = await import("../src/web/public/components/state-views.js")
+  const { escapeHtml } = await import("../src/web/public/format.js")
+
+  const hostileMessage = '<img src=x onerror=alert(1)>'
+  const container = freshContainer()
+  let retryClickCount = 0
+  renderError(container, new Error(hostileMessage), () => {
+    retryClickCount += 1
+  })
+
+  const renderedHtml = container.innerHTML
+  assert.ok(renderedHtml.includes("这块数据没加载出来"), "the error state keeps its fixed headline")
+  assert.ok(renderedHtml.includes(escapeHtml(hostileMessage)), "the message reaches the hint escaped")
+  assert.ok(!renderedHtml.includes(hostileMessage), "the raw message never reaches the DOM")
+  assert.equal(container.querySelectorAll("img").length, 0, "no <img> tag parses out of the message")
+  container.querySelector(".retry-button")!.click()
+  assert.equal(retryClickCount, 1, "the retry button routes the caller's onRetry")
+
+  const nonErrorContainer = freshContainer()
+  renderError(nonErrorContainer, 42, () => {})
+  assert.ok(
+    nonErrorContainer.innerHTML.includes(">42</div>"),
+    "non-Error values degrade to String(value) in the hint",
+  )
+  assert.equal(nonErrorContainer.querySelectorAll(".retry-button").length, 1)
+})
+
+/* ------------- replay-turn-bar panel (v0.1.0) ------------- */
+
+test("buildTurnCostBarElement splits the bar into proportional positive segments with a formatted total", async () => {
+  const { buildTurnCostBarElement } = await import("../src/web/public/components/replay-turn-bar.js")
+
+  const rowElement = buildTurnCostBarElement({ input: 100, output: 300, cache: { read: 100 } }, "model-example-alpha", false)
+  assert.ok(rowElement !== null, "a positive token bar always renders")
+  assert.ok(rowElement.classList.contains("turn-bar-row"))
+
+  const segmentElements = rowElement.querySelectorAll(".turn-seg")
+  assert.equal(segmentElements.length, 3, "read + input + output each render a segment")
+  assert.deepEqual(
+    segmentElements.map((segmentElement) => segmentElement.className),
+    ["turn-seg seg-read", "turn-seg seg-input", "turn-seg seg-output"],
+    "segments render in the fixed cache-read / paid-input / output order",
+  )
+  assert.deepEqual(
+    segmentElements.map((segmentElement) => segmentElement.style.width),
+    ["max(2px, 20.00%)", "max(2px, 20.00%)", "max(2px, 60.00%)"],
+    "segment widths follow the token shares (100/100/300 of 500)",
+  )
+
+  const totalLabelElement = rowElement.querySelector(".turn-bar-total")
+  assert.ok(totalLabelElement.classList.contains("num"))
+  assert.equal(totalLabelElement.textContent, "500", "the total label formats input+output+cache.read")
+  assert.equal(totalLabelElement.title, "该步总量 = input + output + cache.read")
+})
+
+test("buildTurnCostBarElement omits zero segments, flags model switches and returns null for token-less steps", async () => {
+  const { buildTurnCostBarElement } = await import("../src/web/public/components/replay-turn-bar.js")
+
+  // Zero-value segments are omitted entirely, not zero-width.
+  const singleSegmentRow = buildTurnCostBarElement({ input: 0, output: 400, cache: { read: 0 } }, "", false)!
+  const onlySegment = singleSegmentRow.querySelector(".turn-seg")!
+  assert.ok(onlySegment.classList.contains("seg-output"), "only the positive output segment renders")
+  assert.equal(onlySegment.style.width, "max(2px, 100.00%)")
+
+  // A model switch renders the ⚑ marker; an empty model id does not.
+  const switchedRow = buildTurnCostBarElement({ input: 10, output: 0, cache: { read: 0 } }, "model-example-beta", true)!
+  const markerElement = switchedRow.querySelector(".turn-model-marker")
+  assert.equal(markerElement.textContent, "⚑ model-example-beta")
+  assert.equal(markerElement.title, "此步骤发生了模型切换")
+  const emptyModelIdRow = buildTurnCostBarElement({ input: 10, output: 0, cache: { read: 0 } }, "", true)!
+  assert.equal(emptyModelIdRow.querySelectorAll(".turn-model-marker").length, 0)
+
+  // Wire robustness: anything without a positive field sum yields null.
+  assert.equal(
+    buildTurnCostBarElement({ input: 0, output: 0, cache: { read: 0 } }, "", false),
+    null,
+    "all-zero tokens render no cost bar",
+  )
+  assert.equal(buildTurnCostBarElement(null, "", false), null, "a null tokens JSON renders no cost bar")
+  assert.equal(buildTurnCostBarElement("garbage", "", false), null, "a non-object tokens JSON renders no cost bar")
+  assert.equal(
+    buildTurnCostBarElement({ input: -5, output: 0, cache: { read: 0 } }, "", false),
+    null,
+    "negative fields degrade to zero → no cost bar",
+  )
+  // A null cache object still reads the flat input field.
+  const nullCacheRow = buildTurnCostBarElement({ input: 100, output: 0, cache: null }, "", false)!
+  assert.equal(nullCacheRow.querySelectorAll(".turn-seg").length, 1)
+  assert.ok(nullCacheRow.querySelector(".turn-seg")!.classList.contains("seg-input"))
+})
+
+test("buildTurnCostBarElement wires per-segment hover tooltips with the token amount and step share", async () => {
+  const { buildTurnCostBarElement } = await import("../src/web/public/components/replay-turn-bar.js")
+
+  const rowElement = buildTurnCostBarElement({ input: 100, output: 300, cache: { read: 100 } }, "", false)!
+  const readSegment = rowElement.querySelectorAll(".turn-seg")[0]!
+  readSegment.fire("mouseenter")
+  assert.equal(sharedTooltipElement.hidden, false, "hovering a segment reveals the shared tooltip")
+  const tooltipHtml = sharedTooltipElement.innerHTML
+  assert.ok(tooltipHtml.includes("缓存读"), "the tooltip title names the segment")
+  assert.ok(tooltipHtml.includes("token"))
+  assert.ok(tooltipHtml.includes(">100</span>"))
+  assert.ok(tooltipHtml.includes("占该步"))
+  assert.ok(tooltipHtml.includes("20.0%"), "the tooltip carries the within-step share")
+  readSegment.fire("mouseleave")
+  assert.equal(sharedTooltipElement.hidden, true)
+})
+
+/* ------------- theme panel (v0.1.0) ------------- */
+
+test("cssVar reads live computed values and the chart-facing theme maps mirror the CSS slots", async () => {
+  const { cssVar, modelPalette, chartTheme } = await import("../src/web/public/theme.js")
+
+  assert.equal(cssVar("--accent"), "stub-css(--accent)")
+
+  assert.deepEqual(modelPalette(), [
+    "stub-css(--m1)", "stub-css(--m2)", "stub-css(--m3)", "stub-css(--m4)",
+    "stub-css(--m5)", "stub-css(--m6)", "stub-css(--m7)", "stub-css(--m8)",
+    "stub-css(--m9)", "stub-css(--m10)", "stub-css(--m11)", "stub-css(--m12)",
+  ], "the model palette covers all twelve model color slots")
+
+  assert.deepEqual(chartTheme(), {
+    stroke: "stub-css(--text-dim)",
+    grid: "stub-css(--grid-line)",
+    tick: "stub-css(--text-faint)",
+    accent: "stub-css(--accent)",
+    blue: "stub-css(--blue)",
+    amber: "stub-css(--amber)",
+    red: "stub-css(--red)",
+  }, "chartTheme maps every chart slot to its live themed color")
+})
+
+test("prefersDark follows the live scheme query and onSchemeChange routes change events until unsubscribed", async () => {
+  const { prefersDark, onSchemeChange } = await import("../src/web/public/theme.js")
+
+  // The shim's default media query reports a light scheme.
+  assert.equal(prefersDark(), false)
+
+  const windowWithSwappableMatchMedia = globalThis.window as unknown as {
+    matchMedia: unknown
+  }
+  const originalMatchMedia = windowWithSwappableMatchMedia.matchMedia
+  try {
+    const capturedMediaQueryTexts: string[] = []
+    const schemeChangeListeners = new Set<(schemeChangeEvent: { matches: boolean }) => void>()
+    const receivedSchemeMatches: boolean[] = []
+    windowWithSwappableMatchMedia.matchMedia = (mediaQueryText: string) => {
+      capturedMediaQueryTexts.push(mediaQueryText)
+      return {
+        matches: true,
+        addEventListener: (_eventType: string, listener: (schemeChangeEvent: { matches: boolean }) => void) => {
+          schemeChangeListeners.add(listener)
+        },
+        removeEventListener: (_eventType: string, listener: (schemeChangeEvent: { matches: boolean }) => void) => {
+          schemeChangeListeners.delete(listener)
+        },
+      }
+    }
+
+    assert.equal(prefersDark(), true, "prefersDark follows the live matchMedia result")
+    assert.ok(
+      capturedMediaQueryTexts.includes("(prefers-color-scheme: dark)"),
+      "the scheme query is the prefers-color-scheme media feature",
+    )
+
+    const unsubscribe = onSchemeChange((prefersDarkNow) => {
+      receivedSchemeMatches.push(prefersDarkNow)
+    })
+    assert.equal(schemeChangeListeners.size, 1, "subscribing registers exactly one media listener")
+    for (const schemeChangeListener of schemeChangeListeners) {
+      schemeChangeListener({ matches: true })
+    }
+    assert.deepEqual(receivedSchemeMatches, [true], "a scheme change routes matches through the callback")
+
+    unsubscribe()
+    assert.equal(schemeChangeListeners.size, 0, "unsubscribing removes the registered listener")
+    assert.deepEqual(
+      receivedSchemeMatches,
+      [true],
+      "after unsubscribing no further scheme events reach the callback",
+    )
+  } finally {
+    windowWithSwappableMatchMedia.matchMedia = originalMatchMedia
+  }
+})
+
+/* ------------- trend-chart: degradation seam (v0.1.0) ------------- */
+
+test("renderTrendChart degrades null and single-point windows to the empty placeholder and clears the legend", async () => {
+  const { renderTrendChart } = await import("../src/web/public/components/trend-chart.js")
+
+  const nullContainer = freshContainer()
+  const staleLegendContainer = freshContainer()
+  staleLegendContainer.innerHTML = "<span>example-stale-legend</span>"
+  const nullCleanup = renderTrendChart(nullContainer, staleLegendContainer, null)
+  assert.match(nullContainer.innerHTML, /这段范围内没有逐日数据/)
+  assert.ok(nullContainer.innerHTML.includes("换个时间范围"), "the placeholder keeps its range hint")
+  assert.equal(staleLegendContainer.innerHTML, "", "a degraded chart clears stale legend chips")
+  assert.equal(nullCleanup !== null && typeof nullCleanup, "function", "the render still returns a cleanup")
+  nullCleanup()
+
+  // One point cannot draw a trend: same degradation, no chart instantiated.
+  const singlePointContainer = freshContainer()
+  const singlePointCleanup = renderTrendChart(singlePointContainer, null, {
+    points: [dailyTrendPointFixture("2026-10-01", 100, 400, 50)],
+  })
+  assert.match(
+    singlePointContainer.innerHTML,
+    /这段范围内没有逐日数据/,
+    "a single data point degrades exactly like a null window",
+  )
+  assert.equal(singlePointContainer.querySelectorAll("canvas").length, 0, "no chart is built on the degradation path")
+  singlePointCleanup()
+})

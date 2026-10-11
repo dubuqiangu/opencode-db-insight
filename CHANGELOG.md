@@ -8,6 +8,25 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.15.3] - 2026-10-11 · 测试加固版：v0.1.0 存量面板测试面全量入库 + verify-install 注册失败检查
+
+> 审计遗留队列第二波：审计 ⚠️#2 完整销账（0.15.2 已补 tooltip/kpi-card，本版补齐其余全部存量面板）+ 审计建议项 verify-install 宿主日志检查落地。全部改动可溯源至 ora-8 审计处方（处方型，免下一代审查）。
+
+### Added（补测试面，352 → **374**，+22）
+- **calendar-heatmap ×5**（审计优先级首位）：日历格渲染/分位色阶落档/周一列对齐/月份标签恰一次、跨月标注、null/空/全零降级（密度退化锁）、hover tooltip 接线。
+- **token-funnel ×4**：四层顺序/份额文案/polygon 顶边宽严格比例（不锁绝对像素）、零值层亚像素发丝线、null/全零降级返回 null、hover 接线。
+- **tool-bars ×4**：跨 agent 聚合降序/条形满轨/占比分母口径、TOP10 截断与长名截断、三态降级占位、hover 接线。
+- **state-views ×3**：loading 骨架块宽序列 + aria-busy、empty 富文本契约与 hint、error 对 Error 敌意消息转义 + 重试路由 + 非 Error 降级。
+- **replay-turn-bar ×3**：三段顺序与宽度（max(2px) 保底）、零值段省略与模型切换 ⚑ 标记、null/全零/非对象降级、hover 接线。
+- **theme ×2**：cssVar/modelPalette 十二槽/chartTheme 七槽映射；prefersDark 探测、matchMedia 查询串锁定、onSchemeChange 注册/路由/退订。
+- **trend-chart 加深 ×1**：renderTrendChart 数据入口降级分支（null/单点占位、legend 清空、无 uPlot 实例化、返回 cleanup）。
+- **红验证 ×2**（纪律要求 ≥2）：calendar-heatmap 改坏 levelOfValue 顶档 → 红（700→level 4 断言）→ 恢复；token-funnel 改坏 supply → 3 测试红 → 恢复；两组件源码 git status 确认干净。
+- 测试基建：calendarTrendFixture / funnelTrendFixture / funnelPolygonTopWidth（比例断言用），夹具 example 系列虚构占位。
+
+### Added（脚本能力）
+- **verify-install.ps1 新增第 7 项检查（WARN 级，不影响退出码）**：扫描宿主日志中 v0.15.1+ 才存在的两条 TUI 注册失败 console.error 文案，0 命中 → PASS / >0 → WARN（附重启复跑指引）/ 无日志 → SKIP。路径全程 `$env:USERPROFILE` 动态构造（无硬编码用户名）；日志以 FileShare::ReadWrite 打开（宿主持有追加写锁时仍可读，实测踩坑记录）；中文匹配串以 `\uXXXX` 转义构建（脚本无 BOM，兼容 Windows PowerShell 5.1 的 ANSI 误读）。**命中计数排除宿主 `spawning process` 命令行回显行**（orchestrator 加固：探测/grep 命令嵌入匹配串会被宿主记进日志造成永久自污染误报，实测命中 opencode.log:86253 后加过滤，本机实跑 PASS）。
+- 本机实跑：7 项全 PASS，`VERIFY OK v0.15.3 @ <HEAD>`。
+
 ## [0.15.2] - 2026-10-11 · 审计对账清账版：文档回写 + tooltip XSS 持久回归锁 + mock 会话侧 clamp
 
 > 来源：oracle 全量审计（设计目标 vs 实现）——核心面零遗漏，债务集中在文档失实与 v0.1.0 存量测试豁免区。本版按审计处方一次性收口，全部改动可溯源至审计清单（处方型，免下一代审查）。

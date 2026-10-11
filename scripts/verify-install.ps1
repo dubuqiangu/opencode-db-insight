@@ -148,6 +148,62 @@ $hostConfig = if (Test-Path $hostConfigPath) {
 } else { "" }
 Assert-Check "plugin registered in opencode.json" ($hostConfig.Contains($PluginId))
 
+# --- host log: db-insight TUI registration failures (WARN-level, never FAIL) --------
+# v0.15.1 catch blocks console.error these messages before swallowing the
+# registration error, so any hit is a real registration failure on v0.15.1+ code.
+# But the host log is cumulative, so a failure from before a fix lingers as a
+# stale hit -- hence WARN (does not touch the exit code). The Chinese message
+# literals are rebuilt from \uXXXX escapes so this BOM-less ASCII script parses
+# identically under both Windows PowerShell 5.1 and pwsh 7.
+$hostLogDir = Join-Path $env:USERPROFILE ".local\share\opencode\log"
+$hostLogPath = $null
+if (Test-Path $hostLogDir) {
+  $liveLog = Join-Path $hostLogDir "opencode.log"
+  if (Test-Path $liveLog) {
+    $hostLogPath = $liveLog
+  } else {
+    $newestLog = Get-ChildItem $hostLogDir -File -Filter "*.log" |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($newestLog) { $hostLogPath = $newestLog.FullName }
+  }
+}
+if (-not $hostLogPath) {
+  Write-Output "SKIP  host log has no db-insight TUI registration failures  (no opencode log under the user data dir)"
+} else {
+  # db-insight: TUI <command-registration failed> / <status-panel-slot registration failed>
+  $tuiRegFailPattern = [regex]::Unescape("db-insight: TUI (\u547D\u4EE4\u6CE8\u518C\u5931\u8D25|\u72B6\u6001\u9762\u677F\u63D2\u69FD\u6CE8\u518C\u5931\u8D25)")
+  $tuiRegFailHits = 0
+  try {
+    # Open with FileShare ReadWrite so the live log stays readable while the
+    # running host holds it open for appending.
+    $hostLogStream = [System.IO.FileStream]::new($hostLogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    $hostLogReader = [System.IO.StreamReader]::new($hostLogStream, [System.Text.Encoding]::UTF8)
+    try {
+      while ($null -ne ($logLine = $hostLogReader.ReadLine())) {
+        # The host logs every spawned process command line verbatim, so any
+        # probe/grep command that embeds the marker text would otherwise
+        # self-pollute this check forever (hit observed at opencode.log:86253
+        # during the WARN-branch probe). Real registration failures come from
+        # the plugin's console.error, never from a spawning-process echo.
+        if ($logLine -match 'message="spawning process"') { continue }
+        if ($logLine -match $tuiRegFailPattern) { $tuiRegFailHits++ }
+      }
+    } finally {
+      $hostLogReader.Dispose()
+      $hostLogStream.Dispose()
+    }
+  } catch {
+    # e.g. the running host holds an exclusive lock on the log
+    Write-Output ("SKIP  host log has no db-insight TUI registration failures  (cannot read " + (Split-Path $hostLogPath -Leaf) + ": " + $_.Exception.Message + ")")
+    $tuiRegFailHits = -1
+  }
+  if ($tuiRegFailHits -eq 0) {
+    Write-Output ("PASS  no db-insight TUI registration failures in host log  (" + (Split-Path $hostLogPath -Leaf) + ")")
+  } elseif ($tuiRegFailHits -gt 0) {
+    Write-Output ("WARN  db-insight TUI registration failures in host log  (hits=" + $tuiRegFailHits + " in " + (Split-Path $hostLogPath -Leaf) + "; message only exists on v0.15.1+ -- restart the TUI and re-run verify-install, still hitting means a real registration failure)")
+  }
+}
+
 Write-Output "----"
 if ($script:failures -eq 0) {
   Write-Output ("VERIFY OK — v$expectedVersion @ $localHead fully installed")
