@@ -1,6 +1,6 @@
 # opencode-db-insight 设计文档（DESIGN.md）
 
-> 版本：0.1.0-draft · 状态：设计中（图表选型待全网调研校准）
+> 版本：0.15.x（与 package.json / api.ts INSIGHT_VERSION 同步，当前 0.15.1）· 状态：实现中（v0.4.0 起随版本演进同步回写，2026-10-11 已与实现对账）
 > 本文档是实现的唯一依据；需求变更先改本文档再改代码。
 
 ## 1. 背景与目标
@@ -46,7 +46,7 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 | open-webui/open-webui | 153,985 | 自定义 | Analytics 布局范式：KPI 行 → 大时序图 → 双明细表 → 行级下钻 |
 | touchkale/opencode-dashboard | 3 | MIT | 单文件零依赖读同一 db 手绘 SVG——轻量档可行性证明 |
 
-业界共识图表选型（已验证，直接采用）：模型占比→表+%列或环形图；每日消耗→**堆叠面积/堆叠条**（按模型分色）；趋势→折线+上周期 ghost line；工具调用→**横向条形**；长期活跃→**GitHub 式日历热力图**（CLI 圈最讨喜的图，三家在用）；时段习惯→小时×星期二维热力；成本异常→直方图+p50/p90/p99 刻度线。
+业界共识图表选型（已验证，直接采用）：模型占比→表+%列或环形图；每日消耗→**堆叠面积/堆叠条**（按模型分色）；趋势→折线+上周期 ghost line（ghost line 最终未采纳，见 §13）；工具调用→**横向条形**；长期活跃→**GitHub 式日历热力图**（CLI 圈最讨喜的图，三家在用）；时段习惯→小时×星期二维热力；成本异常→直方图+p50/p90/p99 刻度线（成本直方图未采纳，见 §13）。
 
 差异化设计采纳（v0.1 内实现的排进任务，其余进 §13 备选）：
 1. **数据精度分级标签**（🟢 DB 实值 / 🟡 估算）：本库 cost 字段常为 0，UI 必须明示每个数字的可信度；
@@ -67,7 +67,8 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 │  TUI 插件 (src/tui.tsx)                              │
 │   ├─ /insight           → 打开看板（浏览器）          │
 │   ├─ /insight-status    → 终端统计面板                │
-│   └─ /insight-export    → 会话导出 Markdown           │
+│   ├─ /insight-export    → 会话导出 Markdown           │
+│   └─ /insight-refresh   → 清空 server 统计缓存（跨进程回环）│
 └─────────────────────────────────────────────────────┘
         浏览器访问 http://127.0.0.1:<port>/
 ```
@@ -83,13 +84,13 @@ opencode-db-insight/
 ├─ scripts/                      # 工具脚本：verify-install.ps1（推送后一键安装自验证）
 ├─ src/
 │  ├─ index.ts                   # 插件入口：装配 insight server + 端口持久化 + 生命周期清理
-│  ├─ tui.tsx                    # TUI 插件入口：装配三条斜杠命令
+│  ├─ tui.tsx                    # TUI 插件入口：装配四条斜杠命令
 │  ├─ db/                        # 只读取数层
 │  │  ├─ queries.ts              #   SQL 收敛处（会话列表 / 回放步骤 / todo）
 │  │  ├─ aggregate-queries.ts    #   SQL 侧聚合（overview / trend / models / agents，与旧 JS 口径逐字段对账）
 │  │  ├─ behavior-queries.ts     #   v0.2 行为统计（小时热力 / 会话存活 / 压缩事件）
 │  │  ├─ scan-conventions.ts     #   扫描口径单点（assistant 谓词 / DAY_MS / 下推 floor 与回收窗口成对导出，0.2.1 起）
-│  │  ├─ directory-queries.ts    #   v0.3 按项目目录统计（会话数 / 步数 / 最近活跃，全量口径）
+│  │  ├─ directory-queries.ts    #   v0.3 按项目目录统计（会话数 / 步数 / tokens 三分 / 最近活跃，预聚合 GROUP BY 消扇出）
 │  │  ├─ rows.ts                 #   行记录解析与类型强制（coerceNumber / coerceText）
 │  │  └─ types.ts                 #   数据面类型定义（SessionSummary / AssistantStepRow / ...）
 │  ├─ stats/                     # 纯聚合函数层（无 IO，可单测）
@@ -100,21 +101,30 @@ opencode-db-insight/
 │  │  ├─ server.ts               #   生命周期（listen / shutdown / 端口重试）
 │  │  ├─ request-handler.ts      #   Host 头校验（防 DNS rebinding）
 │  │  ├─ router.ts / api.ts      #   路由分发 / JSON API（INSIGHT_VERSION 常量）
+│  │  ├─ session-summary-csv.ts #   会话汇总 CSV 渲染纯函数（v0.8.0，RFC 4180 + BOM）
 │  │  ├─ static-files.ts         #   静态文件服务（路径逃逸防护）
 │  │  ├─ db-connection-guard.ts  #   连接自愈守卫（结构化致命错误判别）
 │  │  └─ public/                 #   前端看板（原生 ESM，零构建）
 │  │     ├─ app.js / data-source.js / format.js / theme.js / tooltip.js
-│  │     ├─ components/          #     KPI 卡 / 趋势图 / 日历热力 / token 漏斗 / 模型表 /
-│  │     │                       #     会话列表 / 回放时间线与成本条 / 压缩面板 / 存活卡片 /
-│  │     │                       #     目录统计面板（v0.3）/ 空态与加载态
+│  │     ├─ mock-data.js / mock-replay-data.js
+│  │     │                       #     USE_MOCK 开关（data-source.js）的 dev-only 预览
+│  │     │                       #     数据源：不请求路由，内容为虚构数据（离线演示用）
+│  │     ├─ components/          #     KPI 卡 / 趋势图 / 日历热力 / hour-heatmap 时段热力 /
+│  │     │                       #     token 漏斗 / 模型表 / 会话列表（session-list +
+│  │     │                       #     session-sort-controller 排序控制器 +
+│  │     │                       #     session-csv-export 导出入口）/ 回放视图（session-replay /
+│  │     │                       #     回放时间线与成本条 / replay-message-text 文本单点 /
+│  │     │                       #     replay-search 页内搜索）/ 压缩面板 / 存活卡片 /
+│  │     │                       #     目录统计面板 / 空态与加载态
 │  │     └─ vendor/uplot/        #     uPlot 本地化（无 CDN 依赖）
 │  ├─ export/                    # Markdown 导出渲染（角色分节 / 格式化辅助）
 │  └─ tui/                       # TUI 命令实现
 │     ├─ command-registry.ts     #   斜杠命令注册表
 │     ├─ status-panel-{data,text,controller}.ts  #   /insight-status 面板三件套
 │     ├─ open-dashboard-command.ts / export-command.ts
+│     ├─ refresh-command.ts      #   /insight-refresh：跨进程回环清 server 缓存（v0.14.0）
 │     └─ tui-context.ts         #   storage 读取（端口 / 数据库路径）
-├─ test/                         # 233 用例：模块测试 + 集成 / 韧性 / SQL 对账 + v0.2 行为查询 + v0.3 目录查询
+├─ test/                         # 347 用例：模块测试 + 集成 / 韧性 / SQL 对账 + 行为 / 目录 / 排序 / CSV / 搜索 / 刷新等回归面（随版本持续增补）
 │  └─ helpers/                   # fake-insight-db / step 工厂
 ├─ DESIGN.md / tasks.md / CHANGELOG.md / README.md
 └─ package.json / LICENSE
@@ -140,16 +150,16 @@ opencode-db-insight/
 | 小时热力 | 历史步骤数按 小时×星期 分桶（窗口回收下界与 trend 同构） | 作息画像（v0.2 已接线） |
 | 会话存活 | time_created→time_updated 时长分布、idle_outcome 计数 | 短命会话占比（v0.2 已接线） |
 | 压缩事件 | compaction 消息计数（按会话/按日/按 reason） | 马拉松会话信号（v0.2 已接线） |
-| 目录维度 | 会话数 / assistant 步数 / 最近活跃（MAX time_updated）按 session_v2.directory 聚合 | 全量口径，NULL/空目录排除出列表与 totals（v0.3 已接线） |
+| 目录维度 | 会话数 / assistant 步数 / tokens 三分（tokensInput / tokensOutput / tokensCacheRead，读 session_v2 汇总列）/ 最近活跃（MAX time_updated）按 session_v2.directory 聚合 | 全量口径，NULL/空目录排除出列表与 totals（v0.3 已接线）；tokens 三分为预聚合方案——step 子查询先 GROUP BY session_id 消除行扇出，SUM 不被步数放大（v0.15.0） |
 | todo 完成率 | completed / total | `todo` 表 |
-| 数字精度标签 | cost 为 DB 实值标 🟢；tokens 换算金额标 🟡 估算 | 采纳 claude-lens 精度分级，UI 全局生效 |
+| 数字精度标签 | cost 为 DB 实值标 🟢；tokens 换算金额标 🟡 估算 | 采纳 claude-lens 精度分级；精度徽标仅在 KPI 卡逐数生效（kpi-card.js），模型表 / 会话列表 / 回放等其余面板由 index.html 页脚全局图例（🟢/🟡 说明）兜底语义 |
 
-## 6. Web API 设计（全部 GET，JSON）
+## 6. Web API 设计（全部 GET；除 sessions.csv 为 CSV 附件外均 JSON）
 
 | 路由 | 内容 |
 |---|---|
 | `/api/overview` | KPI 卡：今日/累计 token、今日命中率、会话数、步数、cost |
-| `/api/trend?days=30` | 逐日序列：tokens 分项 + 命中率 |
+| `/api/trend?days=30` | 逐日序列：tokens 分项 + 命中率；每点含 `byModel`（模型 id → 当日 tokens，值口径 input+read+output；键序 = 全窗总量 desc + modelId asc，v0.11.0），供按模型分色堆叠面积图 |
 | `/api/models` | 模型单点指标排行 |
 | `/api/agents` | agent 用量 + 工具指纹 |
 | `/api/hour-heatmap?days=90` | 7×24 时段热力网格（168 格零填充，weekday=0 周日为外层） |
@@ -157,10 +167,12 @@ opencode-db-insight/
 | `/api/compaction` | 压缩事件统计（总数 / 按 reason / 近 30 日逐日 / Top 10 会话） |
 | `/api/todo` | todo 完成率统计（供看板卡片） |
 | `/api/directories?limit=10` | 按项目目录统计（目录排行：会话数 / 步数 / 最近活跃；limit 钳位 1..50，全量口径无 days 窗口） |
-| `/api/sessions?limit=&offset=&sort=&order=` | 会话列表（标题/模型/agent/时间/token）；服务端排序：sort 白名单 time_updated（默认）/time_created/tokens/cost/title，order 默认 desc，非法回退默认；`id ASC` 次级键保证分页确定性；缓存键含排序维度 |
+| `/api/sessions?limit=&offset=&sort=&order=&directory=&range=` | 会话列表（标题/模型/agent/时间/token/cost）；每行含分项 `tokensInput` / `tokensOutput` / `tokensCacheRead`（session_v2 三列直通，v0.13.0；既有 `tokens` 折叠总和口径不变）；服务端排序：sort 白名单 time_updated（默认）/time_created/tokens/cost/title，order 默认 desc，非法回退默认；`id ASC` 次级键保证分页确定性；`?directory=` 精确下钻过滤（v0.7.0，miss=空 200）、`?range=7d|30d|90d` 时间窗（v0.9.0，未知非空 → 400）；缓存键含全部维度 |
 | `/api/session/:id/messages` | 单会话全部消息（角色分型，供回放） |
 | `/api/session/:id/system-prompt` | 该会话关联的 instruction_blob 内容 |
 | `/api/export/session/:id.md` | 服务端渲染的 Markdown 导出 |
+| `/api/export/sessions.csv` | 会话汇总 CSV 导出（v0.8.0）：九列固定序 id,title,modelId,agent,directory,timeCreated,timeUpdated,tokens,cost；RFC 4180 转义 + CRLF + UTF-8 BOM（Excel 中文不乱码）；全量翻页拉取（500/页）不截断，固定 sessions 默认序 + `id ASC` 决胜保证无重无漏；`?directory=` / `?range=` 与 sessions 同契约（导出是过滤视图快照）；一次性点击不走缓存 |
+| `/api/refresh` | 清空进程内统计结果缓存（v0.14.0）：GET，恒 200 `{status:"ok", cleared:N}`；不依赖 db（db 为 null 仍 200，不进 503 名单）；路由自身不入缓存（避免自占用缓存槽），清空后下次查询重算 |
 | `/api/health` | 端口/版本/db 可达性探活 |
 
 ## 7. 前端与图表选型（v1.1，已按 §2.3 调研结论校准）
@@ -170,7 +182,8 @@ opencode-db-insight/
   1. **KPI 卡片行**：今日 token（in/out 分列）、今日命中率（▲▼ 环比昨日）、步骤数、会话数；每张卡含 sparkline；数字带精度标签（🟢 实值 / 🟡 估算）
   2. **图表网格**：逐日消耗**堆叠面积图（按模型分色）**+ 命中率折线；**52 周日历热力图**；工具调用横向条形图；Token 漏斗（供给→缓存命中→实付→输出）
   3. **明细表区**：模型排行榜（§5 单点指标列，可排序）→ 会话列表（行可点开 → 回放视图）
-- **单会话回放视图**（两级）：会话级角色时间线（user / assistant 文本 / reasoning / 工具输入输出 / system）+ 系统提示词折叠面板；turn 级每步成本条（cache 读/实付/输出分段，模型切换标注）
+- **单会话回放视图**（两级）：会话级角色时间线（user / assistant 文本 / reasoning / 工具输入输出 / system）+ 系统提示词折叠面板；turn 级每步成本条（cache 读/实付/输出分段，模型切换标注）；
+- **回放页内搜索**（v0.10.0）：查找栏输入即搜（200ms 防抖）+ 命中计数 + 上一处/下一处导航（Enter / Shift+Enter / Esc 浏览器查找栏惯例）；搜索面为六类文本（user 正文 / assistant text / reasoning / tool name / tool input / tool output），提取与渲染共用 replay-message-text.js 单点（杜绝"搜得到渲染不出"的口径漂移）；通知行刻意排除；节点级高亮，导航到未渲染分页区时驱动追加加载。
 - 深浅色主题跟随系统 `prefers-color-scheme`；图表点击可下钻到过滤后的会话列表（drill-anywhere，v0.1 至少模型行→会话列表）。
 
 ## 8. TUI 面
@@ -178,6 +191,7 @@ opencode-db-insight/
 - `/insight`：打开看板（Windows `start` / macOS `open` / Linux `xdg-open`），并在 toast 显示实际端口；
 - `/insight-status` 面板（`session.panel` slot；宿主无 panel/slot API 时降级为 toast 提示「当前界面不支持面板」）：今日总量、今日命中率、模型 TOP5、7 日趋势字符条形图——视觉语言对齐 usage-meter（图标行、静默降级）；
 - `/insight-export [会话ID]`：无参数时弹出 `dialog.select` 列最近 20 个会话；导出到**当前工作目录** `./insight-exports/<YYYYMMDD-HHmmss>-<slug>.md`，角色分节（`## 🧑 用户` / `## 🤖 助手` / reasoning 引用块 / 工具调用代码块）。
+- `/insight-refresh`（v0.14.0，第 4 条命令）：清空 **server 进程**内 60s 统计结果缓存。TUI 与 server 是两个插件 flavor、两个进程——命令内直接 import `clearResultCache` 清的只会是 TUI 进程自己的空 Map（静默 no-op），故走**跨进程 fetch 回环**：读 storage 端口 → `GET http://127.0.0.1:{port}/api/refresh`（约 5s 超时防御）；成功 toast「已清除 N 条统计缓存（看板刷新页面后生效）」，端口缺失/超时/非 200/坏 JSON 全降级 error toast，永不抛。
 
 ## 9. 生命周期与安全
 
@@ -215,3 +229,16 @@ opencode-db-insight/
 | M7 | 安装验证 + README 收敛 | v0.1.0 发布 |
 
 每完成一个里程碑：commit → push GitHub → 记录 CHANGELOG.md（见 changelog 约定）。
+
+## 13. 备选清单（有意未采纳的图型）
+
+§2.3 中"其余进 §13 备选"的落点。以下图型在设计调研阶段进入过候选，经评估**有意未采纳**；记录于此防止重复调研，并给出再触发条件。
+
+- **趋势 ghost line（上一周期同长基线虚线）**
+  - 是什么：趋势图上叠加前一等长周期的同位序列，以虚线呈现"同期对比"。
+  - 为何暂不采纳：KPI 卡已提供 ▲▼ 环比 delta（今日 vs 昨日），趋势图本身已按模型分色堆叠面积，再叠一条历史基线序列在高频多模型场景下视觉噪声大于信息增量。
+  - 再触发条件：出现明确的"与上周期逐日对比"诉求，且 KPI 环比角标不足以表达时。
+- **成本直方图 + p50/p90/p99 刻度线**
+  - 是什么：会话级 cost 分布直方图，分位数刻度线用于识别成本异常会话。
+  - 为何暂不采纳：本库 `cost` 字段常为 0（活库实测绝大多数行为 0），直方图退化为单柱零信息；tokens 换算金额属估算口径，做分位数刻线会把估算伪装成精确（与 §5 精度标签纪律相悖）。
+  - 再触发条件：provider 侧开始落真实 cost，或引入公开定价表做系统化估算并带上精度标签之后。

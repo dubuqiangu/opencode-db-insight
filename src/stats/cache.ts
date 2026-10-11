@@ -54,7 +54,7 @@ export function cachedResult<T>(cacheKey: string, compute: () => T, ttlMs: numbe
   return value
 }
 
-/** Drop every cached entry (used by tests and by a future "refresh" command). */
+/** Drop every cached entry (used by tests and by the live /api/refresh route, shipped in v0.14.0). */
 export function clearResultCache(): void {
   entriesByCacheKey.clear()
 }

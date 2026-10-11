@@ -6,12 +6,14 @@ OpenCode V2 插件：只读分析本地 `opencode.db` 的历史用量——浏�
 
 - **`/insight`** —— 在浏览器打开本地 Web 看板（`http://127.0.0.1:18789/` 起，端口被占用自动 +1）：
   - KPI 总览（今日/累计 token、今日缓存命中率、会话数、步数、费用）
-  - 模型排行榜（步数、总量、命中率、步均输出、中位/p95 上下文、推理占比）
-  - 逐日趋势（token 分项 + 命中率折线）与 52 周日历热力图
-  - agent 工具指纹、Token 漏斗（todo 完成率等其余指标经 `/api/todo` 等 JSON 接口提供）
-- **单会话回放**（看板内点会话进入）：角色时间线（用户/助手/工具输入输出/系统消息）+ 系统提示词折叠面板 + turn 级成本条
+  - 模型排行榜（步数、总量、token 占比、命中率、步均输出、中位/p95 上下文、推理占比）
+  - 逐日趋势（token 分项 + 命中率折线，按模型分色的堆叠面积图）与 52 周日历热力图、7×24 时段热力
+  - 会话列表（服务端排序，可按项目目录下钻、按 7/30/90 天时间窗筛选，入/出 token 分列）；面板脚注「导出 CSV」把当前过滤视图的**全部会话**下载为 CSV（`GET /api/export/sessions.csv`：九列固定序，RFC 4180 转义 + UTF-8 BOM，Excel 打开中文不乱码，翻页拉全量不截断）
+  - agent 工具指纹、Token 漏斗、按目录统计，以及会话存活 / 压缩事件 / todo 完成率等行为统计卡片
+- **单会话回放**（看板内点会话进入）：角色时间线（用户/助手/工具输入输出/系统消息）+ 系统提示词折叠面板 + turn 级成本条 + 页内搜索（输入即搜、命中计数、上一处/下一处导航）
 - **`/insight-status`** —— 终端侧栏统计面板：今日总量、命中率、模型 TOP5、近 7 日字符条形图（60 秒自动刷新）
 - **`/insight-export [会话ID]`** —— 把任意会话导出为角色分节的 Markdown（无参数时弹出最近 20 个会话供选择）
+- **`/insight-refresh`** —— 清空**服务器进程内**的统计缓存，toast 提示清除条数（如「已清除 N 条统计缓存」）；看板页面刷新后即取到最新数据
 
 与 [opencode-usage-meter](https://github.com/dubuqiangu/opencode-usage-meter)（实时指标）互补：它管**实时**，本插件只做**历史**侧分析。
 
@@ -39,9 +41,9 @@ opencode plugin remove opencode-db-insight # 卸载
 
 ## 使用
 
-- 三条斜杠命令：`/insight`（打开看板）、`/insight-status`（终端面板）、`/insight-export [会话ID]`（导出）。
+- 四条斜杠命令：`/insight`（打开看板）、`/insight-status`（终端面板）、`/insight-export [会话ID]`（导出 Markdown）、`/insight-refresh`（清空看板统计缓存，清完刷新页面生效）。
 - 看板地址：`http://127.0.0.1:18789/`，被占用时自动 +1 重试（至多 10 次）；`/insight` 的 toast 显示**实际**端口，也可看 `/api/health`。
-- 导出目录：`./insight-exports/`（相对 OpenCode 启动目录），文件名 `<时间戳>-<会话标题>.md`，中文标题保留。
+- 导出目录：`./insight-exports/`（相对 OpenCode 启动目录），文件名 `<时间戳>-<会话标题>.md`，中文标题保留。看板「导出 CSV」则是浏览器直接下载 `sessions.csv`（携带当前目录/时间范围过滤），不落该目录。
 - 数据源：只读打开 OpenCode 数据库（Unix：`~/.local/share/opencode/opencode.db`；Windows：`%USERPROFILE%\.local\share\opencode\opencode.db`），路径可在插件 storage 中用 `insight-db-path` 覆盖。
 
 ## 排障

@@ -8,6 +8,24 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.15.2] - 2026-10-11 · 审计对账清账版：文档回写 + tooltip XSS 持久回归锁 + mock 会话侧 clamp
+
+> 来源：oracle 全量审计（设计目标 vs 实现）——核心面零遗漏，债务集中在文档失实与 v0.1.0 存量测试豁免区。本版按审计处方一次性收口，全部改动可溯源至审计清单（处方型，免下一代审查）。
+
+### Added（补测试面）
+- **tooltip XSS 持久回归锁（v0.1.1 P0-2 销账）**：当年 P0（MCP 工具名/modelId 注入源未转义）只经一次性冒烟验证、脚本未入库——tooltip.js 改回坏形态 347 测试照绿。现补 2 个回归测试（showTooltip/hideTooltip 入口 + bindHoverTooltip payloadBuilder 路径），payload 用 P0 原始形状（`<img src=x onerror=…>`、`"><script>`、恶意 swatch），断言转义后文本在场、原文不在场、平铺解析中 img/script/svg 标签数为 0；**已做红验证**（临时恢复 P0 未转义形态 → fail 2 → 逐字节恢复 → 全绿）。
+- **kpi-card 测试面（零入库 → 5 测试）**：精度标签口径（4 卡头 exact/实值 + 仅成本估算行 estimate/估算）、环比方向与文案（▲25.0%/▲2.0pp）、sparkline 数据入口（4 锚点收于 x=100.00、常量序列退化分支无 NaN、<2 值整段省略）、持平/缺基线降级（— 环比）、null overview 单块骨架。
+- **mock 守恒不变式测试**：全部会话 tokensOutput ≥ 0 且 input+output+cacheRead ≤ tokens（宽松界，clamp 生效时守恒放宽的语义写进注释）。
+
+### Fixed
+- **mock 会话级 tokensOutput clamp**（ora-7 P2 销账）：`Math.max(0, …)` 一行——Math.round 双半值进位理论可产生负 output（当前确定性 SEED 不可达，从未修过）；注释钉死会话侧与 v0.15.0 目录侧（最大余数法）修复的区别，勿误读为全局已修。
+- **tasks.md 两处勾稽失真**：B1 服务端排序（0.4.0 已落地）与 0.3.0 oracle 审查（即 v0.3.1 来源）补勾，台账自相矛盾消除。
+
+### Changed
+- **文档对账回写（审计文档债 8 项全清）**：README 从 v0.1.x 功能面回写至实况（四条命令补 /insight-refresh、CSV 导出九列/BOM/RFC 4180、模型排行榜 token 占比、趋势 byModel 堆叠、会话列表排序/下钻/时间窗/入出分列、回放页内搜索）；DESIGN.md 头部版本实况化（0.15.x，删除与「唯一依据」自相矛盾的 0.1.0-draft）、§5 目录维度行补 tokens 三分、§6 路由表补 /api/export/sessions.csv 与 /api/refresh（sessions 行补三 wire 分项、trend 行补 byModel）、§7 补回放内搜索、§8 补第四条命令、**新建 §13 备选清单**（ghost line、成本直方图 p50/p90/p99 各「是什么/为何暂不采纳/再触发条件」——§2.3 断头引用落地）、精度标签措辞收窄为实况（KPI 卡徽标 + 全局图例脚注，决策：不补实现）、§3.1 树刷新（347 用例、6 个缺失组件、mock 文件与 USE_MOCK 说明）。
+- cache.ts:57 过期注释销账：refresh 伏笔 v0.14.0 已兑现。
+- 测试 347 → **352**（+5）。
+
 ## [0.15.1] - 2026-10-11 · 修复：TUI 四条斜杠命令在真实宿主上从未注册（bind 空串触发宿主形状校验）
 
 ### Fixed

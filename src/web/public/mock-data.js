@@ -418,7 +418,12 @@ function buildSessionSummaries() {
     const sessionCacheHitRate = Math.min(0.982, Math.max(0.88, 0.922 + randomInRange(-0.016, 0.05)));
     const tokensCacheRead = Math.round(tokens * sessionCacheHitRate);
     const tokensInput = Math.round(tokens * (1 - sessionCacheHitRate));
-    const tokensOutput = tokens - tokensCacheRead - tokensInput;
+    // ora-7 P2：Math.round 双半值进位可能让两个取整分量之和超过 tokens，
+    // 余数相减得到负 output（当前确定性 SEED 下不可达，但从未修过）。此处
+    // clamp 到 ≥ 0——clamp 生效时守恒放宽为 input+output+cacheRead ≤ tokens。
+    // 注意这是会话侧推导；v0.15.0 修的是目录侧同款问题（最大余数法分摊，
+    // 天然非负），不要误读为本处已随彼次修复一并解决。
+    const tokensOutput = Math.max(0, tokens - tokensCacheRead - tokensInput);
 
     sessions.push({
       id: sessionIndex === 0 ? "ses_replay_demo" : "ses_" + (0x8f3a0000 + sessionIndex * 7919).toString(16).padStart(8, "0"),

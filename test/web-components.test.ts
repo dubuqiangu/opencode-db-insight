@@ -116,6 +116,15 @@ class StubElement {
     this.fire("click")
   }
 
+  /**
+   * Fixed 200×60 box for tooltip.js moveTooltip's edge-flip math — the
+   * only render-time getBoundingClientRect consumer in the tested module
+   * set; real geometry is irrelevant to the contracts under test.
+   */
+  getBoundingClientRect(): { width: number; height: number } {
+    return { width: 200, height: 60 }
+  }
+
   classTokenList(): string[] {
     return this.className.split(/\s+/).filter((classToken) => classToken !== "")
   }
@@ -1130,6 +1139,35 @@ test("getMockSessions mirrors the v0.13.0 three-field breakdown with parts summi
       (sessionSummary.tokensInput as number) + (sessionSummary.tokensOutput as number)
         + (sessionSummary.tokensCacheRead as number) === sessionSummary.tokens,
       `filtered pages keep the parts-sum conservation for ${sessionSummary.id}`,
+    )
+  }
+})
+
+test("getMockSessions tokensOutput never goes negative and keeps the loose conservation bound under the clamp", async () => {
+  const { getMockSessions } = await import("../src/web/public/mock-data.js")
+
+  // The session-side three-part derivation clamps output at 0 (ora-7 P2:
+  // Math.round double-half rounding can push the remainder negative —
+  // unreachable under the current deterministic SEED, never fixed until
+  // the clamp). Mock semantics under the clamp: output ≥ 0, and because
+  // a clamped output no longer absorbs the rounding overshoot, the parts
+  // may sum to LESS than the folded total — the loose bound
+  // input+output+cacheRead ≤ tokens. Under the current SEED the clamp
+  // never fires, so the strict equality locked by the test above still
+  // holds; this test pins the looser invariant so a SEED change cannot
+  // smuggle a negative output back in under the name of conservation.
+  const unfilteredPage = getMockSessions()
+  for (const sessionSummary of unfilteredPage.sessions) {
+    const tokensOutputValue = sessionSummary.tokensOutput as number
+    const partsTotal = (sessionSummary.tokensInput as number) + tokensOutputValue
+      + (sessionSummary.tokensCacheRead as number)
+    assert.ok(
+      tokensOutputValue >= 0,
+      `tokensOutput must never be negative for ${sessionSummary.id}`,
+    )
+    assert.ok(
+      partsTotal <= sessionSummary.tokens,
+      `input + output + cache.read must never exceed the folded total for ${sessionSummary.id}`,
     )
   }
 })
@@ -2924,4 +2962,282 @@ test("getMockModelMetrics mirrors the v0.12.0 tokenShare wire: per-model tokens/
     !container.innerHTML.includes('<td class="num">—</td>'),
     "no share degrades on the mock path — all shares are real numbers",
   )
+})
+
+/* ------------- tooltip XSS regression lock (v0.1.1 P0-2) ------------- */
+
+/**
+ * The v0.1.1 P0-2 fix (hostile MCP tool names / modelId flowing into
+ * tooltip.innerHTML unescaped) was verified once by a throwaway smoke
+ * script that never entered the repo — removing the escaping kept all
+ * 347 tests green. This section turns that smoke into a durable
+ * regression lock: the P0 payload shapes must reach the DOM as text,
+ * never as markup. The shim's flat-tag parser carries the structural
+ * half: an unescaped "<img …>" becomes a real parsed <img> tag here,
+ * so "no img/script/svg tag in the tooltip subtree" goes loudly red
+ * the moment the escaping regresses.
+ */
+
+/** The single #tooltip stub: tooltip.js caches it after its first lookup. */
+const sharedTooltipElement = new StubElement("div")
+
+// tooltip.js is the only render-time getElementById consumer among the
+// tested modules (app.js is not imported here), so serving the #tooltip
+// stub — and null for everything else — cannot leak into other tests.
+globalThis.document.getElementById = ((elementId: string) =>
+  elementId === "tooltip" ? sharedTooltipElement : null) as unknown as Document["getElementById"]
+
+test("showTooltip renders the P0 payload shapes as text and hideTooltip closes the tooltip", async () => {
+  const { showTooltip, hideTooltip } = await import("../src/web/public/tooltip.js")
+  const { escapeHtml } = await import("../src/web/public/format.js")
+
+  // The original P0 injection sources in their smoke shapes: a hostile
+  // MCP tool name and a hostile modelId.
+  const hostileToolName = '<img src=x onerror=alert(1)>'
+  const hostileModelId = '"><script>alert(2)</script>'
+
+  showTooltip({
+    title: hostileModelId,
+    rows: [
+      // Hostile swatch: the color whitelist (v0.2.1 P2-5) must reject it
+      // outright — it may not reach the style attribute in any form.
+      { swatch: '"><svg onload=alert(3)>', label: hostileToolName, value: "42,000" },
+      { swatch: "var(--blue)", label: "example-tool-benign", value: "1,000" },
+    ],
+    clientX: 100,
+    clientY: 100,
+  })
+
+  assert.equal(sharedTooltipElement.hidden, false, "showTooltip reveals the tooltip")
+  const renderedTooltipHtml = sharedTooltipElement.innerHTML
+  // Every external string reaches the DOM html-escaped…
+  assert.ok(
+    renderedTooltipHtml.includes(escapeHtml(hostileModelId)),
+    "the hostile modelId must reach the title as escaped text",
+  )
+  assert.ok(
+    renderedTooltipHtml.includes(escapeHtml(hostileToolName)),
+    "the hostile tool name must reach the row label as escaped text",
+  )
+  // …and never raw.
+  assert.ok(!renderedTooltipHtml.includes(hostileToolName), "no raw tool name may reach the DOM")
+  assert.ok(!renderedTooltipHtml.includes(hostileModelId), "no raw modelId may reach the DOM")
+  // Structural proof: had the escaping regressed, the shim would have
+  // parsed the payloads into real img / script / svg elements.
+  assert.equal(
+    sharedTooltipElement.querySelectorAll("img").length,
+    0,
+    "no <img> tag may parse out of the tool name",
+  )
+  assert.equal(
+    sharedTooltipElement.querySelectorAll("script").length,
+    0,
+    "no <script> tag may parse out of the modelId",
+  )
+  assert.equal(
+    sharedTooltipElement.querySelectorAll("svg").length,
+    0,
+    "no <svg> tag may parse out of the hostile swatch",
+  )
+  // The hostile swatch is whitelist-rejected (no second color dot);
+  // exactly the whitelisted var(--blue) swatch renders.
+  assert.equal(
+    sharedTooltipElement.querySelectorAll("span.swatch").length,
+    1,
+    "only the whitelisted swatch renders a color dot",
+  )
+
+  hideTooltip()
+  assert.equal(sharedTooltipElement.hidden, true, "hideTooltip hides the tooltip again")
+})
+
+test("bindHoverTooltip routes payloadBuilder output through the same escaping and a null payload never shows the tooltip", async () => {
+  const { bindHoverTooltip } = await import("../src/web/public/tooltip.js")
+  const { escapeHtml } = await import("../src/web/public/format.js")
+
+  const hostileToolName = '<img src=x onerror=alert(1)>'
+  const hostileModelId = '"><script>alert(2)</script>'
+  const hoverHostElement = freshContainer()
+
+  let nextHoverPayload: unknown = {
+    title: hostileModelId,
+    rows: [{ label: hostileToolName, value: "7,500" }],
+    clientX: 50,
+    clientY: 70,
+  }
+  bindHoverTooltip(hoverHostElement, () => nextHoverPayload)
+
+  // mouseenter → show through the payloadBuilder path, escaped exactly
+  // like the direct showTooltip entry.
+  hoverHostElement.fire("mouseenter")
+  assert.equal(sharedTooltipElement.hidden, false, "the hover payload reveals the tooltip")
+  assert.ok(
+    sharedTooltipElement.innerHTML.includes(escapeHtml(hostileToolName)),
+    "the builder-supplied tool name must be escaped",
+  )
+  assert.equal(
+    sharedTooltipElement.querySelectorAll("img").length,
+    0,
+    "no <img> tag may parse out of the builder payload",
+  )
+
+  // mousemove with a live payload only repositions the tooltip.
+  hoverHostElement.fire("mousemove", { clientX: 300, clientY: 200 })
+  assert.equal(sharedTooltipElement.style.left, "314px", "moveTooltip tracks the mouse (300 + 14 margin)")
+  assert.equal(sharedTooltipElement.style.top, "214px", "moveTooltip tracks the mouse (200 + 14 margin)")
+
+  // mouseleave hides; a later null payload must not resurrect it.
+  hoverHostElement.fire("mouseleave")
+  assert.equal(sharedTooltipElement.hidden, true, "mouseleave hides the tooltip")
+  nextHoverPayload = null
+  hoverHostElement.fire("mouseenter")
+  assert.equal(
+    sharedTooltipElement.hidden,
+    true,
+    "a null payload from the builder must never (re-)show the tooltip",
+  )
+})
+
+/* --------------------- kpi-card component --------------------- */
+
+/** Fictional KPI overview fixture (example values only). */
+function kpiOverviewFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    todayTokens: 500_000,
+    yesterdayTokens: 400_000,
+    todayInput: 50_000,
+    todayOutput: 25_000,
+    todayHitRate: 0.97,
+    yesterdayHitRate: 0.95,
+    todaySteps: 120,
+    yesterdaySteps: 100,
+    totalTokens: 12_000_000,
+    totalCost: 0,
+    sessionCount: 480,
+    stepCount: 9_600,
+    todayCostEstimateUsd: 0.07,
+    sparklineTokens: [400_000, 500_000, 450_000, 500_000],
+    sparklineHitRate: [0.95, 0.96, 0.97, 0.97],
+    sparklineSteps: [80, 90, 110, 120],
+    sparklineSessions: [3, 4, 5, 6],
+    ...overrides,
+  }
+}
+
+test("renderKpiRow renders the four cards with precision badges, delta directions and the sparkline data entry", async () => {
+  const { renderKpiRow } = await import("../src/web/public/components/kpi-card.js")
+  const container = freshContainer()
+
+  renderKpiRow(container, kpiOverviewFixture())
+
+  // Four cards in the fixed tone order.
+  const cardElements = container.querySelectorAll("article.kpi-card")
+  assert.equal(cardElements.length, 4, "the KPI row renders exactly four cards")
+  assert.deepEqual(
+    cardElements.map((cardElement) => cardElement.attributes.get("data-tone")),
+    ["tokens", "hitrate", "steps", "sessions"],
+    "card order: tokens / hitrate / steps / sessions",
+  )
+
+  const renderedHtml = container.innerHTML
+  // Precision calibration: every card head claims 实值 (raw DB counts), and
+  // only the cost-estimate line inside the tokens card claims 估算.
+  assert.equal(
+    container.querySelectorAll("span.precision.exact").length,
+    4,
+    "every card head carries an exact precision badge",
+  )
+  assert.equal(
+    container.querySelectorAll("span.precision.estimate").length,
+    1,
+    "exactly the cost-estimate line carries an estimate badge",
+  )
+  assert.ok(renderedHtml.includes(">实值</span>"), "exact badges read 实值")
+  assert.ok(renderedHtml.includes(">估算</span>"), "the estimate badge reads 估算")
+
+  // Delta direction and wording per comparison face: ratio deltas carry
+  // % and the hit-rate point delta carries pp — each with the ▲ up arrow.
+  assert.ok(
+    renderedHtml.includes('<span class="delta up">▲ 25.0%</span>'),
+    "tokens delta: 500K vs 400K → up ratio 25.0%",
+  )
+  assert.ok(
+    renderedHtml.includes('<span class="delta up">▲ 2.0pp</span>'),
+    "hit-rate delta: 0.97 vs 0.95 → up point delta 2.0pp",
+  )
+  assert.ok(
+    renderedHtml.includes('<span class="delta up">▲ 20.0%</span>'),
+    "steps delta: 120 vs 100 → up ratio 20.0%",
+  )
+  assert.ok(!renderedHtml.includes("持平"), "no flat badge when every metric moved")
+  assert.ok(!renderedHtml.includes("— 环比"), "no missing-base badge in a full fixture")
+
+  // The sessions card is cumulative — no delta badge, its sub line reports
+  // the 14-day daily average: round((3+4+5+6)/4) = 5.
+  assert.ok(renderedHtml.includes("近 14 日均"), "the sessions sub states the 14-day window")
+  assert.ok(renderedHtml.includes('<span class="num">5</span> 个/天'))
+
+  // Sparkline data entry: four window values → four polyline anchors on
+  // the 0..100 x grid, closing at x=100; every card renders one spark.
+  const sparkPolylineElements = container.querySelectorAll("polyline")
+  assert.equal(sparkPolylineElements.length, 4, "every card renders its sparkline")
+  const tokensSparkAnchors = (sparkPolylineElements[0]!.attributes.get("points") ?? "").split(" ")
+  assert.equal(tokensSparkAnchors.length, 4, "4 window values → 4 polyline anchors")
+  assert.ok(
+    tokensSparkAnchors[3]!.startsWith("100.00,"),
+    "the last anchor closes the x grid at 100 (data length drives the grid)",
+  )
+})
+
+test("renderKpiRow degrades flat and missing deltas, handles degenerate sparklines and skeletons a null overview", async () => {
+  const { renderKpiRow } = await import("../src/web/public/components/kpi-card.js")
+  const container = freshContainer()
+
+  // Flat delta (steps unchanged), missing comparison base (yesterdayTokens
+  // absent → "— 环比"), a constant sparkline (the max===min degenerate
+  // branch must not NaN) and a one-point sparkline (below the 2-value
+  // floor → the spark is omitted entirely).
+  renderKpiRow(container, kpiOverviewFixture({
+    yesterdayTokens: undefined,
+    yesterdaySteps: 120,
+    sparklineTokens: [5, 5, 5],
+    sparklineSessions: [4],
+  }))
+
+  const renderedHtml = container.innerHTML
+  assert.ok(
+    renderedHtml.includes('<span class="delta flat">— 环比</span>'),
+    "a missing comparison base degrades to the — 环比 badge",
+  )
+  assert.ok(
+    renderedHtml.includes('<span class="delta flat">持平</span>'),
+    "an unchanged metric renders the 持平 badge",
+  )
+
+  // Constant sparkline: three identical anchors, NaN-free. With min=max
+  // the branch widens the range by +1 before the 12% padding, so every
+  // anchor lands at y=27.10 on the 30-high grid.
+  assert.ok(!renderedHtml.includes("NaN"), "the degenerate max===min sparkline must not NaN")
+  assert.equal(
+    container.querySelectorAll("polyline")[0]!.attributes.get("points"),
+    "0.00,27.10 50.00,27.10 100.00,27.10",
+    "the constant sparkline renders three finite anchors",
+  )
+  // The one-point sessions sparkline is below sparklineSvg's 2-value floor:
+  // three sparks remain, the sessions card keeps its text sub only.
+  assert.equal(
+    container.querySelectorAll("svg.kpi-spark").length,
+    3,
+    "a sparkline with fewer than 2 values renders no svg at all",
+  )
+
+  // overview null → single-block loading skeleton (app.js re-calls later).
+  const nullOverviewContainer = freshContainer()
+  renderKpiRow(nullOverviewContainer, null)
+  assert.equal(
+    nullOverviewContainer.querySelectorAll(".skeleton-block").length,
+    1,
+    "a null overview renders the one-block loading skeleton",
+  )
+  assert.ok(nullOverviewContainer.innerHTML.includes('aria-busy="true"'))
 })
