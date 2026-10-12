@@ -1,19 +1,14 @@
 /**
- * Smoke tests for the TUI command and slot registration (M6): a fake
- * context captures the keymap layer and the session.panel claim, then the
- * wired commands/renders are driven to verify toast wiring, runner routing,
- * silent degradation on missing host APIs, and dispose behavior.
+ * Smoke tests for the TUI command registration (M6): a fake context
+ * captures the keymap layer, then the wired commands are driven to verify
+ * toast wiring, runner routing (including the /insight-status dialog
+ * runner), silent degradation on missing host APIs, and dispose behavior.
  */
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import {
-  INSIGHT_STATUS_PANEL_NAME,
-  registerInsightTuiCommands,
-  registerStatusPanelSlot,
-  shouldRenderStatusPanel,
-} from "../src/tui/command-registry.ts"
+import { registerInsightTuiCommands } from "../src/tui/command-registry.ts"
 
 interface CapturedToast {
   message: string
@@ -24,25 +19,17 @@ interface CapturedToast {
 interface FakeTuiContextHarness {
   context: Record<string, unknown>
   capturedToasts: CapturedToast[]
-  recordedPanelOpens: string[]
   recordedLayerSpecs: unknown[]
-  recordedSlotClaims: unknown[]
   layerDisposeCallCount: { value: number }
-  slotDisposeCallCount: { value: number }
 }
 
-/** A fake TUI context with recordable toasts, panel opens and slot claims. */
+/** A fake TUI context with recordable toasts. */
 function buildFakeTuiContext(options: {
-  panelOpenResult?: boolean
   includeKeymap?: boolean
-  includeSlot?: boolean
 }): FakeTuiContextHarness {
   const capturedToasts: CapturedToast[] = []
-  const recordedPanelOpens: string[] = []
   const recordedLayerSpecs: unknown[] = []
-  const recordedSlotClaims: unknown[] = []
   const layerDisposeCallCount = { value: 0 }
-  const slotDisposeCallCount = { value: 0 }
 
   const context: Record<string, unknown> = {
     keymap:
@@ -62,32 +49,14 @@ function buildFakeTuiContext(options: {
           capturedToasts.push({ message: toastOptions.message, variant: toastOptions.variant })
         },
       },
-      panel: {
-        open: (panelName: string) => {
-          recordedPanelOpens.push(panelName)
-          return options.panelOpenResult !== false
-        },
-      },
-      slot:
-        options.includeSlot === false
-          ? undefined
-          : (claim: unknown) => {
-              recordedSlotClaims.push(claim)
-              return () => {
-                slotDisposeCallCount.value += 1
-              }
-            },
     },
   }
 
   return {
     context,
     capturedToasts,
-    recordedPanelOpens,
     recordedLayerSpecs,
-    recordedSlotClaims,
     layerDisposeCallCount,
-    slotDisposeCallCount,
   }
 }
 
@@ -96,6 +65,7 @@ test("registerInsightTuiCommands wires four slash commands into the keymap", () 
   const openDashboardCalls: unknown[][] = []
   const exportCalls: unknown[][] = []
   const refreshCalls: unknown[][] = []
+  const statusDialogCalls: unknown[][] = []
 
   const commandsDispose = registerInsightTuiCommands(fakeContext.context, {
     runOpenDashboard: async (...openDashboardArguments) => {
@@ -110,6 +80,9 @@ test("registerInsightTuiCommands wires four slash commands into the keymap", () 
       refreshCalls.push(refreshArguments)
       return true
     },
+    runStatusDialog: (...statusDialogArguments) => {
+      statusDialogCalls.push(statusDialogArguments)
+    },
   })
   assert.ok(commandsDispose !== undefined)
 
@@ -117,6 +90,7 @@ test("registerInsightTuiCommands wires four slash commands into the keymap", () 
     mode: string
     commands: Array<{
       id: string
+      title: string
       slash: { name: string; arguments?: boolean }
       run: (commandInput?: string) => unknown
     }>
@@ -133,12 +107,16 @@ test("registerInsightTuiCommands wires four slash commands into the keymap", () 
     undefined,
     "refresh is a whole-cache clear, it takes no arguments",
   )
+  assert.equal(layerSpec.commands[1].title, "显示 db-insight 用量弹窗")
 
   // Run the commands; runners receive the context and (for export) the input.
   layerSpec.commands[0].run()
+  layerSpec.commands[1].run()
   layerSpec.commands[2].run("ses_explicit")
   layerSpec.commands[3].run()
   assert.equal(openDashboardCalls.length, 1)
+  assert.equal(statusDialogCalls.length, 1, "insight-status reaches the dialog runner")
+  assert.equal(statusDialogCalls[0].length, 1, "the dialog runner receives the context")
   assert.equal(exportCalls.length, 1)
   assert.equal(exportCalls[0][1], "ses_explicit")
   assert.equal(refreshCalls.length, 1, "the refresh runner receives exactly one call")
@@ -148,50 +126,19 @@ test("registerInsightTuiCommands wires four slash commands into the keymap", () 
   assert.equal(fakeContext.layerDisposeCallCount.value, 1)
 })
 
-test("insight-status opens the panel and toasts when the host refuses it", () => {
-  const refusingContext = buildFakeTuiContext({ panelOpenResult: false })
-  const commandsDispose = registerInsightTuiCommands(refusingContext.context, {
+test("insight-status without an injected runner toasts instead of silently no-oping", () => {
+  const fakeContext = buildFakeTuiContext({})
+  const commandsDispose = registerInsightTuiCommands(fakeContext.context, {
     runOpenDashboard: async () => true,
     runExport: async () => null,
   })
-  const layerSpec = refusingContext.recordedLayerSpecs[0] as {
+  const layerSpec = fakeContext.recordedLayerSpecs[0] as {
     commands: Array<{ run: () => void }>
   }
   layerSpec.commands[1].run()
-  assert.deepEqual(refusingContext.recordedPanelOpens, [INSIGHT_STATUS_PANEL_NAME])
-  assert.equal(refusingContext.capturedToasts.length, 1)
-  assert.match(refusingContext.capturedToasts[0].message, /不支持面板/)
+  assert.equal(fakeContext.capturedToasts.length, 1)
+  assert.match(fakeContext.capturedToasts[0].message, /未装配/)
   commandsDispose?.()
-})
-
-test("insight-status notifies onStatusPanelOpened only when the panel actually opened (P2-13)", () => {
-  // Successful open → the panel controller's lazy loop is armed.
-  const openedContext = buildFakeTuiContext({ panelOpenResult: true })
-  let openedCallbackRuns = 0
-  const openedDispose = registerInsightTuiCommands(openedContext.context, {
-    runOpenDashboard: async () => true,
-    runExport: async () => null,
-    onStatusPanelOpened: () => {
-      openedCallbackRuns += 1
-    },
-  })
-  ;(openedContext.recordedLayerSpecs[0] as { commands: Array<{ run: () => void }> }).commands[1].run()
-  assert.equal(openedCallbackRuns, 1)
-  openedDispose?.()
-
-  // Refused open → no callback (and no stray refresh loop).
-  const refusedContext = buildFakeTuiContext({ panelOpenResult: false })
-  let refusedCallbackRuns = 0
-  const refusedDispose = registerInsightTuiCommands(refusedContext.context, {
-    runOpenDashboard: async () => true,
-    runExport: async () => null,
-    onStatusPanelOpened: () => {
-      refusedCallbackRuns += 1
-    },
-  })
-  ;(refusedContext.recordedLayerSpecs[0] as { commands: Array<{ run: () => void }> }).commands[1].run()
-  assert.equal(refusedCallbackRuns, 0)
-  refusedDispose?.()
 })
 
 test("registerInsightTuiCommands degrades silently without a keymap", () => {
@@ -200,38 +147,6 @@ test("registerInsightTuiCommands degrades silently without a keymap", () => {
   assert.equal(commandsDispose, undefined)
   assert.equal(keymaplessContext.recordedLayerSpecs.length, 0)
   assert.equal(keymaplessContext.capturedToasts.length, 0)
-})
-
-test("registerStatusPanelSlot claims session.panel and forwards the render", () => {
-  const fakeContext = buildFakeTuiContext({})
-  const renderedInputs: unknown[] = []
-  const slotDispose = registerStatusPanelSlot(fakeContext.context, (slotInput) => {
-    renderedInputs.push(slotInput)
-    return `rendered:${JSON.stringify(slotInput)}`
-  })
-  assert.ok(slotDispose !== undefined)
-  assert.equal(fakeContext.recordedSlotClaims.length, 1)
-
-  const slotClaim = fakeContext.recordedSlotClaims[0] as {
-    append: string
-    render: (slotInput: unknown) => unknown
-  }
-  assert.equal(slotClaim.append, "session.panel")
-  assert.equal(
-    slotClaim.render({ name: INSIGHT_STATUS_PANEL_NAME }),
-    'rendered:{"name":"insight-status"}',
-  )
-  assert.equal(renderedInputs.length, 1)
-
-  slotDispose?.()
-  assert.equal(fakeContext.slotDisposeCallCount.value, 1)
-})
-
-test("registerStatusPanelSlot degrades silently without ui.slot", () => {
-  const slotlessContext = buildFakeTuiContext({ includeSlot: false })
-  const slotDispose = registerStatusPanelSlot(slotlessContext.context, () => "unused")
-  assert.equal(slotDispose, undefined)
-  assert.equal(slotlessContext.recordedSlotClaims.length, 0)
 })
 
 /**
@@ -309,6 +224,7 @@ test("every registered command binds to undefined or a non-empty key", () => {
     runOpenDashboard: async () => true,
     runExport: async () => null,
     runRefresh: async () => true,
+    runStatusDialog: () => {},
   })
   assert.ok(commandsDispose !== undefined)
 
@@ -323,12 +239,4 @@ test("every registered command binds to undefined or a non-empty key", () => {
     )
   }
   commandsDispose?.()
-})
-
-test("shouldRenderStatusPanel only matches the insight panel name", () => {
-  assert.equal(shouldRenderStatusPanel({ name: INSIGHT_STATUS_PANEL_NAME }), true)
-  assert.equal(shouldRenderStatusPanel({ name: "usage-meter" }), false)
-  assert.equal(shouldRenderStatusPanel({}), false)
-  assert.equal(shouldRenderStatusPanel(null), false)
-  assert.equal(shouldRenderStatusPanel(undefined), false)
 })

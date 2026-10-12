@@ -2,9 +2,10 @@
  * Tests for /insight-refresh (v0.14.0): the TUI flavor must clear the
  * SERVER process's result cache via the loopback /api/refresh route —
  * never via a direct clearResultCache import (the flavors live in
- * different processes, so that would silently clear nothing). Both the
- * port reader and the fetch are injectable, so no real server or
- * storage is touched here.
+ * different processes, so that would silently clear nothing). The port
+ * is DISCOVERED by probing the 18789..18798 health range (the TUI cannot
+ * read the server's storage), and both the probe fetch and the refresh
+ * fetch are injectable, so no real server or socket is touched here.
  */
 
 import { test } from "node:test"
@@ -15,6 +16,10 @@ import {
   runRefreshCommand,
   type RefreshFetchResponse,
 } from "../src/tui/refresh-command.ts"
+import {
+  buildRecordingDashboardProbeFetch,
+  buildValidInsightHealthBody,
+} from "./helpers/fake-dashboard-probe.ts"
 
 interface CapturedToast {
   message: string
@@ -39,8 +44,18 @@ function buildToastCapturingContext(): {
   return { context, capturedToasts }
 }
 
-/** Fake port used throughout (fixture discipline: never a real bind). */
-const FIXTURE_SERVER_PORT = 18999
+/**
+ * Fake port discovered throughout (fixture discipline: inside the probe
+ * range, but the probe fetch never touches a real socket).
+ */
+const DISCOVERED_SERVER_PORT = 18791
+
+/** Probe fetch on which discovery finds DISCOVERED_SERVER_PORT alive. */
+function buildLiveServerProbeFetch() {
+  return buildRecordingDashboardProbeFetch({
+    [DISCOVERED_SERVER_PORT]: buildValidInsightHealthBody(),
+  })
+}
 
 function buildFakeRefreshFetchResponse(
   responseBody: unknown,
@@ -54,32 +69,38 @@ function buildFakeRefreshFetchResponse(
 }
 
 test("buildRefreshUrl targets the loopback refresh route of one bound port", () => {
-  assert.equal(buildRefreshUrl(FIXTURE_SERVER_PORT), `http://127.0.0.1:${FIXTURE_SERVER_PORT}/api/refresh`)
+  assert.equal(
+    buildRefreshUrl(DISCOVERED_SERVER_PORT),
+    `http://127.0.0.1:${DISCOVERED_SERVER_PORT}/api/refresh`,
+  )
 })
 
-test("runRefreshCommand reports the port-missing case with an error toast and never fetches", async () => {
+test("runRefreshCommand reports the probed range with an error toast and never fetches when no server answers", async () => {
   const { context, capturedToasts } = buildToastCapturingContext()
+  const { probeFetch } = buildRecordingDashboardProbeFetch({})
   let fetchCallCount = 0
   const commandResult = await runRefreshCommand(context, {
-    readPortImpl: async () => null,
+    probeFetch,
     fetchImpl: async () => {
       fetchCallCount += 1
       return buildFakeRefreshFetchResponse({ status: "ok", cleared: 0 })
     },
   })
   assert.equal(commandResult, false)
-  assert.equal(fetchCallCount, 0, "no port means no HTTP call at all")
+  assert.equal(fetchCallCount, 0, "no live server means no refresh call at all")
   assert.equal(capturedToasts.length, 1)
   assert.match(capturedToasts[0].message, /看板服务未启动/)
+  assert.match(capturedToasts[0].message, /127\.0\.0\.1:18789-18798 无健康响应/)
   assert.equal(capturedToasts[0].variant, "error")
 })
 
 test("runRefreshCommand toasts the evicted count on a successful loopback clear", async () => {
   const { context, capturedToasts } = buildToastCapturingContext()
+  const { probeFetch } = buildLiveServerProbeFetch()
   const fetchedUrls: string[] = []
   const fetchedSignals: unknown[] = []
   const commandResult = await runRefreshCommand(context, {
-    readPortImpl: async () => FIXTURE_SERVER_PORT,
+    probeFetch,
     fetchImpl: async (refreshUrl, requestInit) => {
       fetchedUrls.push(refreshUrl)
       fetchedSignals.push(requestInit?.signal)
@@ -87,7 +108,7 @@ test("runRefreshCommand toasts the evicted count on a successful loopback clear"
     },
   })
   assert.equal(commandResult, true)
-  assert.deepEqual(fetchedUrls, [`http://127.0.0.1:${FIXTURE_SERVER_PORT}/api/refresh`])
+  assert.deepEqual(fetchedUrls, [`http://127.0.0.1:${DISCOVERED_SERVER_PORT}/api/refresh`])
   assert.ok(
     fetchedSignals[0] === undefined || fetchedSignals[0] instanceof AbortSignal,
     "the timeout defense threads an AbortSignal (or undefined on platforms without AbortSignal.timeout)",
@@ -102,8 +123,9 @@ test("runRefreshCommand toasts the evicted count on a successful loopback clear"
 
 test("runRefreshCommand toasts an HTTP error and returns false on a non-200 response", async () => {
   const { context, capturedToasts } = buildToastCapturingContext()
+  const { probeFetch } = buildLiveServerProbeFetch()
   const commandResult = await runRefreshCommand(context, {
-    readPortImpl: async () => FIXTURE_SERVER_PORT,
+    probeFetch,
     fetchImpl: async () => buildFakeRefreshFetchResponse({ error: "unavailable" }, 503),
   })
   assert.equal(commandResult, false)
@@ -120,8 +142,9 @@ test("runRefreshCommand toasts a shape error and returns false on a malformed re
     null, // not even an object
   ]) {
     const { context, capturedToasts } = buildToastCapturingContext()
+    const { probeFetch } = buildLiveServerProbeFetch()
     const commandResult = await runRefreshCommand(context, {
-      readPortImpl: async () => FIXTURE_SERVER_PORT,
+      probeFetch,
       fetchImpl: async () => buildFakeRefreshFetchResponse(malformedBody),
     })
     assert.equal(commandResult, false)
@@ -149,8 +172,9 @@ test("runRefreshCommand swallows fetch/JSON failures with an error toast and nev
   ]
   for (const failingFetch of failingFetches) {
     const { context, capturedToasts } = buildToastCapturingContext()
+    const { probeFetch } = buildLiveServerProbeFetch()
     const commandResult = await runRefreshCommand(context, {
-      readPortImpl: async () => FIXTURE_SERVER_PORT,
+      probeFetch,
       fetchImpl: failingFetch,
     })
     assert.equal(commandResult, false)

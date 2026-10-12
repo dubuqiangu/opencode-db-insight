@@ -17,6 +17,7 @@ import {
   SESSION_NOT_FOUND_MESSAGE,
   type ApiRequestContext,
 } from "../src/web/api.ts"
+import { INSIGHT_SERVICE_NAME } from "../src/insight-service-identity.ts"
 import type { SqliteReadConnection } from "../src/db/types.ts"
 import { matchApiRoute } from "../src/web/router.ts"
 import { clearResultCache, resultCacheSize } from "../src/stats/cache.ts"
@@ -77,6 +78,7 @@ test("health answers 200 with dbStatus unavailable and the bound port while the 
   const apiResponse = handleApiRequest(requestContext!)
   assert.equal(apiResponse.statusCode, 200)
   assert.deepEqual(apiResponse.body, {
+    service: INSIGHT_SERVICE_NAME,
     status: "ok",
     version: INSIGHT_VERSION,
     port: 18789,
@@ -126,6 +128,7 @@ test("health reports dbStatus ok when the live SELECT 1 probe succeeds (P1-4)", 
 
   assert.equal(apiResponse.statusCode, 200)
   assert.deepEqual(apiResponse.body, {
+    service: INSIGHT_SERVICE_NAME,
     status: "ok",
     version: INSIGHT_VERSION,
     port: 18789,
@@ -148,6 +151,7 @@ test("health stays 200 but reports dbStatus unavailable when the probe fails (P1
 
   assert.equal(apiResponse.statusCode, 200)
   assert.deepEqual(apiResponse.body, {
+    service: INSIGHT_SERVICE_NAME,
     status: "ok",
     version: INSIGHT_VERSION,
     port: 18789,

@@ -1,53 +1,38 @@
 /** @jsxImportSource @opentui/solid */
 /**
  * opencode-db-insight TUI entry (DESIGN.md §8, M6): thin assembly only.
- * Command/slot registration lives in src/tui/command-registry.ts, the
- * panel refresh loop in src/tui/status-panel-controller.ts; this file just
- * wires them together and holds the one JSX render the slot needs.
+ * Command registration lives in src/tui/command-registry.ts, the status
+ * dialog lifecycle in src/tui/status-dialog.ts and its JSX in
+ * src/tui/status-dialog-render.tsx; this file just wires them together.
  */
-import { createSignal } from "solid-js"
 import { Plugin } from "@opencode/plugin/tui"
 
-import {
-  registerInsightTuiCommands,
-  registerStatusPanelSlot,
-  shouldRenderStatusPanel,
-} from "./tui/command-registry.ts"
-import { createStatusPanelController } from "./tui/status-panel-controller.ts"
+import { registerInsightTuiCommands } from "./tui/command-registry.ts"
+import { renderStatusDialog } from "./tui/status-dialog-render.tsx"
+import { createStatusDialog, registerStatusDialogKeymap } from "./tui/status-dialog.ts"
 
 export default Plugin.define({
   id: "opencode-db-insight",
   setup(context: any) {
-    // Reactive panel text: the slot render reads the signal, the controller
-    // pushes every (re)computed text into it.
-    const [statusPanelText, setStatusPanelText] = createSignal("db-insight: 初始化…")
-    const statusPanelController = createStatusPanelController({
-      onPanelTextChanged: (refreshedPanelText) => {
-        setStatusPanelText(refreshedPanelText)
-      },
-    })
+    // One setup-scoped dialog: its ESC/r modal keymap layer is registered
+    // once and stays dormant (enabled: false) while the dialog is closed.
+    const statusDialog = createStatusDialog(context, renderStatusDialog)
 
     const commandsDispose = registerInsightTuiCommands(context, {
-      // The refresh loop only starts once the panel is actually opened
-      // (P2-13) — plugin startup itself stays scan-free.
-      onStatusPanelOpened: () => {
-        statusPanelController.beginAutoRefresh()
+      runStatusDialog: () => {
+        statusDialog.open()
       },
     })
-    const slotDispose = registerStatusPanelSlot(context, (slotInput) =>
-      shouldRenderStatusPanel(slotInput) ? (
-        <box>
-          <text>{statusPanelText()}</text>
-        </box>
-      ) : (
-        <box></box>
-      ),
-    )
+    const statusKeymapDispose = registerStatusDialogKeymap(context, {
+      isActive: statusDialog.isOpen,
+      close: statusDialog.close,
+      refresh: statusDialog.refreshData,
+    })
 
     return () => {
       commandsDispose?.()
-      slotDispose?.()
-      statusPanelController.dispose()
+      statusKeymapDispose?.()
+      statusDialog.dispose()
     }
   },
 })

@@ -8,6 +8,36 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.16.0] - 2026-10-13 · 交互重做版：状态弹窗化 + 看板端口发现修复
+
+> 用户活体冒烟（重启 TUI 后实测）驱动的一版：四命令注册问题在 0.15.1 修复后，暴露出两个潜伏更深的问题——/insight 与 /insight-refresh 的跨进程 storage 通道自诞生起就不可能工作（TUI flavor 无 storage.get）；/insight-status 面板排版粗糙且无关闭途径。本版一并重做。经 ora-9 增量审查（P0=0）后发布。
+
+### Fixed · 看板端口发现（/insight、/insight-refresh 恒报「看板服务未启动」）
+- **根因**：TUI flavor 的 `Context.storage` 只有 `store/memory` 没有 `get`（宿主类型 node_modules/@opencode/plugin/dist/tui/context.d.ts:6-22），而读取实现只探测 `storage.get` → 恒 null；且 server 进程与 TUI 进程的 storage 是不同后端，跨进程 storage 通道本身不成立。测试 fake 曾用 server 形状 `{storage:{get}}` 掩盖此缺陷（与 0.15.1 的 bind 空串同类「宽松 fake 掩盖宿主形状」问题）。
+- **修法**：TUI 侧改为健康探测——server 健康响应增加 `service` 标识字段（防误报），新增 `src/tui/discover-dashboard-port.ts` 并发探测 127.0.0.1:18789..18798 的 GET /api/health（与 server EADDRINUSE 重试策略精确一致、有测试锁死），升序取首个命中；两命令改造 + 旧 storage 读取路径清理 + README 排障行按新机制改写（原归因已失实）。
+- 测试：fake TUI context 全部改为真实宿主形状（storage 无 get）；覆盖全段拒绝→报错、命中开 URL、外来服务串号跳过、响应形状校验、十口并发性、refresh 同理；红锚点验证「命令走旧 storage 路径则新测试必红」。
+
+### Changed · /insight-status 弹窗化重设计（新交互能力）
+- **session.panel 侧栏面板 → ui.dialog.show 弹窗**：弹窗无「打开面板收起 sidebar/断开 terminal」副作用；**ESC 关闭经自注册 modal keymap 层**（宿主自定义 dialog 内容不免费处理 ESC，按宿主 storybook 先例接线，enabled 窗口期由 Solid signal 驱动仅弹窗存活期为 true）；`r` 键就地刷新不重开；页脚固定「ESC 关闭 · r 刷新数据」提示。
+- **内容图表化**：今日概览大数字完整千分位 + 命中率 20 格带轨道进度条；模型 TOP5 **零截断**（列宽自适应最长 id，54 字符完整显示——旧 40 字符行宽截断差评根源已除）+ 14 格比例条按 web 面板 m1..m5 调色板逐行着色 + 数值/占比右对齐；近 7 日趋势 28 格条形图（旧 12 格的 2.3 倍）+ 日期等宽 + 今天高亮；配色全部取自 web 深色主题 tokens，无新造色。
+- **模块化**：`status-dialog.ts`（生命周期）/ `status-dialog-content.ts`（纯函数内容，零 JSX/零宿主 API/零 Date.now）/ `status-dialog-render.tsx`（唯一 JSX）；数据查询沿用 `status-panel-data.ts`；tui.tsx 保持纯装配。
+- **移除**：panel 路线整体下线（status-panel-text.ts、status-panel-controller.ts 含 60s 自动刷新循环、session.panel slot claim、test/status-panel.test.ts），grep 零残留；数据层行为口径迁移至 test/status-dialog-data.test.ts 保全。/insight-export 的 ui.dialog.select 未受影响。
+
+### Fixed · 审查处方（ora-9 P1/P2）
+- v0.11.0 时间炸弹测试：pinnedNowMs 硬编码绝对日期（窗口滑出后确定性红）→ 改相对 `Date.now()` + 新增窗口内部动态锚点断言 + CLOCK RULE 头注（禁绝对日期）。
+- open() 顺序缺陷（处方 P2#1）：show 能力检查提到全库扫描之前（无 ui.dialog 宿主零扫描）；show 抛异常时复位 open flag（原缺陷：flag 卡 true → modal 键层空转激活、r 键劫持按键每按一次全库扫描）。
+- teardown 无条件 clear（处方 P2#2）：改为仅本弹窗存活时才 clear，不误杀 /insight-export select 或他插件弹窗。
+- fake 键层返回值背离（处方 P2#4）：补 void 返回的生产路径覆盖。
+- 文档对账（处方 P1#2）：DESIGN.md §8/§9 五处失实（panel 三件套/storage 读端口/session.panel 路线等）与 src/index.ts 头注释（端口写入「for the M6 TUI commands」已无读者）按探测与弹窗实况改写。
+
+### Tests
+- 374 → **397**（+23 净增）：端口探测 9 + 双命令改造/宿主形状 fake 重构 + 弹窗内容 18 + 弹窗生命周期 11 + 数据层迁移 2 + registry 重写 5 + 处方回归 4；红→绿验证 5 处在案（探测旧路径、千分位正则、窗口内部锚点、show 异常复位、clear 守卫）。
+
+### Open（不阻塞发布）
+- **真机冒烟（用户侧，一分钟）**：打开弹窗 → ESC 关 → r 刷新 → 再 ESC——397 测试全部跑在 fake 宿主上，最承重假设「自定义 dialog 使宿主进入 modal 输入模式使键层可达」需真机确认（ora-9 P1#3）。
+- 挂账下版（ora-9 P2）：多实例端口歧义消歧（health 加 per-instance 标识）、status-panel-data.ts 机械改名 status-dialog-data、index.ts 端口写入死代码一次性清理、趋势行空转长度断言收紧。
+
+
 ## [0.15.3] - 2026-10-11 · 测试加固版：v0.1.0 存量面板测试面全量入库 + verify-install 注册失败检查
 
 > 审计遗留队列第二波：审计 ⚠️#2 完整销账（0.15.2 已补 tooltip/kpi-card，本版补齐其余全部存量面板）+ 审计建议项 verify-install 宿主日志检查落地。全部改动可溯源至 ora-8 审计处方（处方型，免下一代审查）。

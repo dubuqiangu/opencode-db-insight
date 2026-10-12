@@ -50,7 +50,7 @@ opencode plugin remove opencode-db-insight # 卸载
 
 | 症状 | 原因与处理 |
 |---|---|
-| `/insight` 提示「看板服务未启动」 | server 端未把端口写入 storage——通常是插件刚安装/更新还没随本会话启动：**重启 OpenCode**；仍不行先 `opencode plugin list` 确认插件已启用 |
+| `/insight` 提示「看板服务未启动」 | TUI 在 `127.0.0.1:18789-18798` 段逐端口做健康探测（`GET /api/health`，校验响应中的服务标识）均未命中——即 server flavor 没在本会话进程中运行：通常是插件刚安装/更新还没随宿主启动，**重启 OpenCode**；仍不行先 `opencode plugin list` 确认插件已启用，再 `curl http://127.0.0.1:18789/api/health` 看 server 是否存活、端口是否被占用顶到了 +1 段 |
 | 面板显示「db-insight: 数据不可用」 | `opencode.db` 不存在（OpenCode 尚未产生历史数据）或运行时缺 `node:sqlite`；用 health 路由 `curl http://127.0.0.1:18789/api/health` 看 `dbStatus` |
 | 看板某会话 404「session not found in current tables」 | 2026-09-23 之前的旧表（`part`/`message`）会话**不在**统计与回放范围（避免双计），属预期行为 |
 | 某模型命中率恒为 0% | 部分通道（provider 侧）不上报缓存数据，看板模型行已标注，非故障 |

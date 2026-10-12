@@ -1,8 +1,13 @@
 /**
  * opencode-db-insight server plugin entry (DESIGN.md §3/§9).
- * Pure assembly: start the insight server, publish its actual port via the
- * plugin storage (for the M6 TUI commands), tear everything down on cleanup.
+ * Pure assembly: start the insight server, tear everything down on cleanup.
  * No business logic lives here.
+ *
+ * The storage port write below is a legacy leftover with no reader: the
+ * TUI plugin flavor runs in a different process with a different storage
+ * backend and now discovers the port via loopback health probing
+ * (src/tui/discover-dashboard-port.ts, 18789..18798 /api/health). The
+ * write stays for one more release and will be dropped later.
  */
 
 import { Plugin } from "@opencode/plugin"
@@ -11,7 +16,8 @@ import { startInsightServer } from "./web/server.ts"
 
 /** storage key holding a user override for the opencode.db path (DESIGN §4). */
 const DATABASE_PATH_STORAGE_KEY = "insight-db-path"
-/** storage key publishing the actually bound port for TUI commands (DESIGN §9). */
+/** Legacy storage key holding the actually bound port — no reader since the
+ * TUI flavor moved to health probing (DESIGN §9); kept briefly for cleanup. */
 const SERVER_PORT_STORAGE_KEY = "insight-server-port"
 
 export default Plugin.define({

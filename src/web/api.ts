@@ -9,12 +9,15 @@
  * - session present in session_v2 but without messages →
  *   404 {error: "session exists but has no messages"} (P2-7);
  * - /api/health always answers 200 and carries dbStatus, derived from a
- *   live SELECT 1 probe rather than connection-null-ness (P1-4);
+ *   live SELECT 1 probe rather than connection-null-ness (P1-4), plus the
+ *   service identity the TUI port discovery validates against
+ *   (src/tui/discover-dashboard-port.ts);
  * - /api/refresh always answers 200 too (v0.14.0): clearing the
  *   process-local result cache needs no database and no cache slot.
  */
 
 import type { SessionMessageRecord, SessionSummary, SqliteReadConnection } from "../db/types.ts"
+import { INSIGHT_SERVICE_NAME } from "../insight-service-identity.ts"
 import {
   DEFAULT_SESSION_SORT_KEY,
   DEFAULT_SESSION_SORT_ORDER,
@@ -56,7 +59,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.15.3"
+export const INSIGHT_VERSION = "0.16.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -213,6 +216,10 @@ function healthResponse(requestContext: ApiRequestContext): ApiResponsePayload {
   return {
     statusCode: 200,
     body: {
+      // Service identity the TUI-side port discovery checks — the marker
+      // that separates this server from any foreign process answering in
+      // the 18789..18798 probe range.
+      service: INSIGHT_SERVICE_NAME,
       status: "ok",
       version: INSIGHT_VERSION,
       port: requestContext.serverPort,

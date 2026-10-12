@@ -1,7 +1,10 @@
 /**
- * /insight command logic (DESIGN.md §8, task T6.1): read the port the server
- * plugin published in storage, open the dashboard in the platform browser,
- * and toast the URL (or a manual-open hint when anything fails).
+ * /insight command logic (DESIGN.md §8, task T6.1): discover the port the
+ * server flavor bound by probing 127.0.0.1:18789..18798 for our health
+ * endpoint (the TUI process cannot read the server's storage — see
+ * discover-dashboard-port.ts), open the dashboard in the platform
+ * browser, and toast the URL (or a manual-open hint when anything
+ * fails).
  *
  * `buildOpenBrowserCommand` is pure and unit-tested; the exec/toast side
  * effects are injectable so tests never spawn a real browser.
@@ -10,7 +13,12 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
-import { readInsightServerPort, showInsightToast } from "./tui-context.ts"
+import {
+  DASHBOARD_NOT_RUNNING_MESSAGE,
+  discoverInsightDashboardPort,
+  type HealthProbeFetch,
+} from "./discover-dashboard-port.ts"
+import { showInsightToast } from "./tui-context.ts"
 
 /** Host platform categories with a distinct "open a URL" convention. */
 export type BrowserOpenPlatform = "windows" | "darwin" | "xdg"
@@ -79,21 +87,26 @@ export interface OpenDashboardCommandDependencies {
   platformValue?: string
   /** Override the actual process spawn (tests stub). */
   executeCommand?: (openCommand: BrowserOpenCommand) => Promise<void>
+  /** Fetch the health probes use for port discovery (tests inject fakes). */
+  probeFetch?: HealthProbeFetch
 }
 
 /**
- * Run /insight: read the published port, open the dashboard, toast the URL.
- * Returns true when the browser command succeeded; every failure path toasts
- * a hint and returns false — the command never throws.
+ * Run /insight: discover the server port via loopback health probing,
+ * open the dashboard, toast the URL. Returns true when the browser
+ * command succeeded; every failure path toasts a hint and returns false —
+ * the command never throws.
  */
 export async function runOpenDashboardCommand(
   context: unknown,
   dependencies: OpenDashboardCommandDependencies = {},
 ): Promise<boolean> {
   try {
-    const serverPort = await readInsightServerPort(context)
+    const serverPort = await discoverInsightDashboardPort({
+      fetchImpl: dependencies.probeFetch,
+    })
     if (serverPort === null) {
-      showInsightToast(context, "db-insight: 看板服务未启动（storage 中无端口记录）", "error")
+      showInsightToast(context, DASHBOARD_NOT_RUNNING_MESSAGE, "error")
       return false
     }
 

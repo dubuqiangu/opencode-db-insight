@@ -1,11 +1,13 @@
 /**
- * Command and slot registration for the insight TUI (DESIGN.md §8, M6).
+ * Command registration for the insight TUI (DESIGN.md §8, M6).
  *
  * Everything except the JSX render lambda lives here so tests can drive a
- * fake context: the four slash commands, the panel-open call behind
- * /insight-status, and the defensive session.panel slot claim.
+ * fake context: the four slash commands, with /insight-status delegating to
+ * the status dialog runner wired by tui.tsx (the retired sidebar-panel
+ * route — ui.panel.open + the session.panel slot claim — is gone as of
+ * v0.16.0; the command now opens a ui.dialog).
  *
- * All context access is defensive: a host without keymap / ui.panel / ui.slot
+ * All context access is defensive: a host without keymap / ui.dialog
  * degrades silently (T6.3) — a TUI must never crash because a plugin
  * expected an API the host does not ship.
  */
@@ -14,23 +16,6 @@ import { runExportCommand } from "./export-command.ts"
 import { runOpenDashboardCommand } from "./open-dashboard-command.ts"
 import { runRefreshCommand } from "./refresh-command.ts"
 import { showInsightToast } from "./tui-context.ts"
-
-/** Panel content name /insight-status opens via ui.panel.open. */
-export const INSIGHT_STATUS_PANEL_NAME = "insight-status"
-
-/** slot input shape we read in shouldRenderStatusPanel / the render guard. */
-interface SessionPanelSlotInput {
-  name?: unknown
-}
-
-/**
- * Pure: should this slot render claim draw the insight panel?
- * Only when the host selected our panel name (ui.panel.open sets it).
- */
-export function shouldRenderStatusPanel(slotInput: unknown): boolean {
-  const inputRecord = slotInput as SessionPanelSlotInput | null | undefined
-  return inputRecord?.name === INSIGHT_STATUS_PANEL_NAME
-}
 
 /** Injectable command runners; tests replace them to observe calls. */
 export interface InsightTuiCommandDependencies {
@@ -44,11 +29,11 @@ export interface InsightTuiCommandDependencies {
    */
   runRefresh?: (context: unknown) => Promise<boolean>
   /**
-   * Notified when /insight-status successfully opened the panel — the
-   * status-panel controller uses this to start its lazy refresh loop
-   * (P2-13). Not called when the host refuses the panel.
+   * Opens the /insight-status dialog. tui.tsx wires this to the shared
+   * setup-scoped StatusDialog (its ESC/r modal keymap layer is registered
+   * once at setup), so the dialog cannot be built per invocation here.
    */
-  onStatusPanelOpened?: () => void
+  runStatusDialog?: (context: unknown) => void
 }
 
 /**
@@ -63,7 +48,13 @@ export function registerInsightTuiCommands(
   const openDashboardRunner = dependencies.runOpenDashboard ?? runOpenDashboardCommand
   const exportRunner = dependencies.runExport ?? runExportCommand
   const refreshRunner = dependencies.runRefresh ?? runRefreshCommand
-  const onStatusPanelOpened = dependencies.onStatusPanelOpened
+  // Without an injected dialog runner there is no ESC-wired dialog to open;
+  // a silent no-op would hide the wiring bug, so complain loudly instead.
+  const statusDialogRunner =
+    dependencies.runStatusDialog ??
+    (() => {
+      showInsightToast(context, "db-insight: 用量弹窗未装配", "error")
+    })
 
   try {
     const contextRecord = context as
@@ -87,11 +78,11 @@ export function registerInsightTuiCommands(
         },
         {
           id: "opencode-db-insight.status",
-          title: "显示 db-insight 用量面板",
+          title: "显示 db-insight 用量弹窗",
           palette: true,
           slash: { name: "insight-status", aliases: [] },
           run: () => {
-            openStatusPanel(context, onStatusPanelOpened)
+            statusDialogRunner(context)
           },
         },
         {
@@ -126,71 +117,6 @@ export function registerInsightTuiCommands(
     // swallowed registration failure must be diagnosable — a layer() shape
     // rejection otherwise makes the slash commands vanish without a trace.
     console.error("db-insight: TUI 命令注册失败", registrationError)
-    return undefined
-  }
-}
-
-/**
- * Open (or complain about) the insight status panel; never throws. On a
- * successful open the optional onStatusPanelOpened callback fires so the
- * panel controller can begin its lazy refresh loop (P2-13).
- */
-function openStatusPanel(context: unknown, onStatusPanelOpened?: () => void): void {
-  try {
-    const contextRecord = context as
-      | { ui?: { panel?: { open?: (panelName: string) => boolean } } }
-      | null
-      | undefined
-    const panelOpener = contextRecord?.ui?.panel?.open
-    if (typeof panelOpener !== "function") {
-      showInsightToast(context, "db-insight: 当前界面不支持面板", "error")
-      return
-    }
-    const openedPanel = panelOpener.call(contextRecord?.ui?.panel, INSIGHT_STATUS_PANEL_NAME)
-    if (openedPanel === false) {
-      showInsightToast(context, "db-insight: 当前界面不支持面板", "error")
-      return
-    }
-    try {
-      onStatusPanelOpened?.()
-    } catch {
-      // A broken controller callback must never break the command.
-    }
-  } catch {
-    showInsightToast(context, "db-insight: 当前界面不支持面板", "error")
-  }
-}
-
-/**
- * Claim the session.panel slot with an injected render function.
- * Returns the slot dispose, or undefined when the host ships no ui.slot
- * (sidebar-less environment → silently not registered, T6.2).
- */
-export function registerStatusPanelSlot(
-  context: unknown,
-  renderPanel: (slotInput: unknown) => unknown,
-): (() => void) | undefined {
-  try {
-    const contextRecord = context as
-      | { ui?: { slot?: (claim: unknown) => () => void } }
-      | null
-      | undefined
-    const slotRegistrar = contextRecord?.ui?.slot
-    if (typeof slotRegistrar !== "function") return undefined
-
-    const slotDispose = slotRegistrar.call(contextRecord?.ui?.slot, {
-      append: "session.panel",
-      render: (slotInput: unknown) => renderPanel(slotInput),
-    })
-    return typeof slotDispose === "function"
-      ? () => {
-          slotDispose()
-        }
-      : undefined
-  } catch (slotRegistrationError) {
-    // Same contract as the command registration: degrade, never throw,
-    // but leave a diagnosable trace in the host log.
-    console.error("db-insight: TUI 状态面板插槽注册失败", slotRegistrationError)
     return undefined
   }
 }

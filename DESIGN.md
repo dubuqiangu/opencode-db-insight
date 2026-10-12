@@ -120,10 +120,12 @@ opencode-db-insight/
 │  ├─ export/                    # Markdown 导出渲染（角色分节 / 格式化辅助）
 │  └─ tui/                       # TUI 命令实现
 │     ├─ command-registry.ts     #   斜杠命令注册表
-│     ├─ status-panel-{data,text,controller}.ts  #   /insight-status 面板三件套
+│     ├─ status-dialog.ts / status-dialog-content.ts / status-dialog-render.tsx
+│     │                       #   /insight-status 弹窗三模块：生命周期 / 内容行构建 / JSX 渲染
 │     ├─ open-dashboard-command.ts / export-command.ts
 │     ├─ refresh-command.ts      #   /insight-refresh：跨进程回环清 server 缓存（v0.14.0）
-│     └─ tui-context.ts         #   storage 读取（端口 / 数据库路径）
+│     ├─ discover-dashboard-port.ts  # 看板端口探测：18789..18798 并发 GET /api/health（v0.16.x TUI 侧发现机制）
+│     └─ tui-context.ts         #   宿主 toast 降级助手
 ├─ test/                         # 347 用例：模块测试 + 集成 / 韧性 / SQL 对账 + 行为 / 目录 / 排序 / CSV / 搜索 / 刷新等回归面（随版本持续增补）
 │  └─ helpers/                   # fake-insight-db / step 工厂
 ├─ DESIGN.md / tasks.md / CHANGELOG.md / README.md
@@ -189,13 +191,13 @@ opencode-db-insight/
 ## 8. TUI 面
 
 - `/insight`：打开看板（Windows `start` / macOS `open` / Linux `xdg-open`），并在 toast 显示实际端口；
-- `/insight-status` 面板（`session.panel` slot；宿主无 panel/slot API 时降级为 toast 提示「当前界面不支持面板」）：今日总量、今日命中率、模型 TOP5、7 日趋势字符条形图——视觉语言对齐 usage-meter（图标行、静默降级）；
+- `/insight-status` 用量弹窗（`ui.dialog.show` + size "large"；宿主无 ui.dialog 时降级为 toast 提示「当前界面不支持弹窗」）：今日总量、今日命中率、模型 TOP5、7 日趋势字符条形图——视觉语言对齐 usage-meter（图标行、静默降级）；ESC（关闭）/ r（按需重扫一次）由 setup 时注册一次的 **modal keymap 层**自接线，其 `enabled` 信号仅在弹窗存活窗口期为真（宿主 `keymap.layer` 返回 void、无手动卸载，靠 enabled 窗口期收工）；
 - `/insight-export [会话ID]`：无参数时弹出 `dialog.select` 列最近 20 个会话；导出到**当前工作目录** `./insight-exports/<YYYYMMDD-HHmmss>-<slug>.md`，角色分节（`## 🧑 用户` / `## 🤖 助手` / reasoning 引用块 / 工具调用代码块）。
-- `/insight-refresh`（v0.14.0，第 4 条命令）：清空 **server 进程**内 60s 统计结果缓存。TUI 与 server 是两个插件 flavor、两个进程——命令内直接 import `clearResultCache` 清的只会是 TUI 进程自己的空 Map（静默 no-op），故走**跨进程 fetch 回环**：读 storage 端口 → `GET http://127.0.0.1:{port}/api/refresh`（约 5s 超时防御）；成功 toast「已清除 N 条统计缓存（看板刷新页面后生效）」，端口缺失/超时/非 200/坏 JSON 全降级 error toast，永不抛。
+- `/insight-refresh`（v0.14.0，第 4 条命令）：清空 **server 进程**内 60s 统计结果缓存。TUI 与 server 是两个插件 flavor、两个进程——命令内直接 import `clearResultCache` 清的只会是 TUI 进程自己的空 Map（静默 no-op），故走**跨进程 fetch 回环**：探测看板端口（并发 `GET http://127.0.0.1:18789..18798/api/health`，仅认带本插件服务标识的响应，见 src/tui/discover-dashboard-port.ts）→ `GET http://127.0.0.1:{port}/api/refresh`（约 5s 超时防御）；成功 toast「已清除 N 条统计缓存（看板刷新页面后生效）」，无响应/超时/非 200/坏 JSON 全降级 error toast，永不抛。
 
 ## 9. 生命周期与安全
 
-- server 插件 `setup()` 内启动 HTTP 服务，`teardown` 关闭；端口默认 `18789`，被占用时自动 +1 重试（最多 10 次），实际端口写入 storage 供 TUI 读取；
+- server 插件 `setup()` 内启动 HTTP 服务，`teardown` 关闭；端口默认 `18789`，被占用时自动 +1 重试（最多 10 次）；TUI 侧通过 18789..18798 的 `/api/health` 健康探测发现端口（src/tui/discover-dashboard-port.ts），server 侧将实际端口写入 storage 为**遗留保留——已无读者**（后续版本清理）；
 - 仅绑定 `127.0.0.1`，不对外网暴露；无鉴权（本机单人使用）；
 - DB 连接只读；API 不返回凭据类表（`credential` / `account` 等绝不触碰）；
 - 导出文件可能含会话内容：导出落在运行 OpenCode 时的工作目录 `./insight-exports/` 下，README 提示注意敏感信息后再分享。

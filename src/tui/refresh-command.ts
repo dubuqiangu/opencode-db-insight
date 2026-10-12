@@ -8,7 +8,8 @@
  * process. A direct `import { clearResultCache }` from here would clear
  * the TUI process's own (empty) Map: a silent no-op. The correct route
  * is loopback HTTP — GET /api/refresh on the port the server flavor
- * published in storage, which clears the cache where it actually
+ * actually bound, discovered by probing the 18789..18798 health range
+ * (discover-dashboard-port.ts), which clears the cache where it actually
  * lives.
  *
  * The dashboard page has no auto-polling, so the success toast tells
@@ -19,7 +20,12 @@
  * path toasts a hint and returns false.
  */
 
-import { readInsightServerPort, showInsightToast } from "./tui-context.ts"
+import {
+  DASHBOARD_NOT_RUNNING_MESSAGE,
+  discoverInsightDashboardPort,
+  type HealthProbeFetch,
+} from "./discover-dashboard-port.ts"
+import { showInsightToast } from "./tui-context.ts"
 
 /** Refresh request budget (v0.14.0); mirrors data-source.js's 5s gate. */
 const REFRESH_REQUEST_TIMEOUT_MS = 5_000
@@ -61,8 +67,8 @@ export type RefreshFetch = (
 export interface RefreshCommandDependencies {
   /** Fetch implementation that reaches the loopback refresh route. */
   fetchImpl?: RefreshFetch
-  /** Port reader override (defaults to readInsightServerPort). */
-  readPortImpl?: (context: unknown) => Promise<number | null>
+  /** Fetch the health probes use for port discovery (tests inject fakes). */
+  probeFetch?: HealthProbeFetch
 }
 
 /** Wire shape of GET /api/refresh, as far as the toast needs it. */
@@ -72,22 +78,23 @@ interface RefreshResponseBody {
 }
 
 /**
- * Run /insight-refresh: read the published port, call the loopback
- * refresh route, toast the evicted entry count. Returns true when the
- * server reported a successful clear; every failure path (no port,
- * timeout, non-200, malformed body) toasts an error and returns false —
- * the command never throws.
+ * Run /insight-refresh: discover the server port via loopback health
+ * probing, call the loopback refresh route, toast the evicted entry
+ * count. Returns true when the server reported a successful clear; every
+ * failure path (no live server, timeout, non-200, malformed body) toasts
+ * an error and returns false — the command never throws.
  */
 export async function runRefreshCommand(
   context: unknown,
   dependencies: RefreshCommandDependencies = {},
 ): Promise<boolean> {
   try {
-    const readServerPort = dependencies.readPortImpl ?? readInsightServerPort
     const fetchImpl = dependencies.fetchImpl ?? fetch
-    const serverPort = await readServerPort(context)
+    const serverPort = await discoverInsightDashboardPort({
+      fetchImpl: dependencies.probeFetch,
+    })
     if (serverPort === null) {
-      showInsightToast(context, "db-insight: 看板服务未启动（storage 中无端口记录）", "error")
+      showInsightToast(context, DASHBOARD_NOT_RUNNING_MESSAGE, "error")
       return false
     }
 

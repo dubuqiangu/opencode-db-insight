@@ -318,7 +318,7 @@ export function createFakeInsightDatabase(
         all: (...parameters: unknown[]) => {
           const messageFixtures = isPerSessionQuery
             ? scenario.messagesBySessionId[String(parameters[0] ?? "")] ?? []
-            : // The status-panel scan asks for every assistant message with
+            : // The status-dialog scan asks for every assistant message with
               // no session filter; the SQL itself selects type = 'assistant'.
               Object.values(scenario.messagesBySessionId)
                 .flat()
