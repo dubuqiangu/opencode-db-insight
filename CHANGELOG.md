@@ -8,6 +8,13 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.16.1] - 2026-10-13 · 安装修复：钉死 @opencode/plugin 依赖
+
+- **背景**：0.16.0 发布后 `opencode plugin update` 失败（NpmInstallFailedError）。手动 npm 探针取到真实根因：`ETARGET — No matching version found for @opentui/core@0.6.2`——我们的直接依赖声明为 `@opencode/plugin: latest`，latest 现解析到 2.0.27，其依赖树深处要求 `@opentui/core@0.6.2`，而 npm 上最高只发布到 0.6.1（上游断链发布）。0.15.x 时代能装上纯属缓存幸运，浮动 `latest` 使每次安装都暴露在上游发布质量风险之下。
+- **修法**：`@opencode/plugin` 钉死为 `2.0.23`（本地开发与 397 项测试全程基于该版本验证，宿主 2.0.27 二进制内的 TUI API 面已由侦察定案兼容）；`INSIGHT_VERSION` 同步 0.16.1，package-lock 刷新。
+- **教训**（固化为规则）：运行时依赖禁用 `latest` 浮动标签——发布物的可安装性必须是确定性的，上游断链一次就够堵死所有新装。
+
+
 ## [0.16.0] - 2026-10-13 · 交互重做版：状态弹窗化 + 看板端口发现修复
 
 > 用户活体冒烟（重启 TUI 后实测）驱动的一版：四命令注册问题在 0.15.1 修复后，暴露出两个潜伏更深的问题——/insight 与 /insight-refresh 的跨进程 storage 通道自诞生起就不可能工作（TUI flavor 无 storage.get）；/insight-status 面板排版粗糙且无关闭途径。本版一并重做。经 ora-9 增量审查（P0=0）后发布。
