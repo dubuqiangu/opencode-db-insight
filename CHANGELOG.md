@@ -8,6 +8,28 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.16.2] - 2026-10-13 · 安装修复（彻底）：vendor define + 全依赖面钉死
+
+> 0.16.1 钉死直接依赖后 `opencode plugin update` 仍失败——tarball 干净安装探针追出第二、三层根因，本版把安装面收缩到镜像稳定的最小集。
+
+### 根因修正（推翻 0.16.1 的「上游断链」归因）
+- 真实根因是**本机 npm 走 npmmirror 镜像 + 我们依赖面浮动**的复合：`@opentui/core@0.6.2` 与 `@aws-sdk/credential-provider-web-identity@3.972.80` 在 registry.npmjs.org 上**都存在**（已直查核实），是镜像没同步到。上游没断，断的是「浮动范围 × 镜像滞后」的组合。
+- 第一层（0.16.1 已修）：`@opencode/plugin: latest` 浮动 → 解析到 2.0.27 新树。
+- 第二层：peerDependencies 也是浮动（`>=0.5.8`）→ `@opentui/solid` 解析到 0.6.2，它要求 `@opentui/core@0.6.2`（镜像缺失）→ ETARGET。
+- 第三层：即使前两层钉死，`@opencode/plugin@2.0.23` 自身的深树（effect/AI-SDK/@aws-sdk 链）里仍有浮动范围，新解析撞上镜像缺 `@aws-sdk/...@3.972.80` → ETARGET。结论：**只要运行时依赖里有深浮动树，镜像滞后一天就堵死一次安装**，逐个钉浮动范围是打地鼠。
+
+### 修法（安装面最小化）
+- **vendor `Plugin.define`**：上游 define 是恒等函数，宿主只校验 default export 的 `{ id, setup }` 形状（二进制实证）。新增 `src/plugin-definition.ts`（`defineInsightPlugin` 恒等助手），两个入口改用它——**`@opencode/plugin` 整棵深树从安装面消失**（effect/AI-SDK/@aws-sdk 不再被安装），降级为 devDependencies 仅供本地类型与测试。
+- **peerDependencies 全钉死**到本地验证过的匹配集：`@opentui/core@0.5.14`、`@opentui/solid@0.5.14`（两者互为精确配对，双双在镜像中存在）、`solid-js@1.9.12`——397 项测试全程基于该集验证。
+- **推送前新增安装性门禁**：`npm pack` → 干净目录安装 tarball，必须全树解析成功才算可发布（本轮起固化；0.16.0/0.16.1 均因缺此门禁带病发布）。
+
+### 环境事实（记入台账，非本仓库可控）
+- npm 安装会**向上找最近 package.json 作为项目根**：本机家目录（`%USERPROFILE%\package.json`）恰有一份，而宿主插件缓存戳目录（`~\.cache\opencode\npm\...\<epoch>\`）没有自己的 package.json——即宿主每次插件安装都会把家目录依赖树合并进解析。家目录 package.json 一旦被污染会拖炸宿主全部插件更新（本轮探针曾写入 `file:` 引用，已清理还原并做了带时间戳的 `.bak` 备份）。
+
+### Tests
+- 397/397 全绿（vendoring 为恒等替换，零行为变化；`check` exit 0）。server-resilience 的 P2-2 用例在全量并发下有一次时序抖动挂红，单文件重跑与全量复跑均绿——与改动无关，挂账观察。
+
+
 ## [0.16.1] - 2026-10-13 · 安装修复：钉死 @opencode/plugin 依赖
 
 - **背景**：0.16.0 发布后 `opencode plugin update` 失败（NpmInstallFailedError）。手动 npm 探针取到真实根因：`ETARGET — No matching version found for @opentui/core@0.6.2`——我们的直接依赖声明为 `@opencode/plugin: latest`，latest 现解析到 2.0.27，其依赖树深处要求 `@opentui/core@0.6.2`，而 npm 上最高只发布到 0.6.1（上游断链发布）。0.15.x 时代能装上纯属缓存幸运，浮动 `latest` 使每次安装都暴露在上游发布质量风险之下。

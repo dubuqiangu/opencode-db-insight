@@ -5,13 +5,13 @@
  * dialog lifecycle in src/tui/status-dialog.ts and its JSX in
  * src/tui/status-dialog-render.tsx; this file just wires them together.
  */
-import { Plugin } from "@opencode/plugin/tui"
+import { defineInsightPlugin } from "./plugin-definition.ts"
 
 import { registerInsightTuiCommands } from "./tui/command-registry.ts"
 import { renderStatusDialog } from "./tui/status-dialog-render.tsx"
 import { createStatusDialog, registerStatusDialogKeymap } from "./tui/status-dialog.ts"
 
-export default Plugin.define({
+export default defineInsightPlugin({
   id: "opencode-db-insight",
   setup(context: any) {
     // One setup-scoped dialog: its ESC/r modal keymap layer is registered

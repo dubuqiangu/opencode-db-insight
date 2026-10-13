@@ -10,7 +10,7 @@
  * write stays for one more release and will be dropped later.
  */
 
-import { Plugin } from "@opencode/plugin"
+import { defineInsightPlugin } from "./plugin-definition.ts"
 
 import { startInsightServer } from "./web/server.ts"
 
@@ -20,7 +20,7 @@ const DATABASE_PATH_STORAGE_KEY = "insight-db-path"
  * TUI flavor moved to health probing (DESIGN §9); kept briefly for cleanup. */
 const SERVER_PORT_STORAGE_KEY = "insight-server-port"
 
-export default Plugin.define({
+export default defineInsightPlugin({
   id: "opencode-db-insight",
   async setup(context) {
     const storedDatabasePath = await context.storage.get(DATABASE_PATH_STORAGE_KEY)
