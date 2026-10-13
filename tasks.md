@@ -386,3 +386,29 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 远端落位：master force-with-lease 推送（dfb9cb1）+ v0.15.2/v0.15.3 tag 重打（173b51b/af176f0）+ ls-remote 核实；v0.15.0/v0.15.1 tag 未动；本地 reflog expire + gc --prune=now，含用户名的旧提交对象从本地对象池彻底清除（loose=0）
 - [x] 宿主重装：plugin update 至新哈希，verify-install 7/7 PASS（0.15.3 @ dfb9cb1，src 67/test 37 镜像保持）；npm test 374/374 + check 0
 - [x] 教训固化（三条，全部当场生效）：① 台账/文档写入一律单引号 here-string，杜绝变量静默展开；② 敏感扫描排除项按文件（package-lock.json）不按行内容——按行排除会制造「同行兼提排除项与污染」盲区；③ 扫描与推送永不串进同一条命令（本次事故直接诱因：扫描报警被链式 push 吞掉）
+
+## v0.16.0 状态弹窗化 + 端口发现修复（push #38，2026-10-13，fix-25/fix-26 + ora-9 审查）
+
+- [x] 需求（用户原话）：/insight-status 面板改弹窗样式 + 图表化 + ESC 可关闭；修 /insight、/insight-refresh 报「看板服务未启动（storage 中无端口记录）」
+- [x] 实施：status-dialog 三模块（content.ts / render.tsx + ESC modal 键层 + r 刷新键）+ discover-dashboard-port（18789..18798 逐端口 /api/health 探测）
+- [x] ora-9 全量审查：P0=0；处方型修复（P1#2 文档 + P2#1/#2/#4 行为缺陷）随 fix-26 落地，免下一代审查（红→绿 + 回归锁）
+- [x] 验证：397/397 绿 + check 0 + verify-install 7/7 PASS
+- [x] 发布 4f8f181 + tag v0.16.0 远端已核实；但 `opencode plugin update` 失败（NpmInstallFailedError）——引出 0.16.1/0.16.2 安装修复链
+- [ ] 真机 ESC/r 冒烟待用户活体验证（ora-9 P1#3 唯一遗留承重假设：自定义 dialog 使宿主进入 modal 输入模式使键层可达）
+
+## v0.16.1 安装修复（第一层，push #39，2026-10-13）
+
+- [x] plugin update 失败 → 手动 npm 探针取到真实报错 ETARGET @opentui/core@0.6.2 → 当时归因为「上游断链发布」（后被 0.16.2 探针推翻）
+- [x] 修法：@opencode/plugin 钉死 2.0.23；INSIGHT_VERSION 同步 0.16.1，lock 刷新；发布 dc260ea + tag
+- [x] plugin update 仍失败 → tarball 干净安装探针追出第二、三层根因（0.16.2 素材）；教训：只钉直接依赖、peer 与深树仍浮动 = 打地鼠
+
+## v0.16.2 依赖面手术 + 家目录污染清理（push #40，2026-10-13，orchestrator 直养）
+
+- [x] 根因更正：`--registry https://registry.npmjs.org` 直查证实「缺失」版本（@opentui/core@0.6.2、@aws-sdk/credential-provider-web-identity@3.972.80）都存在——真根因 = 本机 npmmirror 镜像同步滞后 × 我们依赖面浮动；0.16.1 的「上游断链」系误诊，CHANGELOG 已更正
+- [x] 手术：vendor define（src/plugin-definition.ts defineInsightPlugin，恒等函数 + 宿主只校验 default export {id,setup} 形状，二进制实证）→ @opencode/plugin 移 devDependencies（2.0.23 仅类型/测试）；peerDependencies 三钉死 @opentui/core@0.5.14 + @opentui/solid@0.5.14（精确配对）+ solid-js@1.9.12——effect/AI-SDK/@aws-sdk 深树从安装面消失（105 包小集，全镜像稳定）
+- [x] 门禁固化：npm pack → 干净目录 tarball 安装为推送前必过项（本轮 PASS；0.16.0/0.16.1 均因缺此门禁带病发布）
+- [x] 环境事实（非仓库可控）：npm 安装向上找最近 package.json 当项目根——宿主插件缓存戳目录无自己的 package.json，即宿主每次插件安装都合并家目录依赖树；本轮 tarball 探针曾把 file: 引用写进家目录 package.json（污染会拖炸宿主全部插件更新），已手动清条目 + npm install 调和（103 包移除、node_modules 9 项归位、带时间戳 .bak 备份在位），临时探针目录与 tgz 已删；文档一律 %USERPROFILE% 占位
+- [x] 敏感扫描独立执行且先读输出再推：抓到本轮自泄 CHANGELOG 用户名路径一处，当场改占位符复扫清零（扫描纪律第三次实锤生效：台账 here-string 单引号 + 夹具虚构 + 扫描排除按文件不按内容）
+- [x] 验证：397/397 绿（P2-2 server-resilience 全量并发下一次时序抖动，单文件与全量复跑均绿，挂账观察）；真机 `opencode plugin update` exit=0 首次成功 + verify-install 7/7 PASS（0.16.2 @ 0fbcdfc，src 71 / test 41，宿主日志无 TUI 注册失败）
+- [x] 发布 0fbcdfc + tag v0.16.2 远端核实（master == tag == origin）
+- [ ] 用户活体冒烟（一分钟）：打开状态弹窗 → ESC 关闭 → r 刷新 → 再 ESC——验证 ora-9 P1#3 承重假设
