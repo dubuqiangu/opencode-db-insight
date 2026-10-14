@@ -11,6 +11,7 @@ import assert from "node:assert/strict"
 import type { DailyTrendPoint } from "../src/stats/daily-buckets.ts"
 import type { StatusPanelData } from "../src/tui/status-panel-data.ts"
 import {
+  annotateKpiTokenValue,
   buildProportionalTrackBar,
   buildStatusDialogLines,
   computeDisplayWidth,
@@ -23,6 +24,7 @@ import {
   MODEL_BAR_WIDTH,
   padEndDisplay,
   padStartDisplay,
+  STATUS_DIALOG_CLOSE_HINT_TEXT,
   STATUS_DIALOG_FOOTER_HINT,
   TREND_BAR_WIDTH,
   type StatusDialogLine,
@@ -49,6 +51,17 @@ test("formatFullTokenCount groups thousands and degrades degenerate inputs to 0"
   assert.equal(formatFullTokenCount(999), "999")
   assert.equal(formatFullTokenCount(1_234_567), "1,234,567")
   assert.equal(formatFullTokenCount(12_345_678_901), "12,345,678,901")
+})
+
+test("annotateKpiTokenValue appends the compact spelling only when it differs", () => {
+  // < 1000: 缩写与全量相同，注记是废话，不加。
+  assert.equal(annotateKpiTokenValue(0), "0")
+  assert.equal(annotateKpiTokenValue(999), "999")
+  assert.equal(annotateKpiTokenValue(Number.NaN), "0")
+  // >= 1000: 全量 + 全角括号缩写——KPI 行是全量与缩写两种写法唯一相遇处。
+  assert.equal(annotateKpiTokenValue(1_234_567), "1,234,567（1.2M）")
+  assert.equal(annotateKpiTokenValue(35_509_713), "35,509,713（35.5M）")
+  assert.equal(annotateKpiTokenValue(12_345_678_901), "12,345,678,901（12.3G）")
 })
 
 test("formatHitRatePercent clamps into [0,100] with one decimal", () => {
@@ -169,7 +182,24 @@ function collectSectionLines(lines: StatusDialogLine[], headingText: string): St
 test("buildStatusDialogLines renders header, KPIs, leaderboard, trend and footer", () => {
   const dialogLines = buildStatusDialogLines(buildReadyPanelDataFixture(), "21:36", "2026-10-13")
 
-  assert.equal(dialogLines[0].text, "db-insight 用量总览")
+  // Header: title at the left, ✕ ESC pinned to the widest body line's
+  // right edge (the dialog's visual top-right), the whole strip clickable.
+  assert.ok(dialogLines[0].text.startsWith("db-insight 用量总览"), "title leads the header")
+  assert.ok(
+    dialogLines[0].text.endsWith(STATUS_DIALOG_CLOSE_HINT_TEXT),
+    "the close hint is pinned to the header's right edge",
+  )
+  assert.equal(dialogLines[0].closeAction, "close-dialog", "the header strip is click-to-close")
+  const headerSpanEmphases = dialogLines[0].spans?.map((span) => span.emphasis)
+  assert.deepEqual(headerSpanEmphases, ["dialog-title", "close-hint"])
+  const bodyWidth = Math.max(
+    ...dialogLines.slice(1).map((bodyLine) => computeDisplayWidth(bodyLine.text)),
+  )
+  assert.equal(
+    computeDisplayWidth(dialogLines[0].text),
+    bodyWidth,
+    "header width mirrors the widest body line, so the hint lands on the dialog's right edge",
+  )
   assert.ok(dialogLines[1].text.includes("生成于 21:36"))
   assert.ok(
     dialogLines.some((line) => line.text === STATUS_DIALOG_FOOTER_HINT),
@@ -178,7 +208,10 @@ test("buildStatusDialogLines renders header, KPIs, leaderboard, trend and footer
 
   const todayLines = collectSectionLines(dialogLines, "今日用量")
   const tokenLine = todayLines.find((line) => line.text.includes("Token 总量"))!
-  assert.ok(tokenLine.text.includes("1,234,567"), "today total uses the full grouped number")
+  assert.ok(
+    tokenLine.text.includes("1,234,567（1.2M）"),
+    "today total shows the full grouped number with the compact annotation",
+  )
   const hitRateLine = todayLines.find((line) => line.text.includes("缓存命中率"))!
   assert.ok(hitRateLine.text.includes("87.5%"))
   assert.ok(
@@ -369,6 +402,13 @@ test("an empty trend degrades to the no-data note", () => {
 
 test("null data degrades to the dignified unavailable copy with the footer", () => {
   const dialogLines = buildStatusDialogLines(null, "21:36", "2026-10-13")
+  // The clickable header is present even in the unavailable state.
+  assert.ok(
+    dialogLines[0].text.startsWith("db-insight 用量总览") &&
+      dialogLines[0].text.endsWith(STATUS_DIALOG_CLOSE_HINT_TEXT),
+    "the null-data dialog still shows the pinned close hint",
+  )
+  assert.equal(dialogLines[0].closeAction, "close-dialog")
   assert.ok(
     dialogLines.some((line) => line.emphasis === "unavailable-title" && line.text.includes("不可用")),
   )
@@ -379,4 +419,38 @@ test("null data degrades to the dignified unavailable copy with the footer", () 
   )
   assert.ok(!dialogLines.some((line) => line.emphasis === "section-heading"))
   assert.ok(!dialogLines.some((line) => line.emphasis === "trend-row"))
+})
+
+test("small token totals stay unannotated — never 500（500）", () => {
+  const dialogLines = buildStatusDialogLines(
+    {
+      todayTokens: 500,
+      todayHitRate: 0.5,
+      todayModelTopFive: [],
+      weekTrend: [],
+    },
+    "21:36",
+    "2026-10-13",
+  )
+  const tokenLine = dialogLines.find((line) => line.text.includes("Token 总量"))!
+  assert.ok(tokenLine.text.includes("500"), "the raw total is shown")
+  assert.ok(!tokenLine.text.includes("（"), "no redundant compact annotation below 1000")
+})
+
+test("a body narrower than the title keeps a one-space gap before the hint", () => {
+  // 今日暂无用量 + 空趋势：正文很窄，标题+关闭标记反而定义弹窗宽度，
+  // 兜底 gapWidth = 1——标记仍紧随标题之后，不与标题粘连。
+  const dialogLines = buildStatusDialogLines(
+    {
+      todayTokens: 0,
+      todayHitRate: 0,
+      todayModelTopFive: [],
+      weekTrend: [],
+    },
+    "21:36",
+    "2026-10-13",
+  )
+  const headerText = dialogLines[0].text
+  assert.ok(headerText.includes("db-insight 用量总览 " + STATUS_DIALOG_CLOSE_HINT_TEXT))
+  assert.equal(dialogLines[0].closeAction, "close-dialog")
 })

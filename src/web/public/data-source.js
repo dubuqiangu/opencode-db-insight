@@ -205,6 +205,15 @@ async function fetchResponse(path) {
   return response;
 }
 
+/**
+ * 清掉服务端 60s TTL 查询缓存（/api/refresh 只动内存缓存、不碰数据库，
+ * 毫秒级）。页面每次载入先调它，浏览器 F5 才保证拉到全新数据；
+ * 失败不阻塞面板加载（退化为最多滞后 60 秒的 TTL 语义）。
+ */
+export async function fetchRefresh() {
+  return fetchJson("/api/refresh");
+}
+
 /* ---------------- 形状适配（真实 → 组件） ---------------- */
 
 /**

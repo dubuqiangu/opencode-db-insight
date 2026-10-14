@@ -1,7 +1,8 @@
 /**
  * Insight HTTP server lifecycle (DESIGN.md §9):
  * - node:http, bound to 127.0.0.1 only, never exposed externally;
- * - default port 18789, on EADDRINUSE retry port+1, at most 10 attempts;
+ * - default port 18789, on port-advance errors (EADDRINUSE, or EACCES —
+ *   Windows WinNAT reserved ranges) retry port+1, at most 10 attempts;
  * - close() rejects new connections (server.close), drops keep-alive
  *   sockets (closeAllConnections) and releases the db connection;
  * - serverFactory is injectable so tests can simulate EADDRINUSE chains.
@@ -94,12 +95,18 @@ function listenOnPort(
   })
 }
 
-function isAddressInUseError(listenError: unknown): boolean {
-  return (
-    typeof listenError === "object" &&
-    listenError !== null &&
-    (listenError as { code?: unknown }).code === "EADDRINUSE"
-  )
+/**
+ * Listen errors that mean "this port won't take us, try the next one":
+ * - EADDRINUSE: something is already listening;
+ * - EACCES: the OS refuses the bind — on Windows, WinNAT excluded/reserved
+ *   port ranges shift across reboots, so a previously fine port can start
+ *   denying listen with EACCES. Advancing is the right response there too;
+ *   dying would make the server unschedulable until the next reboot.
+ */
+function isPortAdvanceError(listenError: unknown): boolean {
+  if (typeof listenError !== "object" || listenError === null) return false
+  const errorCode = (listenError as { code?: unknown }).code
+  return errorCode === "EADDRINUSE" || errorCode === "EACCES"
 }
 
 /** Close the server, resolving/rejecting via node's close callback. */
@@ -114,8 +121,8 @@ function closeHttpServer(httpServer: InsightHttpServer): Promise<void> {
 
 /**
  * Start the insight server. Throws only when every port attempt failed or a
- * non-EADDRINUSE listen error occurred; the returned handle's close() is the
- * plugin teardown path.
+ * non-advance listen error occurred (advance = EADDRINUSE / EACCES); the
+ * returned handle's close() is the plugin teardown path.
  */
 export async function startInsightServer(
   options: InsightServerOptions = {},
@@ -183,7 +190,7 @@ export async function startInsightServer(
       await listenOnPort(httpServer, host, chosenPort)
       break
     } catch (listenError) {
-      if (!isAddressInUseError(listenError) || remainingAttempts <= 1) {
+      if (!isPortAdvanceError(listenError) || remainingAttempts <= 1) {
         // Listen failed for good (retry chain exhausted or fatal error):
         // release the db connection before propagating (P1-1).
         liveDatabase?.close()

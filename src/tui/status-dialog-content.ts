@@ -42,12 +42,20 @@ const BAR_TRACK_CHARACTER = "░"
 export const STATUS_DIALOG_FOOTER_HINT = "ESC 关闭 · r 刷新数据"
 
 /**
+ * Close affordance pinned to the header's right edge. Rendered as the
+ * "close-hint" span; the whole header line carries `closeAction` so the
+ * host renderer can wire a mouse click on the strip to close.
+ */
+export const STATUS_DIALOG_CLOSE_HINT_TEXT = "✕ ESC"
+
+/**
  * Visual role of one span/line. The renderer maps each emphasis to a
  * color/bold pair; the content module never hardcodes colors.
  */
 export type StatusDialogEmphasis =
   | "dialog-title"
   | "dialog-subtitle"
+  | "close-hint"
   | "section-heading"
   | "kpi-label"
   | "kpi-value"
@@ -75,11 +83,16 @@ export interface StatusDialogSpan {
   colorSlot?: number
 }
 
-/** One dialog line. `spans` absent → render `text` with the line emphasis. */
+/**
+ * One dialog line. `spans` absent → render `text` with the line emphasis.
+ * `closeAction` marks the line as a click-to-close affordance: the JSX
+ * renderer attaches onMouseDown to the whole line (the header strip).
+ */
 export interface StatusDialogLine {
   emphasis: StatusDialogEmphasis
   text: string
   spans?: StatusDialogSpan[]
+  closeAction?: "close-dialog"
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +118,18 @@ export function formatCompactTokenCount(tokenCount: number): string {
 export function formatFullTokenCount(tokenCount: number): string {
   if (!Number.isFinite(tokenCount) || tokenCount <= 0) return "0"
   return String(Math.round(tokenCount)).replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+}
+
+/**
+ * KPI token value: the full grouped number, plus a compact annotation in
+ * full-width parens once abbreviation actually differs (>= 1000) — the
+ * leaderboard/trend sections stay compact-only, so the KPI line is the one
+ * place both spellings meet: "35,509,713（35.5M）".
+ */
+export function annotateKpiTokenValue(tokenCount: number): string {
+  const fullText = formatFullTokenCount(tokenCount)
+  if (!Number.isFinite(tokenCount) || tokenCount < 1000) return fullText
+  return `${fullText}（${formatCompactTokenCount(tokenCount)}）`
 }
 
 /** Percent text of a [0,1] hit rate, e.g. 0.875 → "87.5%". */
@@ -191,9 +216,31 @@ export function buildProportionalTrackBar(
 // ---------------------------------------------------------------------------
 // Section builders.
 
-function buildHeaderLines(generatedAtText: string): StatusDialogLine[] {
+/**
+ * Header with the close hint pinned to the content's right edge. The dialog
+ * hugs its widest body line, so right-aligning the hint to `contentWidth`
+ * (the widest non-header line) lands it in the dialog's visual top-right
+ * corner; a narrower body than the title just widens the dialog by the
+ * header, which is harmless.
+ */
+function buildHeaderLines(generatedAtText: string, contentWidth: number): StatusDialogLine[] {
+  const titleText = "db-insight 用量总览"
+  const closeHintText = STATUS_DIALOG_CLOSE_HINT_TEXT
+  const gapWidth = Math.max(
+    1,
+    contentWidth - computeDisplayWidth(titleText) - computeDisplayWidth(closeHintText),
+  )
+  const gapText = " ".repeat(gapWidth)
   return [
-    { emphasis: "dialog-title", text: "db-insight 用量总览" },
+    {
+      emphasis: "dialog-title",
+      text: titleText + gapText + closeHintText,
+      closeAction: "close-dialog",
+      spans: [
+        { emphasis: "dialog-title", text: titleText },
+        { emphasis: "close-hint", text: gapText + closeHintText },
+      ],
+    },
     { emphasis: "dialog-subtitle", text: `生成于 ${generatedAtText} · 统计窗口：近 7 日` },
   ]
 }
@@ -215,12 +262,13 @@ function buildTodaySectionLines(
   )
   const tokenLabelText = padEndDisplay("Token 总量", kpiLabelWidth)
   const hitRateLabelText = padEndDisplay("缓存命中率", kpiLabelWidth)
+  const tokenValueText = annotateKpiTokenValue(todayTokens)
   sectionLines.push({
     emphasis: "kpi-label",
-    text: `${tokenLabelText}  ${formatFullTokenCount(todayTokens)}`,
+    text: `${tokenLabelText}  ${tokenValueText}`,
     spans: [
       { emphasis: "kpi-label", text: `${tokenLabelText}  ` },
-      { emphasis: "kpi-value", text: formatFullTokenCount(todayTokens) },
+      { emphasis: "kpi-value", text: tokenValueText },
     ],
   })
   const hitRatePercentText = formatHitRatePercent(todayHitRate)
@@ -347,26 +395,30 @@ function buildUnavailableLines(): StatusDialogLine[] {
 /**
  * Build every dialog line. Pure; a null snapshot (database missing or scan
  * failure) degrades to the dignified unavailable copy instead of throwing,
- * and empty sections degrade to their placeholder notes.
+ * and empty sections degrade to their placeholder notes. The header is
+ * built last so the close hint can right-align to the widest body line.
  */
 export function buildStatusDialogLines(
   statusData: StatusPanelData | null,
   generatedAtText: string,
   todayDateKey: string,
 ): StatusDialogLine[] {
-  if (statusData === null) {
-    return [
-      ...buildUnavailableLines(),
-      { emphasis: "footer-hint", text: STATUS_DIALOG_FOOTER_HINT },
-    ]
-  }
-
-  const hasTodayUsage = statusData.todayTokens > 0 || statusData.todayModelTopFive.length > 0
-  return [
-    ...buildHeaderLines(generatedAtText),
-    ...buildTodaySectionLines(statusData.todayTokens, statusData.todayHitRate, hasTodayUsage),
-    ...buildModelLeaderboardLines(statusData.todayModelTopFive, statusData.todayTokens),
-    ...buildWeekTrendLines(statusData.weekTrend, todayDateKey),
-    { emphasis: "footer-hint", text: STATUS_DIALOG_FOOTER_HINT },
-  ]
+  const bodyLines =
+    statusData === null
+      ? [
+          ...buildUnavailableLines(),
+          { emphasis: "footer-hint", text: STATUS_DIALOG_FOOTER_HINT },
+        ]
+      : [
+          ...buildTodaySectionLines(
+            statusData.todayTokens,
+            statusData.todayHitRate,
+            statusData.todayTokens > 0 || statusData.todayModelTopFive.length > 0,
+          ),
+          ...buildModelLeaderboardLines(statusData.todayModelTopFive, statusData.todayTokens),
+          ...buildWeekTrendLines(statusData.weekTrend, todayDateKey),
+          { emphasis: "footer-hint", text: STATUS_DIALOG_FOOTER_HINT },
+        ]
+  const bodyWidth = Math.max(...bodyLines.map((bodyLine) => computeDisplayWidth(bodyLine.text)))
+  return [...buildHeaderLines(generatedAtText, bodyWidth), ...bodyLines]
 }

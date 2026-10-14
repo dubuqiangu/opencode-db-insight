@@ -30,6 +30,7 @@ interface EmphasisStyle {
 const EMPHASIS_STYLES: Record<StatusDialogEmphasis, EmphasisStyle> = {
   "dialog-title": { foregroundColor: "#4ade80", bold: true },
   "dialog-subtitle": { foregroundColor: "#5d6b84", bold: false },
+  "close-hint": { foregroundColor: "#f87171", bold: true },
   "section-heading": { foregroundColor: "#7aa2f7", bold: true },
   "kpi-label": { foregroundColor: "#99a3ba", bold: false },
   "kpi-value": { foregroundColor: "#4ade80", bold: true },
@@ -74,17 +75,41 @@ function renderSpanNode(span: StatusDialogSpan) {
   )
 }
 
-function renderDialogLine(line: StatusDialogLine) {
+function renderDialogLine(line: StatusDialogLine, requestClose?: () => void) {
   const lineStyle = EMPHASIS_STYLES[line.emphasis]
+  // The header strip carries closeAction: a mouse-down anywhere on it (the
+  // ✕ ESC marker and the gap leading to it) closes the dialog. When the
+  // host delivers no mouse events the hint degrades to plain text — the
+  // ESC keymap remains the guaranteed path.
+  const closeHandler =
+    line.closeAction === "close-dialog" && typeof requestClose === "function"
+      ? () => {
+          try {
+            requestClose()
+          } catch {
+            // A host-side close failure must never throw into the renderer.
+          }
+        }
+      : undefined
   if (line.spans !== undefined) {
     return (
-      <text fg={lineStyle.foregroundColor} attributes={renderTextAttributes(lineStyle)} wrapMode="none">
+      <text
+        fg={lineStyle.foregroundColor}
+        attributes={renderTextAttributes(lineStyle)}
+        wrapMode="none"
+        onMouseDown={closeHandler}
+      >
         {line.spans.map((span) => renderSpanNode(span))}
       </text>
     )
   }
   return (
-    <text fg={lineStyle.foregroundColor} attributes={renderTextAttributes(lineStyle)} wrapMode="none">
+    <text
+      fg={lineStyle.foregroundColor}
+      attributes={renderTextAttributes(lineStyle)}
+      wrapMode="none"
+      onMouseDown={closeHandler}
+    >
       {line.text}
     </text>
   )
@@ -93,9 +118,17 @@ function renderDialogLine(line: StatusDialogLine) {
 /**
  * The one JSX render the dialog host shows: a vertical stack of pre-aligned
  * lines. Reactive on the snapshot signal — the r key swaps the whole
- * content without reopening the dialog.
+ * content without reopening the dialog. `requestClose` (wired by tui.tsx
+ * to statusDialog.close) gives the clickable ✕ ESC header its action.
  */
-export function renderStatusDialog(readSnapshot: () => StatusDialogSnapshot) {
+export function renderStatusDialog(
+  readSnapshot: () => StatusDialogSnapshot,
+  requestClose?: () => void,
+) {
   const snapshot = readSnapshot()
-  return <box flexDirection="column">{snapshot.lines.map((line) => renderDialogLine(line))}</box>
+  return (
+    <box flexDirection="column">
+      {snapshot.lines.map((line) => renderDialogLine(line, requestClose))}
+    </box>
+  )
 }

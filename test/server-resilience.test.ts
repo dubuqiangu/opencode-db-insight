@@ -115,17 +115,17 @@ test("a failed listen chain closes the opened db connection before rethrowing (P
   assert.equal(closeCallCount.value, 1, "the db connection must be closed exactly once")
 })
 
-test("a non-EADDRINUSE listen error also releases the db connection (P1-1)", async () => {
+test("a fatal non-advance listen error also releases the db connection (P1-1)", async () => {
   const { connection, closeCallCount } = createCountingConnection()
 
   await assert.rejects(
     startInsightServer({
-      serverFactory: createFakeServerFactory(new Set<number>(), "EACCES"),
+      serverFactory: createFakeServerFactory(new Set<number>(), "EADDRNOTAVAIL"),
       databasePath: missingDatabasePath,
       databaseOpener: () => connection,
     }),
     (listenError: unknown) => {
-      assert.equal((listenError as { code?: string }).code, "EACCES")
+      assert.equal((listenError as { code?: string }).code, "EADDRNOTAVAIL")
       return true
     },
   )

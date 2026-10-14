@@ -16,7 +16,13 @@ export default defineInsightPlugin({
   setup(context: any) {
     // One setup-scoped dialog: its ESC/r modal keymap layer is registered
     // once and stays dormant (enabled: false) while the dialog is closed.
-    const statusDialog = createStatusDialog(context, renderStatusDialog)
+    // The render wrapper hands the dialog's close() to the ✕ ESC header so
+    // a mouse click on the header strip closes too (invoked only after the
+    // const below is assigned — clicks happen long after setup returns).
+    const statusDialog = createStatusDialog(
+      context,
+      (readSnapshot) => renderStatusDialog(readSnapshot, () => statusDialog.close()),
+    )
 
     const commandsDispose = registerInsightTuiCommands(context, {
       runStatusDialog: () => {

@@ -16,6 +16,7 @@ import {
   fetchCompaction,
   fetchTodo,
   fetchDirectoryStats,
+  fetchRefresh,
   MAX_TREND_DAYS,
 } from "./data-source.js";
 import { formatTokens, formatPercent, escapeHtml } from "./format.js";
@@ -373,8 +374,15 @@ function routeByHash() {
 }
 
 /* ---------- 启动 ---------- */
-function startInitialLoad() {
+async function startInitialLoad() {
   renderKpiRow(kpiRowElement, null);
+  // 载入即强清服务端 60s TTL 缓存：F5 保证全新数据。清缓存失败不阻塞
+  // 面板（退化为最多滞后 60 秒），各区块自身的容错照常工作。
+  try {
+    await fetchRefresh();
+  } catch {
+    /* /api/refresh 不可达 → 沿用 TTL 过期语义 */
+  }
   loadHealthStatus();
   loadOverviewSection();
   loadTrendSection();

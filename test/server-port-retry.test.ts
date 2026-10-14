@@ -25,12 +25,19 @@ class FakeListenServer implements InsightHttpServer {
   connectionDropCallCount = 0
   private readonly busyPorts: ReadonlySet<number>
   private readonly failureCode: string | null
+  /** Ports the OS refuses to bind (Windows WinNAT reserved ranges → EACCES). */
+  private readonly deniedPorts: ReadonlySet<number>
   private boundPort: number | null = null
   private errorListener: ((listenError: Error) => void) | null = null
 
-  constructor(busyPorts: ReadonlySet<number>, failureCode: string | null) {
+  constructor(
+    busyPorts: ReadonlySet<number>,
+    failureCode: string | null,
+    deniedPorts: ReadonlySet<number> = new Set<number>(),
+  ) {
     this.busyPorts = busyPorts
     this.failureCode = failureCode
+    this.deniedPorts = deniedPorts
   }
 
   listen(port: number, host: string, callback: () => void): void {
@@ -38,6 +45,13 @@ class FakeListenServer implements InsightHttpServer {
     if (this.failureCode !== null || this.busyPorts.has(port)) {
       const listenError = Object.assign(new Error(`listen failed on ${port}`), {
         code: this.failureCode ?? "EADDRINUSE",
+      })
+      this.errorListener?.(listenError)
+      return
+    }
+    if (this.deniedPorts.has(port)) {
+      const listenError = Object.assign(new Error(`listen denied on ${port}`), {
+        code: "EACCES",
       })
       this.errorListener?.(listenError)
       return
@@ -67,11 +81,12 @@ class FakeListenServer implements InsightHttpServer {
 function createFakeServerFactory(
   busyPorts: ReadonlySet<number> = new Set<number>(),
   failureCode: string | null = null,
+  deniedPorts: ReadonlySet<number> = new Set<number>(),
 ): { serverFactory: InsightServerFactory; createdServers: FakeListenServer[] } {
   const createdServers: FakeListenServer[] = []
   return {
     serverFactory: () => {
-      const fakeServer = new FakeListenServer(busyPorts, failureCode)
+      const fakeServer = new FakeListenServer(busyPorts, failureCode, deniedPorts)
       createdServers.push(fakeServer)
       return fakeServer
     },
@@ -137,14 +152,38 @@ test("startInsightServer rejects once the custom attempt budget is exhausted", a
   assert.equal(createdServers[0].listenCallCount, 2)
 })
 
-test("startInsightServer does not retry on non-EADDRINUSE listen errors", async () => {
-  const { serverFactory, createdServers } = createFakeServerFactory(new Set<number>(), "EACCES")
+test("startInsightServer does not retry on non-advance listen errors (EADDRNOTAVAIL)", async () => {
+  // EADDRNOTAVAIL 是宿主/地址层面的问题，换端口无济于事——必须一次失败。
+  // （EACCES 已属「前进」类：Windows 保留端口段拒绝 bind，+1 即可绕开。）
+  const { serverFactory, createdServers } = createFakeServerFactory(
+    new Set<number>(),
+    "EADDRNOTAVAIL",
+  )
   await assert.rejects(
     startInsightServer({ serverFactory, databasePath: missingDatabasePath }),
     (listenError: unknown) => {
-      assert.equal((listenError as { code?: string }).code, "EACCES")
+      assert.equal((listenError as { code?: string }).code, "EADDRNOTAVAIL")
       return true
     },
   )
-  assert.equal(createdServers[0].listenCallCount, 1, "EACCES must fail fast without port+1 retries")
+  assert.equal(
+    createdServers[0].listenCallCount,
+    1,
+    "a host-level error must fail fast without port+1 retries",
+  )
+})
+
+test("startInsightServer walks the port upward on EACCES (Windows reserved ranges)", async () => {
+  // 真机回归锁（2026-10-14 全量套件实证）：WinNAT 保留段跨重启漂移，
+  // 旧契约把 EACCES 当致命错误 → 端口撞保留段时看板服务启动即死。
+  const deniedPorts = new Set<number>([18789, 18790])
+  const { serverFactory, createdServers } = createFakeServerFactory(
+    new Set<number>(),
+    null,
+    deniedPorts,
+  )
+  const serverHandle = await startInsightServer({ serverFactory, databasePath: missingDatabasePath })
+  assert.equal(serverHandle.port, 18791, "EACCES ports are skipped exactly like EADDRINUSE ones")
+  assert.equal(createdServers[0].listenCallCount, 3)
+  await serverHandle.close()
 })
