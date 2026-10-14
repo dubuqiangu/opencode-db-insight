@@ -166,6 +166,43 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   font-weight: 600;
 }
 
+/* ---------- 目录导航（区块跳转 chip 行，需求三） ---------- */
+/* 一行内横向滚动（不占纵向空间），chip 语言对齐 .range-switch button
+ * 的胶囊描边系；点击后目标区块 .toc-flash 描边一闪（~1.2s 淡出）。 */
+.toc-nav {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-bottom: 18px;
+  scrollbar-width: thin;
+}
+.toc-nav button {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: var(--panel);
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.toc-nav button:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--panel-2);
+}
+/* 平滑滚动的落点呼吸空间（目标不至于贴住视口顶） */
+#dashboard .panel, #kpi-row { scroll-margin-top: 14px; }
+.toc-flash { animation: toc-flash 1.2s ease-out; }
+@keyframes toc-flash {
+  0% { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  100% { border-color: var(--border); box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toc-flash { animation-duration: 0.01s; }
+}
+
 .top-status {
   display: flex;
   align-items: center;

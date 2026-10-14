@@ -2,12 +2,10 @@
  * Command registration for the insight TUI (DESIGN.md §8, M6).
  *
  * Everything except the JSX render lambda lives here so tests can drive a
- * fake context: the four slash commands, with /insight-status delegating to
- * the status dialog runner wired by tui.tsx (the retired sidebar-panel
- * route — ui.panel.open + the session.panel slot claim — is gone as of
- * v0.16.0; the command now opens a ui.dialog).
+ * fake context: the three slash commands (/insight, /insight-export,
+ * /insight-refresh; the /insight-status dialog was retired).
  *
- * All context access is defensive: a host without keymap / ui.dialog
+ * All context access is defensive: a host without keymap
  * degrades silently (T6.3) — a TUI must never crash because a plugin
  * expected an API the host does not ship.
  */
@@ -15,7 +13,6 @@
 import { runExportCommand } from "./export-command.ts"
 import { runOpenDashboardCommand } from "./open-dashboard-command.ts"
 import { runRefreshCommand } from "./refresh-command.ts"
-import { showInsightToast } from "./tui-context.ts"
 
 /** Injectable command runners; tests replace them to observe calls. */
 export interface InsightTuiCommandDependencies {
@@ -28,17 +25,11 @@ export interface InsightTuiCommandDependencies {
    * would be a silent no-op).
    */
   runRefresh?: (context: unknown) => Promise<boolean>
-  /**
-   * Opens the /insight-status dialog. tui.tsx wires this to the shared
-   * setup-scoped StatusDialog (its ESC/r modal keymap layer is registered
-   * once at setup), so the dialog cannot be built per invocation here.
-   */
-  runStatusDialog?: (context: unknown) => void
 }
 
 /**
- * Register the four slash commands (/insight, /insight-status,
- * /insight-export, /insight-refresh) on the context keymap. Returns the
+ * Register the three slash commands (/insight, /insight-export,
+ * /insight-refresh) on the context keymap. Returns the
  * dispose function (or undefined when the host ships no keymap).
  */
 export function registerInsightTuiCommands(
@@ -48,13 +39,6 @@ export function registerInsightTuiCommands(
   const openDashboardRunner = dependencies.runOpenDashboard ?? runOpenDashboardCommand
   const exportRunner = dependencies.runExport ?? runExportCommand
   const refreshRunner = dependencies.runRefresh ?? runRefreshCommand
-  // Without an injected dialog runner there is no ESC-wired dialog to open;
-  // a silent no-op would hide the wiring bug, so complain loudly instead.
-  const statusDialogRunner =
-    dependencies.runStatusDialog ??
-    (() => {
-      showInsightToast(context, "db-insight: 用量弹窗未装配", "error")
-    })
 
   try {
     const contextRecord = context as
@@ -74,15 +58,6 @@ export function registerInsightTuiCommands(
           slash: { name: "insight", aliases: [] },
           run: () => {
             void openDashboardRunner(context)
-          },
-        },
-        {
-          id: "opencode-db-insight.status",
-          title: "显示 db-insight 用量弹窗",
-          palette: true,
-          slash: { name: "insight-status", aliases: [] },
-          run: () => {
-            statusDialogRunner(context)
           },
         },
         {

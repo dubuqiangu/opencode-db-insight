@@ -1,8 +1,8 @@
 /**
  * Smoke tests for the TUI command registration (M6): a fake context
  * captures the keymap layer, then the wired commands are driven to verify
- * toast wiring, runner routing (including the /insight-status dialog
- * runner), silent degradation on missing host APIs, and dispose behavior.
+ * runner routing, silent degradation on missing host APIs, and dispose
+ * behavior.
  */
 
 import { test } from "node:test"
@@ -60,12 +60,11 @@ function buildFakeTuiContext(options: {
   }
 }
 
-test("registerInsightTuiCommands wires four slash commands into the keymap", () => {
+test("registerInsightTuiCommands wires three slash commands into the keymap", () => {
   const fakeContext = buildFakeTuiContext({})
   const openDashboardCalls: unknown[][] = []
   const exportCalls: unknown[][] = []
   const refreshCalls: unknown[][] = []
-  const statusDialogCalls: unknown[][] = []
 
   const commandsDispose = registerInsightTuiCommands(fakeContext.context, {
     runOpenDashboard: async (...openDashboardArguments) => {
@@ -80,9 +79,6 @@ test("registerInsightTuiCommands wires four slash commands into the keymap", () 
       refreshCalls.push(refreshArguments)
       return true
     },
-    runStatusDialog: (...statusDialogArguments) => {
-      statusDialogCalls.push(statusDialogArguments)
-    },
   })
   assert.ok(commandsDispose !== undefined)
 
@@ -96,27 +92,23 @@ test("registerInsightTuiCommands wires four slash commands into the keymap", () 
     }>
   }
   assert.equal(layerSpec.mode, "global")
-  assert.equal(layerSpec.commands.length, 4)
+  assert.equal(layerSpec.commands.length, 3)
   assert.deepEqual(
     layerSpec.commands.map((command) => command.slash.name),
-    ["insight", "insight-status", "insight-export", "insight-refresh"],
+    ["insight", "insight-export", "insight-refresh"],
   )
-  assert.equal(layerSpec.commands[2].slash.arguments, true, "export receives its argument text")
+  assert.equal(layerSpec.commands[1].slash.arguments, true, "export receives its argument text")
   assert.equal(
-    layerSpec.commands[3].slash.arguments,
+    layerSpec.commands[2].slash.arguments,
     undefined,
     "refresh is a whole-cache clear, it takes no arguments",
   )
-  assert.equal(layerSpec.commands[1].title, "显示 db-insight 用量弹窗")
 
   // Run the commands; runners receive the context and (for export) the input.
   layerSpec.commands[0].run()
-  layerSpec.commands[1].run()
-  layerSpec.commands[2].run("ses_explicit")
-  layerSpec.commands[3].run()
+  layerSpec.commands[1].run("ses_explicit")
+  layerSpec.commands[2].run()
   assert.equal(openDashboardCalls.length, 1)
-  assert.equal(statusDialogCalls.length, 1, "insight-status reaches the dialog runner")
-  assert.equal(statusDialogCalls[0].length, 1, "the dialog runner receives the context")
   assert.equal(exportCalls.length, 1)
   assert.equal(exportCalls[0][1], "ses_explicit")
   assert.equal(refreshCalls.length, 1, "the refresh runner receives exactly one call")
@@ -124,21 +116,6 @@ test("registerInsightTuiCommands wires four slash commands into the keymap", () 
 
   commandsDispose?.()
   assert.equal(fakeContext.layerDisposeCallCount.value, 1)
-})
-
-test("insight-status without an injected runner toasts instead of silently no-oping", () => {
-  const fakeContext = buildFakeTuiContext({})
-  const commandsDispose = registerInsightTuiCommands(fakeContext.context, {
-    runOpenDashboard: async () => true,
-    runExport: async () => null,
-  })
-  const layerSpec = fakeContext.recordedLayerSpecs[0] as {
-    commands: Array<{ run: () => void }>
-  }
-  layerSpec.commands[1].run()
-  assert.equal(fakeContext.capturedToasts.length, 1)
-  assert.match(fakeContext.capturedToasts[0].message, /未装配/)
-  commandsDispose?.()
 })
 
 test("registerInsightTuiCommands degrades silently without a keymap", () => {
@@ -212,7 +189,7 @@ test("registerInsightTuiCommands passes the host keymap shape validation", () =>
   })
 
   // Before the fix, layer() threw on bind: "" and the swallowed error made
-  // this registration return undefined — the four commands never appeared.
+  // this registration return undefined — the commands never appeared.
   assert.ok(typeof commandsDispose === "function", "registration must survive host validation")
   assert.equal(layerCallCount.value, 1, "the host keymap layer must actually be called")
   commandsDispose()
@@ -224,14 +201,13 @@ test("every registered command binds to undefined or a non-empty key", () => {
     runOpenDashboard: async () => true,
     runExport: async () => null,
     runRefresh: async () => true,
-    runStatusDialog: () => {},
   })
   assert.ok(commandsDispose !== undefined)
 
   const layerSpec = fakeContext.recordedLayerSpecs[0] as {
     commands: Array<{ id: string; bind?: unknown }>
   }
-  assert.equal(layerSpec.commands.length, 4)
+  assert.equal(layerSpec.commands.length, 3)
   for (const registeredCommand of layerSpec.commands) {
     assert.ok(
       registeredCommand.bind === undefined || (typeof registeredCommand.bind === "string" && registeredCommand.bind !== ""),

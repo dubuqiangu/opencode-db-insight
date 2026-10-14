@@ -39,6 +39,7 @@ import {
   queryHourHeatmap,
   querySessionSurvival,
 } from "../db/behavior-queries.ts"
+import { queryToolHealth } from "../db/tool-health-queries.ts"
 import {
   DEFAULT_DIRECTORY_LIMIT,
   MAX_DIRECTORY_LIMIT,
@@ -59,7 +60,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.17.0"
+export const INSIGHT_VERSION = "0.18.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -81,6 +82,16 @@ export const INVALID_RANGE_MESSAGE = "invalid range parameter; expected one of: 
 
 /** Opaque 500 error body; the real cause is logged, never sent (P2-11). */
 export const INTERNAL_ERROR_MESSAGE = "internal error"
+
+/**
+ * /api/models ?days= sentinel for "no time window" (full history): the
+ * parameter is optional, and parsePositiveIntegerParam maps every
+ * missing/empty/non-integer/zero/negative value back onto this default,
+ * so 0 unambiguously means "window disabled" — a legal window is always
+ * > 0, and an illegal ?days= silently means full history (DESIGN.md M2
+ * default-value convention), never a 400.
+ */
+const MODEL_METRICS_FULL_HISTORY_DAYS = 0
 
 /** What one API exchange produced, before touching node:http. */
 export interface ApiResponsePayload {
@@ -277,10 +288,37 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         return { statusCode: 200, body: trendPoints }
       }
       case "models": {
-        const modelMetrics = cachedResult(buildCacheKey("queryModelMetrics", []), () =>
-          queryModelMetrics(database),
+        // Optional ?days= window: same parameter-handling trio as the
+        // trend route above (parse / clamp / key).
+        const modelWindowDays = parsePositiveIntegerParam(
+          requestContext.searchParams,
+          "days",
+          MODEL_METRICS_FULL_HISTORY_DAYS,
+        )
+        // Clamp before keying (P2-6 discipline, same as the trend route):
+        // the query clamps internally, so the key must carry the bounded
+        // value too or ?days=1000 and ?days=366 would spray the same
+        // result as near-duplicate cache entries. The no-window call
+        // keeps the historical parameterless key shape ([]), so it never
+        // shares an entry with any ?days= window.
+        const boundedModelWindowDays =
+          modelWindowDays <= MODEL_METRICS_FULL_HISTORY_DAYS
+            ? undefined
+            : Math.min(modelWindowDays, MAX_TREND_DAYS)
+        const modelMetrics = cachedResult(
+          buildCacheKey(
+            "queryModelMetrics",
+            boundedModelWindowDays === undefined ? [] : [boundedModelWindowDays],
+          ),
+          () => queryModelMetrics(database, boundedModelWindowDays),
         )
         return { statusCode: 200, body: modelMetrics }
+      }
+      case "tool-health": {
+        const toolHealthStats = cachedResult(buildCacheKey("queryToolHealth", []), () =>
+          queryToolHealth(database),
+        )
+        return { statusCode: 200, body: toolHealthStats }
       }
       case "agents": {
         const agentStats = cachedResult(buildCacheKey("queryAgentStats", []), () =>

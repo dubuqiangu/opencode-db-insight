@@ -12,8 +12,13 @@
  *                                  模型每日稠密出现、无活动日为零；
  *                                  旧版裸数组（无 byModel）仍兼容 →
  *                                  normalize 后 byModel [] 降级为总量单层图）
- *   GET /api/models              → ModelMetric[]
+ *   GET /api/models[?days=N]      → ModelMetric[]（?days= 窗口过滤，
+ *                                  N=7/30/90；缺省/非法 = 全量——与后端
+ *                                  归一一致：前端只发合法值或干脆不带参数）
  *   GET /api/agents              → AgentStat[]
+ *   GET /api/tool-health          → ToolHealthStat[]（{tool, completed,
+ *                                  error, running, total, errorRate}，total
+ *                                  降序；errorRate 为 raw 0..1 分数）
  *   GET /api/sessions?limit&off  → SessionSummary[]（裸数组，无 total 包络；
  *                                  v0.4.0 起支持 ?sort=/?order= 服务端排序：
  *                                  sort ∈ time_updated(默认)|time_created|
@@ -361,10 +366,15 @@ export async function fetchTrend(days) {
   return normalizeTrendPayload(await fetchJson(`/trend?days=${clampTrendDays(days)}`));
 }
 
-/** GET /api/models —— 模型排行榜。 */
-export async function fetchModels() {
+/**
+ * GET /api/models —— 模型排行榜。days ∈ {7, 30, 90} 为窗口过滤（?days=N）；
+ * null = 全部（不带参数，默认请求路径与旧版逐字节一致）。前端只发合法值，
+ * 非法值由调用方归一为 null（后端对非法/缺省同样归一为全量）。
+ */
+export async function fetchModels(days = null) {
   if (USE_MOCK) return resolveWithLatency(getMockModelMetrics());
-  const modelMetrics = await fetchJson("/models");
+  const requestPath = days === null ? "/models" : `/models?days=${days}`;
+  const modelMetrics = await fetchJson(requestPath);
   return Array.isArray(modelMetrics) ? modelMetrics : [];
 }
 
@@ -373,6 +383,18 @@ export async function fetchAgents() {
   if (USE_MOCK) return resolveWithLatency(getMockAgentStats());
   const agentStats = await fetchJson("/agents");
   return Array.isArray(agentStats) ? agentStats : [];
+}
+
+/**
+ * GET /api/tool-health —— 工具调用健康度（ToolHealthStat[]，total 降序）。
+ * mock 预览没有这条路由（由真实后端 lane 提供）：USE_MOCK 时返回空数组
+ * ——条形图不渲染错误色带、摘要行留空，走区块自身的空态语义而不是把
+ * 工具区块炸成错误占位（离线演示不受影响）。
+ */
+export async function fetchToolHealth() {
+  if (USE_MOCK) return resolveWithLatency([]);
+  const toolHealthStats = await fetchJson("/tool-health");
+  return Array.isArray(toolHealthStats) ? toolHealthStats : [];
 }
 
 /**

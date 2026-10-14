@@ -28,7 +28,10 @@ const COLUMNS = [
   { key: "outputPerStep", label: "步均输出", numeric: true },
   { key: "contextMedian", label: "中位上下文", numeric: true },
   { key: "contextP95", label: "p95 上下文", numeric: true },
-  { key: "reasoningShare", label: "推理占比", numeric: true },
+  // Reasoning 占比（reasoning/(reasoning+output)，raw 0..1）：0 位小数整数
+  // 百分比（62% / 0%），脏值（NaN/Infinity）降级 "—"——分母未知时显示
+  // 0% 是谎报。排序的 ?? 0 兜底由 compareMetric 数值路径既有逻辑覆盖。
+  { key: "reasoningShare", label: "Reasoning", numeric: true },
   { key: "seenRange", label: "活跃区间", numeric: false },
 ];
 

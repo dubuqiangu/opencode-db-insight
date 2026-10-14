@@ -8,6 +8,30 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.18.0] - 2026-10-14 · 数据挖掘扩容版：Agent 榜 + 工具错误率 + 范围选择器 + 目录导航 -/insight-status
+
+> 用户驱动「继续挖掘数据库，看 /insight 页面还能展示什么」：先对真实库做全量 schema 探矿（47,050 个工具段全带 `state.status`、86% 步数集中在近 30 天等事实），再对表现状盘点找差集，得出四个未展示矿脉；随后追加三笔看板易用性改造与一条命令删除。四条并行 lane（fix-27/fix-28/fix-29/des-21×2）交付。
+
+### Added · 看板新增数据面
+- **Agent 排行榜**（新面板，`#agent-table`）：每 agent 的会话数 / token 消耗（紧凑缩写）/ 偏好工具 top-3 chip，按 token 降序；消费既有 `GET /api/agents`（`AgentStat` 早就在返回，此前前端只取其合计工具数）——零后端改动。落位 `.tables` 区全宽（`span-both`），表格样式复用 `.data-table` 语言。
+- **工具错误率**（新 API `GET /api/tool-health`）：两段式抽取 session_message 工具段的 `$.state.status`（真库分布 completed 41,478 / error 5,648 / running 1），`computeToolHealth` 纯聚合输出 `{tool, completed, error, running, total, errorRate}`。前端两处：工具调用 TOP10 每根条叠加错误色带（errorRate ≥10% 红 / <10% 琥珀）+ `err N%` 标注 + tooltip 增 Errors / Error rate 两行；面板头摘要行 `Global error rate X% · N / M calls failed`。
+- **模型排行榜时间范围选择器**：7 天 / 30 天 / 90 天 / 全部（默认全部）。后端 `GET /api/models` 加可选 `?days=N`——SQL 层 scan-floor 下推（共享 +1 天 DST 松弛惯例）+ JS 侧本地午夜窗口回收（复刻 hour-heatmap 模式），缺省/非法/0/负数 = 全量（向后兼容，缓存键保持旧形状），clamp 1..366 且 clamp 后再入键（1000 与 366 共享一条目）。真库冒烟：7 天窗 11 个模型 vs 全量 88。
+- **模型排行榜限高滚动**：`.model-body` 限高 464px + sticky 表头（`--panel` 实底 + inset box-shadow 复刻下边线），不再让 80+ 行模型榜吃掉半页。
+- **活动时段热力窗口选择器**：7 / 30 / 90 / 全部（默认 90），副文案随选择动态变化。动机：用户反馈「标着近 90 天但永远像近一周」——实测数据 86% 步数集中在近 30 天（近 7 天 5,646 步、近 14 天 30,791 步）+ 7 行=周几的视觉误读；后端 `?days=` 早已支持，纯前端补选择器与动态文案。
+- **页首目录导航**（`#toc-nav`，13 chip）：点击平滑滚动到对应面板 + 目标短暂高亮（`.toc-flash`，`prefers-reduced-motion` 降级）；`scroll-margin` 防标题被页沿遮挡。
+
+### Changed
+- **Reasoning 列标签**：模型榜「推理占比」列对齐英文 `Reasoning`（该列与 `reasoningShare` 载荷自 0.x 早已存在，本轮仅统一文案语言；诚实记录为文案变更而非新列）。
+- **窗口切换交互**（models / hour-heatmap 共用模式）：序列守卫丢弃过期响应 + 分桶缓存命中即时渲染 + 未命中保留旧表不闪骨架。
+
+### Removed
+- **`/insight-status` 命令整体删除**（用户明确要求）：status-dialog 三模块（生命周期 / 内容行构建 / JSX 渲染）+ status-panel-data + 对应测试文件一并移除；`tui.tsx` 不再含 JSX（文件名保留，package.json exports/check 指向它）。命令收敛为三条：`/insight`、`/insight-export`、`/insight-refresh`。
+  - **保留判定**：`queryAssistantStepRows` / `parseAssistantStepRow` / `AssistantStepRow` 未删——`test/sql-aggregation-parity.test.ts` 以它为 JS 聚合基线校验 SQL 侧管道，删除会破坏 parity 套件；属测试资产而非死代码。
+  - 0.17.0 的 `/insight-status` 弹窗冒烟项随之作废（其余两项——网页 F5 取新、EACCES 端口修复——不受影响，仍待真机冒烟）。
+
+### Tests
+- 401 → 382 净变化：+10 tool-health（纯聚合边界 / 两段式抽取回退 / 路由 / 内存库行为锁）+10 models-days-window（窗口下推 / clamp / 全量回退 / 缓存键共享），-39 status-dialog 链（三测试文件 + 注册表两例）；382/382 全绿 + check 0；前端两批以 esbuild 逐文件解析 + DOM shim 契约冒烟（16/16 + 15/15）自验，合流后全量套件复跑绿。
+
 ## [0.17.0] - 2026-10-14 · 弹窗点击关闭 + KPI 双写法 + 看板载入即取新
 
 - **弹窗标题条可点击关闭**：右上角钉 `✕ ESC` 关闭标记——content 模块按最宽正文行右对齐补位（弹窗内容自适应，即视觉右上角），标题条 `<text>` 挂 `onMouseDown`（@opentui/core `RenderableOptions` 原生 prop，0.5.14 实证）点击即关；宿主不投递鼠标事件时退化纯提示，ESC 键仍为保底（键层冒烟已由用户真机四步验证）。行携带 `closeAction` 标记，渲染层据此接线。

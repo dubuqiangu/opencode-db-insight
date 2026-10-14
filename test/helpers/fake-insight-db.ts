@@ -318,21 +318,22 @@ export function createFakeInsightDatabase(
         all: (...parameters: unknown[]) => {
           const messageFixtures = isPerSessionQuery
             ? scenario.messagesBySessionId[String(parameters[0] ?? "")] ?? []
-            : // The status-dialog scan asks for every assistant message with
-              // no session filter; the SQL itself selects type = 'assistant'.
+            : // The assistant-step scan (queryAssistantStepRows) asks for
+              // every assistant message with no session filter; the SQL
+              // itself selects type = 'assistant'.
               Object.values(scenario.messagesBySessionId)
                 .flat()
                 .filter((messageFixture) => messageFixture.type === "assistant")
           const messageRows = messageFixtures.map((messageFixture, messageIndex) => ({
             id: messageFixture.id ?? `msg_${messageIndex}`,
-            session_id: isPerSessionQuery ? String(parameters[0] ?? "") : "ses_panel_scan",
+            session_id: isPerSessionQuery ? String(parameters[0] ?? "") : "ses_step_scan",
             type: messageFixture.type,
             seq: messageFixture.seq ?? messageIndex,
             time_created: messageFixture.timeCreated ?? DEFAULT_MESSAGE_TIMESTAMP,
             time_updated: messageFixture.timeCreated ?? DEFAULT_MESSAGE_TIMESTAMP,
             data: JSON.stringify(messageFixture.data),
           }))
-          // The panel scan may carry a time_created >= ? floor.
+          // The assistant-step scan may carry a time_created >= ? floor.
           return hasTimeFloor
             ? messageRows.filter(
                 (messageRow) => Number(messageRow.time_created) >= Number(parameters[0]),

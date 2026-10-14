@@ -42,10 +42,26 @@
     <main id="view">
       <!-- 仪表盘视图（hash 为空或 #/ 时渲染；#/session/:id 由 app.js 切换占位页） -->
       <div id="dashboard" class="dashboard">
+        <nav class="toc-nav reveal d1" id="toc-nav" aria-label="Jump to section">
+          <button type="button" data-toc-target="kpi-row">Overview</button>
+          <button type="button" data-toc-target="panel-trend">Daily trend</button>
+          <button type="button" data-toc-target="panel-tools">Tool calls</button>
+          <button type="button" data-toc-target="panel-calendar">Calendar heatmap</button>
+          <button type="button" data-toc-target="panel-hour-heatmap">Hourly heatmap</button>
+          <button type="button" data-toc-target="panel-funnel">Token funnel</button>
+          <button type="button" data-toc-target="panel-compaction">Compaction</button>
+          <button type="button" data-toc-target="panel-survival">Session survival</button>
+          <button type="button" data-toc-target="panel-todo">Todo</button>
+          <button type="button" data-toc-target="panel-models">Model leaderboard</button>
+          <button type="button" data-toc-target="panel-agents">Agent leaderboard</button>
+          <button type="button" data-toc-target="panel-sessions">Sessions</button>
+          <button type="button" data-toc-target="panel-directories">Directories</button>
+        </nav>
+
         <section id="kpi-row" class="kpi-row reveal d1" aria-label="关键指标"></section>
 
         <section class="charts">
-          <article class="panel span-8 reveal d2">
+          <article id="panel-trend" class="panel span-8 reveal d2">
             <header class="panel-head">
               <div>
                 <h2>逐日消耗</h2>
@@ -58,19 +74,20 @@
             </div>
           </article>
 
-          <article class="panel span-4 reveal d2">
+          <article id="panel-tools" class="panel span-4 reveal d2">
             <header class="panel-head">
               <div>
                 <h2>工具调用 TOP10</h2>
                 <p class="panel-sub">全部 agent 合计</p>
               </div>
+              <div class="panel-head-extra" id="tool-health-caption"></div>
             </header>
             <div class="panel-body">
               <div id="tool-bars" aria-label="工具调用次数排行"></div>
             </div>
           </article>
 
-          <article class="panel span-12 reveal d3">
+          <article id="panel-calendar" class="panel span-12 reveal d3">
             <header class="panel-head">
               <div>
                 <h2>52 周日历热力图</h2>
@@ -82,19 +99,25 @@
             </div>
           </article>
 
-          <article class="panel span-12 reveal d4">
+          <article id="panel-hour-heatmap" class="panel span-12 reveal d4">
             <header class="panel-head">
               <div>
                 <h2>活动时段热力</h2>
-                <p class="panel-sub">近 90 天每小时步骤数 · 行 = 周几，列 = 小时（本地时区）</p>
+                <p class="panel-sub" id="hour-heatmap-sub">Hourly steps over the last 90 days · rows = weekday, columns = hour (local timezone)</p>
               </div>
+              <nav class="range-switch" id="heatmap-range-switch" aria-label="Heatmap window">
+                <button type="button" data-heatmap-days="7">7d</button>
+                <button type="button" data-heatmap-days="30">30d</button>
+                <button type="button" data-heatmap-days="90" class="active">90d</button>
+                <button type="button" data-heatmap-days="366">All</button>
+              </nav>
             </header>
             <div class="panel-body hour-heatmap-body">
               <div id="hour-heatmap" aria-label="按周几与小时的步骤分布热力图"></div>
             </div>
           </article>
 
-          <article class="panel span-8 reveal d4">
+          <article id="panel-funnel" class="panel span-8 reveal d4">
             <header class="panel-head">
               <div>
                 <h2>Token 漏斗</h2>
@@ -107,7 +130,7 @@
             </div>
           </article>
 
-          <article class="panel span-4 reveal d4">
+          <article id="panel-compaction" class="panel span-4 reveal d4">
             <header class="panel-head">
               <div>
                 <h2>上下文压缩</h2>
@@ -121,7 +144,7 @@
         </section>
 
         <section class="insight-cards reveal d5" aria-label="会话洞察卡片">
-          <article class="panel">
+          <article id="panel-survival" class="panel">
             <header class="panel-head">
               <div>
                 <h2>会话存活</h2>
@@ -133,7 +156,7 @@
             </div>
           </article>
 
-          <article class="panel">
+          <article id="panel-todo" class="panel">
             <header class="panel-head">
               <div>
                 <h2>Todo 完成率</h2>
@@ -147,19 +170,25 @@
         </section>
 
         <section class="tables">
-          <article class="panel reveal d5">
+          <article id="panel-models" class="panel reveal d5">
             <header class="panel-head">
               <div>
                 <h2>模型排行榜</h2>
                 <p class="panel-sub">点击列头排序 · 点击行可在下方会话列表中过滤该模型</p>
               </div>
+              <nav class="range-switch" id="model-range-switch" aria-label="Model leaderboard window">
+                <button type="button" data-model-range="7">7d</button>
+                <button type="button" data-model-range="30">30d</button>
+                <button type="button" data-model-range="90">90d</button>
+                <button type="button" data-model-range="all" class="active">All</button>
+              </nav>
             </header>
-            <div class="panel-body table-body">
+            <div class="panel-body table-body model-body">
               <div id="model-table"></div>
             </div>
           </article>
 
-          <article class="panel reveal d5">
+          <article id="panel-sessions" class="panel reveal d5">
             <header class="panel-head">
               <div>
                 <h2>会话列表</h2>
@@ -172,7 +201,19 @@
             </div>
           </article>
 
-          <article class="panel reveal d5 span-both">
+          <article id="panel-agents" class="panel reveal d5 span-both">
+            <header class="panel-head">
+              <div>
+                <h2>Agent Leaderboard</h2>
+                <p class="panel-sub">Sessions and tokens per agent, sorted by tokens · preferred tools = each agent's top 3 calls</p>
+              </div>
+            </header>
+            <div class="panel-body table-body">
+              <div id="agent-table" aria-label="Agent leaderboard by token usage"></div>
+            </div>
+          </article>
+
+          <article id="panel-directories" class="panel reveal d5 span-both">
             <header class="panel-head">
               <div>
                 <h2>项目目录用量</h2>

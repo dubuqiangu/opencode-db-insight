@@ -9,6 +9,7 @@ import {
   fetchTrend,
   fetchModels,
   fetchAgents,
+  fetchToolHealth,
   fetchSessions,
   fetchHealth,
   fetchHourHeatmap,
@@ -19,7 +20,7 @@ import {
   fetchRefresh,
   MAX_TREND_DAYS,
 } from "./data-source.js";
-import { formatTokens, formatPercent, escapeHtml } from "./format.js";
+import { formatTokens, formatPercent, formatCount, escapeHtml } from "./format.js";
 import { onSchemeChange } from "./theme.js";
 import { renderKpiRow } from "./components/kpi-card.js";
 import { renderTrendChart } from "./components/trend-chart.js";
@@ -30,6 +31,7 @@ import { renderCompactionPanel } from "./components/compaction-panel.js";
 import { renderTodoCard } from "./components/todo-card.js";
 import { renderDirectoryPanel } from "./components/directory-panel.js";
 import { renderToolBars } from "./components/tool-bars.js";
+import { renderAgentTable } from "./components/agent-table.js";
 import { renderTokenFunnel } from "./components/token-funnel.js";
 import { renderModelTable } from "./components/model-table.js";
 import { createSessionSortController } from "./components/session-sort-controller.js";
@@ -43,16 +45,26 @@ const state = {
   range: "30",
   modelFilter: null,
   directoryFilter: null,
+  // 模型排行榜窗口（data-model-range 值）：默认全部。缓存按窗口分桶，
+  // state.cache.models 始终指向「当前窗口」的数据（主题切换/下钻重渲染用）。
+  modelRange: "all",
+  // 活动时段热力窗口（?days= 值）：默认 90（契约缺省）。All 用 366。
+  heatmapDays: 90,
   healthStatus: "连接中…",
   cache: {
     overview: undefined,
     calendarTrend: undefined,
     rangeTrend: {},
     models: undefined,
+    modelsByRange: {},
     agents: undefined,
+    hourHeatmap: undefined,
+    hourHeatmapByDays: {},
+    // 工具健康度（GET /api/tool-health）：条形图错误色带与标题旁摘要行共用，
+    // 由独立的 loadToolHealthSection 填充；与 agents 缓存彼此独立容错。
+    toolHealth: undefined,
     // 会话列表的排序状态/缓存归 session-sort-controller（P2-2 抽出），
     // 不再平铺在这里；本对象只保留其余区块。
-    hourHeatmap: undefined,
     sessionSurvival: undefined,
     compaction: undefined,
     todo: undefined,
@@ -75,9 +87,15 @@ const sessionSurvivalElement = document.getElementById("session-survival");
 const todoCardElement = document.getElementById("todo-card");
 const directoryPanelElement = document.getElementById("directory-panel");
 const toolBarsElement = document.getElementById("tool-bars");
+const toolHealthCaptionElement = document.getElementById("tool-health-caption");
+const agentTableElement = document.getElementById("agent-table");
 const tokenFunnelElement = document.getElementById("token-funnel");
 const funnelCaptionElement = document.getElementById("funnel-caption");
 const modelTableElement = document.getElementById("model-table");
+const modelRangeSwitchElement = document.getElementById("model-range-switch");
+const hourHeatmapSubElement = document.getElementById("hour-heatmap-sub");
+const heatmapRangeSwitchElement = document.getElementById("heatmap-range-switch");
+const tocNavElement = document.getElementById("toc-nav");
 const sessionListElement = document.getElementById("session-list");
 const sessionFilterChipElement = document.getElementById("session-filter-chip");
 const rangeSwitchElement = document.getElementById("range-switch");
@@ -178,7 +196,9 @@ async function loadCalendarSection() {
 async function loadToolsSection() {
   try {
     state.cache.agents = await fetchAgents();
-    renderToolBars(toolBarsElement, state.cache.agents);
+    // toolHealth 可能先/后于 agents 到达：两侧各自到达后互刷（见下两节），
+    // 任一侧缺失时条形图按无健康度渲染，不阻塞彼此。
+    renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null);
     markSection("tools", true);
   } catch (error) {
     renderError(toolBarsElement, error, loadToolsSection);
@@ -186,15 +206,105 @@ async function loadToolsSection() {
   }
 }
 
-async function loadModelsSection() {
+/** Agent 排行榜：同一 /api/agents 端点的独立加载/独立容错（与 tools 区块
+ * 各自请求，服务端 60s TTL 下两次请求不双倍成本）。 */
+async function loadAgentSection() {
   try {
-    state.cache.models = await fetchModels();
-    renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
+    state.cache.agents = await fetchAgents();
+    renderAgentTable(agentTableElement, state.cache.agents);
+    markSection("agents", true);
+  } catch (error) {
+    renderError(agentTableElement, error, loadAgentSection);
+    markSection("agents", false);
+  }
+}
+
+/** 工具标题旁的全局错误率摘要行：Global error rate = Σerror / Σtotal。 */
+function renderToolHealthCaption(toolHealthStats) {
+  let totalCalls = 0;
+  let totalErrors = 0;
+  for (const healthStat of Array.isArray(toolHealthStats) ? toolHealthStats : []) {
+    if (Number.isFinite(healthStat?.total)) totalCalls += healthStat.total;
+    if (Number.isFinite(healthStat?.error)) totalErrors += healthStat.error;
+  }
+  if (totalCalls === 0) {
+    // 空数据：摘要行留空（条形图自身的空态由 tools 区块负责），不渲染 NaN。
+    toolHealthCaptionElement.innerHTML = "";
+    return;
+  }
+  const globalErrorRate = totalErrors / totalCalls;
+  toolHealthCaptionElement.innerHTML =
+    `Global error rate <b class="num">${formatPercent(globalErrorRate, 1)}</b> · <span class="num">${formatCount(totalErrors)}</span> / ${formatCount(totalCalls)} calls failed`;
+}
+
+/** 工具健康度：独立加载/独立容错。失败时只清空摘要行并计入顶栏失败数
+ * ——条形图本体归 tools 区块管，保持既有渲染（无错误色带），不白屏。 */
+async function loadToolHealthSection() {
+  try {
+    state.cache.toolHealth = await fetchToolHealth();
+    renderToolHealthCaption(state.cache.toolHealth);
+    if (state.cache.agents !== undefined) {
+      renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth);
+    }
+    markSection("tool-health", true);
+  } catch (error) {
+    toolHealthCaptionElement.innerHTML = "";
+    markSection("tool-health", false);
+  }
+}
+
+/**
+ * 模型排行榜：窗口切换（7/30/90/All，默认 All）按窗口分桶缓存；
+ * 序列守卫同 trendLoadSequence 模式——晚到的过期窗口响应不得覆盖当前
+ * 选择。切换期间不闪骨架：命中缓存即时渲染，未命中保留旧表直到新数据
+ * 到达（失败才落错误态 + 重试）。
+ */
+let modelsLoadSequence = 0;
+
+/** data-model-range UI 值 → ?days= 参数值（"all" → null = 不带参数）。 */
+function modelRangeDays(rangeValue) {
+  return rangeValue === "all" ? null : Number(rangeValue);
+}
+
+async function loadModelsSection() {
+  const requestToken = ++modelsLoadSequence;
+  const requestRange = state.modelRange;
+  try {
+    const modelMetrics = await fetchModels(modelRangeDays(requestRange));
+    state.cache.modelsByRange[requestRange] = modelMetrics;
+    if (requestToken !== modelsLoadSequence || requestRange !== state.modelRange) return;
+    state.cache.models = modelMetrics;
+    renderModelTable(modelTableElement, modelMetrics, state.modelFilter, onModelSelected);
     markSection("models", true);
   } catch (error) {
+    if (requestToken !== modelsLoadSequence || requestRange !== state.modelRange) return;
     renderError(modelTableElement, error, loadModelsSection);
     markSection("models", false);
   }
+}
+
+function onModelRangeSelected(nextRange) {
+  state.modelRange = nextRange;
+  const cachedMetrics = state.cache.modelsByRange[nextRange];
+  if (cachedMetrics !== undefined) {
+    state.cache.models = cachedMetrics;
+    renderModelTable(modelTableElement, cachedMetrics, state.modelFilter, onModelSelected);
+  } else {
+    loadModelsSection();
+  }
+}
+
+function bindModelRangeSwitch() {
+  modelRangeSwitchElement.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-model-range]");
+    if (button === null) return;
+    const nextRange = button.dataset.modelRange;
+    if (nextRange === state.modelRange) return;
+    for (const rangeButton of modelRangeSwitchElement.querySelectorAll("button")) {
+      rangeButton.classList.toggle("active", rangeButton === button);
+    }
+    onModelRangeSelected(nextRange);
+  });
 }
 
 /* ---------- 会话列表：排序控制器装配（P2-2） ---------- */
@@ -218,15 +328,65 @@ const sessionSortController = createSessionSortController({
   markSectionFailed: () => markSection("sessions", false),
 });
 
+/**
+ * 活动时段热力：窗口切换（7/30/90/All，默认 90）。All 用 days=366
+ * （后端 clamp 1..366，366 = 全史窗口）。缓存按窗口分桶，序列守卫与
+ * 模型排行榜同模式；标题副文案随窗口动态更新（消除「永远像近一周」的
+ * 静态误导）。7×24 渲染逻辑本身不动。
+ */
+let heatmapLoadSequence = 0;
+
+function heatmapWindowLabel(days) {
+  return days >= 366
+    ? "Hourly steps across all history"
+    : `Hourly steps over the last ${days} days`;
+}
+
+function renderHourHeatmapSub() {
+  hourHeatmapSubElement.textContent =
+    `${heatmapWindowLabel(state.heatmapDays)} · rows = weekday, columns = hour (local timezone)`;
+}
+
 async function loadHourHeatmapSection() {
+  const requestToken = ++heatmapLoadSequence;
+  const requestDays = state.heatmapDays;
   try {
-    state.cache.hourHeatmap = await fetchHourHeatmap();
-    renderHourHeatmap(hourHeatmapElement, state.cache.hourHeatmap);
+    const heatmapCells = await fetchHourHeatmap(requestDays);
+    state.cache.hourHeatmapByDays[requestDays] = heatmapCells;
+    if (requestToken !== heatmapLoadSequence || requestDays !== state.heatmapDays) return;
+    state.cache.hourHeatmap = heatmapCells;
+    renderHourHeatmap(hourHeatmapElement, heatmapCells);
     markSection("hour-heatmap", true);
   } catch (error) {
+    if (requestToken !== heatmapLoadSequence || requestDays !== state.heatmapDays) return;
     renderError(hourHeatmapElement, error, loadHourHeatmapSection);
     markSection("hour-heatmap", false);
   }
+}
+
+function onHeatmapRangeSelected(nextDays) {
+  state.heatmapDays = nextDays;
+  renderHourHeatmapSub();
+  const cachedCells = state.cache.hourHeatmapByDays[nextDays];
+  if (cachedCells !== undefined) {
+    state.cache.hourHeatmap = cachedCells;
+    renderHourHeatmap(hourHeatmapElement, cachedCells);
+  } else {
+    loadHourHeatmapSection();
+  }
+}
+
+function bindHeatmapRangeSwitch() {
+  heatmapRangeSwitchElement.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-heatmap-days]");
+    if (button === null) return;
+    const nextDays = Number(button.dataset.heatmapDays);
+    if (nextDays === state.heatmapDays) return;
+    for (const rangeButton of heatmapRangeSwitchElement.querySelectorAll("button")) {
+      rangeButton.classList.toggle("active", rangeButton === button);
+    }
+    onHeatmapRangeSelected(nextDays);
+  });
 }
 
 async function loadSessionSurvivalSection() {
@@ -347,8 +507,28 @@ function bindRangeSwitch() {
   });
 }
 
-/* ---------- hash 路由 ---------- */
+/* ---------- 目录导航（区块跳转 chip 行） ---------- */
 
+/**
+ * TOC 点击：平滑滚动到目标区块 + 短暂高亮（描边一闪，~1.2s 后淡出）。
+ * 不做 scrollspy（刻意保持简单）；高亮动画用 remove→reflow→add 的
+ * 重放套路，重复点击同一区块也能再次闪起。
+ */
+function bindTocNavigation() {
+  tocNavElement.addEventListener("click", (event) => {
+    const tocButton = event.target.closest("button[data-toc-target]");
+    if (tocButton === null) return;
+    const targetElement = document.getElementById(tocButton.dataset.tocTarget);
+    if (targetElement === null) return;
+    targetElement.scrollIntoView({ behavior: "smooth", block: "start" });
+    targetElement.classList.remove("toc-flash");
+    void targetElement.offsetWidth; // 强制重排，确保同区块重复点击也能重放动画
+    targetElement.classList.add("toc-flash");
+    window.setTimeout(() => targetElement.classList.remove("toc-flash"), 1300);
+  });
+}
+
+/* ---------- hash 路由 ---------- */
 /**
  * #/session/:id 的 id 段解码（写入端 session-list.js 用 encodeURIComponent）。
  * 手输/损坏的非法 % 序列降级为原文传下去，不让路由抛错。
@@ -389,6 +569,8 @@ async function startInitialLoad() {
   loadCalendarSection();
   loadHourHeatmapSection();
   loadToolsSection();
+  loadToolHealthSection();
+  loadAgentSection();
   loadModelsSection();
   sessionSortController.load();
   loadCompactionSection();
@@ -399,6 +581,10 @@ async function startInitialLoad() {
 
 function init() {
   bindRangeSwitch();
+  bindModelRangeSwitch();
+  bindHeatmapRangeSwitch();
+  bindTocNavigation();
+  renderHourHeatmapSub();
   window.addEventListener("hashchange", routeByHash);
   // 系统深浅色切换时，图表配色从 CSS 变量重读一遍
   onSchemeChange(() => {
@@ -411,7 +597,7 @@ function init() {
     if (state.cache.sessionSurvival !== undefined) renderSessionSurvivalCard(sessionSurvivalElement, state.cache.sessionSurvival);
     if (state.cache.todo !== undefined) renderTodoCard(todoCardElement, state.cache.todo);
     if (state.cache.directories !== undefined) renderDirectoryPanel(directoryPanelElement, state.cache.directories, state.directoryFilter, onDirectorySelected);
-    if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents);
+    if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
     sessionSortController.renderCurrentIfLoaded();
   });

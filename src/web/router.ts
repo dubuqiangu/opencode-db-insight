@@ -12,6 +12,7 @@ export type InsightRoute =
   | { routeName: "overview" }
   | { routeName: "trend" }
   | { routeName: "models" }
+  | { routeName: "tool-health" }
   | { routeName: "agents" }
   | { routeName: "sessions" }
   | { routeName: "todo" }
@@ -53,6 +54,7 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
     case "overview":
     case "trend":
     case "models":
+    case "tool-health":
     case "agents":
     case "sessions":
     case "todo":

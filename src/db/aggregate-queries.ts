@@ -29,6 +29,7 @@ import {
 import {
   ASSISTANT_OBJECT_DATA_PREDICATE,
   buildScanFloorEpochMs,
+  buildWindowStartEpochMs,
 } from "./scan-conventions.ts"
 import { hitRate } from "../stats/hit-rate.ts"
 import {
@@ -244,9 +245,29 @@ export function queryDailyTrend(
  * row per assistant message (timestamp + the extracted model and token
  * numbers); medians and p95 need the raw numeric sequences, so they stay
  * in computeModelMetrics (JS), exactly as before.
+ *
+ * Optional days window (?days=N on the route): when given, the scan
+ * mirrors queryHourHeatmap's pushdown + reclaim pair — the SQL carries a
+ * `time_created >= ?` floor with the shared +1-day DST slack
+ * (buildScanFloorEpochMs), and the local-midnight window lower bound
+ * (buildWindowStartEpochMs) is enforced JS-side so the slack rows above
+ * the floor but below the window never land in a metric. days is clamped
+ * to 1..MAX_TREND_DAYS like the trend/heatmap windows; undefined (or a
+ * non-positive/non-finite value, which the route layer never passes)
+ * keeps the historical full-history scan.
  */
-export function queryModelMetrics(db: SqliteReadConnection | null): ModelMetric[] | null {
+export function queryModelMetrics(
+  db: SqliteReadConnection | null,
+  days?: number,
+): ModelMetric[] | null {
   if (db === null) return null
+
+  const boundedDays =
+    days !== undefined && Number.isFinite(days) && days > 0
+      ? Math.min(Math.floor(days), MAX_TREND_DAYS)
+      : undefined
+  const scanFloorMs = boundedDays === undefined ? null : buildScanFloorEpochMs(boundedDays)
+  const windowStartEpochMs = boundedDays === undefined ? null : buildWindowStartEpochMs(boundedDays)
 
   const rawRows = db
     .prepare(
@@ -255,14 +276,19 @@ export function queryModelMetrics(db: SqliteReadConnection | null): ModelMetric[
                                 '$.tokens.input', '$.tokens.output', '$.tokens.reasoning',
                                 '$.tokens.cache.read', '$.tokens.cache.write') AS usage_fields
        FROM session_message
-       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}`,
+       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}${scanFloorMs === null ? "" : " AND time_created >= ?"}`,
     )
-    .all()
+    .all(...(scanFloorMs === null ? [] : [scanFloorMs]))
 
   const modelSamples: ModelUsageSample[] = []
   for (const rawRow of rawRows) {
     const rowRecord = asRecord(rawRow)
     if (rowRecord === null) continue
+    const timeCreated = coerceNumber(rowRecord["time_created"])
+    // Reclaim the floor's +1-day DST slack: steps older than the local
+    // midnight of the window's oldest day drop out here, so a days=7
+    // leaderboard counts exactly 7 local days — not 8.
+    if (windowStartEpochMs !== null && timeCreated < windowStartEpochMs) continue
     const [
       modelIdValue,
       providerIdValue,
@@ -274,7 +300,7 @@ export function queryModelMetrics(db: SqliteReadConnection | null): ModelMetric[
     ] = parseExtractedFieldList(rowRecord["usage_fields"])
     const modelId = coerceText(modelIdValue)
     modelSamples.push({
-      timeCreated: coerceNumber(rowRecord["time_created"]),
+      timeCreated,
       modelId: modelId === "" ? UNKNOWN_MODEL_ID : modelId,
       providerId: coerceText(providerIdValue),
       tokens: {

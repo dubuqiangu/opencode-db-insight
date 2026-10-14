@@ -66,7 +66,6 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 │   └─ db reader（node:sqlite，只读连接 opencode.db）  │
 │  TUI 插件 (src/tui.tsx)                              │
 │   ├─ /insight           → 打开看板（浏览器）          │
-│   ├─ /insight-status    → 终端统计面板                │
 │   ├─ /insight-export    → 会话导出 Markdown           │
 │   └─ /insight-refresh   → 清空 server 统计缓存（跨进程回环）│
 └─────────────────────────────────────────────────────┘
@@ -120,8 +119,6 @@ opencode-db-insight/
 │  ├─ export/                    # Markdown 导出渲染（角色分节 / 格式化辅助）
 │  └─ tui/                       # TUI 命令实现
 │     ├─ command-registry.ts     #   斜杠命令注册表
-│     ├─ status-dialog.ts / status-dialog-content.ts / status-dialog-render.tsx
-│     │                       #   /insight-status 弹窗三模块：生命周期 / 内容行构建 / JSX 渲染
 │     ├─ open-dashboard-command.ts / export-command.ts
 │     ├─ refresh-command.ts      #   /insight-refresh：跨进程回环清 server 缓存（v0.14.0）
 │     ├─ discover-dashboard-port.ts  # 看板端口探测：18789..18798 并发 GET /api/health（v0.16.x TUI 侧发现机制）
@@ -162,9 +159,10 @@ opencode-db-insight/
 |---|---|
 | `/api/overview` | KPI 卡：今日/累计 token、今日命中率、会话数、步数、cost |
 | `/api/trend?days=30` | 逐日序列：tokens 分项 + 命中率；每点含 `byModel`（模型 id → 当日 tokens，值口径 input+read+output；键序 = 全窗总量 desc + modelId asc，v0.11.0），供按模型分色堆叠面积图 |
-| `/api/models` | 模型单点指标排行 |
+| `/api/models?days=N` | 模型单点指标排行（v0.18.0 加可选时间窗：scan-floor 下推 + 本地午夜回收；缺省/非法/0/负 = 全量且缓存键保持旧无参形状；clamp 1..366，clamp 后入键） |
 | `/api/agents` | agent 用量 + 工具指纹 |
-| `/api/hour-heatmap?days=90` | 7×24 时段热力网格（168 格零填充，weekday=0 周日为外层） |
+| `/api/tool-health` | 工具健康榜（v0.18.0）：session_message 工具段 `$.state.status` 两段式抽取聚合 `{tool, completed, error, running, total, errorRate}`，total 降序 |
+| `/api/hour-heatmap?days=90` | 7×24 时段热力网格（168 格零填充，weekday=0 周日为外层；v0.18.0 起前端可选 7/30/90/全部窗口，副文案随选择动态化） |
 | `/api/session-survival` | 会话存活统计（中位时长 / 短命占比 / idle 结局分布） |
 | `/api/compaction` | 压缩事件统计（总数 / 按 reason / 近 30 日逐日 / Top 10 会话） |
 | `/api/todo` | todo 完成率统计（供看板卡片） |
@@ -188,13 +186,16 @@ opencode-db-insight/
 - **回放页内搜索**（v0.10.0）：查找栏输入即搜（200ms 防抖）+ 命中计数 + 上一处/下一处导航（Enter / Shift+Enter / Esc 浏览器查找栏惯例）；搜索面为六类文本（user 正文 / assistant text / reasoning / tool name / tool input / tool output），提取与渲染共用 replay-message-text.js 单点（杜绝"搜得到渲染不出"的口径漂移）；通知行刻意排除；节点级高亮，导航到未渲染分页区时驱动追加加载。
 - 深浅色主题跟随系统 `prefers-color-scheme`；图表点击可下钻到过滤后的会话列表（drill-anywhere，v0.1 至少模型行→会话列表）。
 - **载入即取新**（v0.17.0）：`app.js` 每次页面载入先 `await fetchRefresh()`（`GET /api/refresh`，仅清进程内 60s TTL 缓存、不碰库）再拉各区块——浏览器 F5 保证全新数据；refresh 失败不阻塞加载（退化为最多滞后 60 秒的 TTL 语义）。
+- **Agent 排行榜**（v0.18.0，`#agent-table` 全宽 span-both）：每 agent 会话数 / token 紧凑缩写 / 偏好工具 top-3 chip，tokens 降序；消费既有 `/api/agents`，零后端改动；表格复用 `.data-table` 语言。
+- **工具错误率**（v0.18.0）：工具 TOP10 条叠加错误色带（errorRate ≥10% 红 / <10% 琥珀）+ `err N%` 标注 + tooltip 增行；面板头 `#tool-health-caption` 摘要全局错误率（Σerror/Σtotal）；health 加载失败只清摘要行，条形图本体照常渲染（无色带）。
+- **范围选择器 ×2**（v0.18.0）：模型榜 7/30/90/全部（默认全部，`?days=` 下推后端）+ 限高 464px sticky 表头滚动容器；时段热力 7/30/90/全部（默认 90，副文案动态化——修「标 90 天视觉像一周」误读：实测 86% 步数集中近 30 天）。切换共用「序列守卫 + 分桶缓存 + 未命中保留旧表不闪骨架」模式。
+- **页首目录导航**（v0.18.0，`#toc-nav` 13 chip）：点击平滑滚动 + `.toc-flash` 短暂高亮（reduced-motion 降级）+ `scroll-margin` 防遮挡。
 
 ## 8. TUI 面
 
 - `/insight`：打开看板（Windows `start` / macOS `open` / Linux `xdg-open`），并在 toast 显示实际端口；
-- `/insight-status` 用量弹窗（`ui.dialog.show` + size "large"；宿主无 ui.dialog 时降级为 toast 提示「当前界面不支持弹窗」）：今日总量（全量 + 紧凑注记「35,509,713（35.5M）」，v0.17.0；<1000 不注记）、今日命中率、模型 TOP5、7 日趋势字符条形图——视觉语言对齐 usage-meter（图标行、静默降级）；**标题条右缘钉 ✕ ESC 关闭标记**（v0.17.0）：content 模块按最宽正文行右对齐补位、行携带 `closeAction`，render 层给标题条 `<text>` 挂 `onMouseDown`（@opentui/core RenderableOptions 原生 prop）点击即关；宿主不投递鼠标事件时退化纯提示，ESC 仍为保底；ESC（关闭）/ r（按需重扫一次）由 setup 时注册一次的 **modal keymap 层**自接线，其 `enabled` 信号仅在弹窗存活窗口期为真（宿主 `keymap.layer` 返回 void、无手动卸载，靠 enabled 窗口期收工）；
 - `/insight-export [会话ID]`：无参数时弹出 `dialog.select` 列最近 20 个会话；导出到**当前工作目录** `./insight-exports/<YYYYMMDD-HHmmss>-<slug>.md`，角色分节（`## 🧑 用户` / `## 🤖 助手` / reasoning 引用块 / 工具调用代码块）。
-- `/insight-refresh`（v0.14.0，第 4 条命令）：清空 **server 进程**内 60s 统计结果缓存。TUI 与 server 是两个插件 flavor、两个进程——命令内直接 import `clearResultCache` 清的只会是 TUI 进程自己的空 Map（静默 no-op），故走**跨进程 fetch 回环**：探测看板端口（并发 `GET http://127.0.0.1:18789..18798/api/health`，仅认带本插件服务标识的响应，见 src/tui/discover-dashboard-port.ts）→ `GET http://127.0.0.1:{port}/api/refresh`（约 5s 超时防御）；成功 toast「已清除 N 条统计缓存（看板刷新页面后生效）」，无响应/超时/非 200/坏 JSON 全降级 error toast，永不抛。
+- `/insight-refresh`（v0.14.0）：清空 **server 进程**内 60s 统计结果缓存。TUI 与 server 是两个插件 flavor、两个进程——命令内直接 import `clearResultCache` 清的只会是 TUI 进程自己的空 Map（静默 no-op），故走**跨进程 fetch 回环**：探测看板端口（并发 `GET http://127.0.0.1:18789..18798/api/health`，仅认带本插件服务标识的响应，见 src/tui/discover-dashboard-port.ts）→ `GET http://127.0.0.1:{port}/api/refresh`（约 5s 超时防御）；成功 toast「已清除 N 条统计缓存（看板刷新页面后生效）」，无响应/超时/非 200/坏 JSON 全降级 error toast，永不抛。
 
 ## 9. 生命周期与安全
 
