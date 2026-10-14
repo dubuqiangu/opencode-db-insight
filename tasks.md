@@ -448,5 +448,5 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] fix-30（P1-1/P1-2 后端）：parseExtractedFieldList 双定义收敛进 rows.ts（函数体一字未改，调用侧 stride/path-builder/字段表全不动）+ INTERNAL_ERROR_MESSAGE 单源化（request-handler 改 import api.ts，方向无环已验证）；382/382 + check 0
 - [x] des-21 前端 lane 中途 provider 403 阵亡（P1-3 已完成：format.js 三死导出 grep 实证后删；P1-4 完成 3/7：overview/calendar/agents 工厂化；R1 未动）
 - [x] orchestrator 直养补完（剩余量小且机械，上下文已在手）：P1-4 后四区块（survival/compaction/todo/directories）转换 + R1 四处（trend/models/heatmap 缓存命中补 markSection(true) + session-sort-controller applyNextView 补 markSectionSucceeded()）+ models/heatmap 失败回正 state.cache.models/hourHeatmap 指针置 null（防主题重渲窗口错配）；esbuild 逐文件解析过 + 382/382 + check 0
-- [ ] 发布门禁：敏感扫描 → tarball 探针 → commit/push/tag v0.18.1 → plugin update（全引用）→ verify-install 7/7
+- [x] 发布门禁：敏感扫描四类清零 → tarball 探针过（68 包干净安装）→ d3a17f9 → push + tag v0.18.1 远端核实（master == tag == d3a17f9）→ verify-install 7/7 PASS（0.18.1 @ d3a17f9，src 70=70 / test 40=40）。**update 假警报完整归因（修正 0.18.0 勘误）**：两个独立现象——① 短 id 确定性报「Plugin is not configured」exit=1（CLI 只认全引用）；② 全引用在**刚推送后的首跑**也会一过性 exit=1 带栈（本次实证），verify-install 内嵌同命令成功落盘、随后独立复跑 exit=0「No plugin updates available」干净收敛。结论：以 verify-install 的 7/7 为安装实证唯一标准，update 首跑 exit=1 一律复跑收敛后再看
 - [ ] 用户真机冒烟追加两项：① R1 场景——任一区块加载失败后切回已缓存窗口，顶栏失败计数应消失；② 七个简单区块（KPI/日历/Agent 榜/存活/压缩/todo/目录）初载与重试按钮行为与 0.18.0 无异
