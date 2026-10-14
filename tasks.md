@@ -437,5 +437,5 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] des-21 第二批：模型榜范围选择器（序列守卫 + 分桶缓存 + 未命中保留旧表不闪骨架）+ 限高 464px sticky 表头滚动、时段热力 7/30/90/全部选择器 + 副文案动态化、页首 13 chip 目录导航（.toc-flash 高亮 + reduced-motion 降级 + scroll-margin）；契约冒烟 15/15 + 上批回归 16/16；esbuild 过程抓到 state 键重复真 bug 当场修复
 - [x] 热力图谜底记档：后端无 bug——days 下推与窗口回收一直正确；「永远像近一周」= 数据集中（近 7 天 5,646 步 / 近 14 天 30,791 步 / 近 30 天 86%）+ 7 行=周几的视觉误读；故选动态化而非隐藏
 - [x] 验证：382/382 绿 + check 0（401→382 = +10 tool-health +10 models-days-window −39 status-dialog 链）；合流后 orchestrator 复跑全量确认无 lane 间咬合问题
-- [ ] 发布门禁：敏感扫描 → tarball 探针 → commit/push/tag → plugin update → verify-install 7/7
+- [x] 发布门禁：敏感扫描四类清零 → tarball 探针过（68 包干净安装）→ c333dc4 feat + d7aeee4 台账 → push + tag v0.18.0 远端核实（master == tag == d7aeee4）→ verify-install 7/7 PASS（0.18.0 @ d7aeee4，src 70=70 / test 40=40）→ 全引用 update 复跑 exit=0「No plugin updates available」干净收敛。**勘误**：`opencode plugin update` 传短 id（`opencode-db-insight`）会报「Plugin is not configured」exit=1——CLI 只认全引用 `github:dubuqiangu/opencode-db-insight`；0.17.0 台账的「update 首跑瞬态挂账」按此修正理解（应验过均为短 id 调用，非瞬态）
 - [ ] 用户真机冒烟（重启 TUI 后）：/insight 打开看板 → 页首目录 chip 跳转 → Agent 榜（librarian 应居首）→ 工具榜错误色带 + 全局错误率 → 模型榜切 7 天/全部 + 限高滚动 → 时段热力切窗口文案随动 → 输入 / 确认只剩三条命令 → 网页 F5 数据全新（承 0.17.0 遗留）→ 0.18.0 加载后行为正常
