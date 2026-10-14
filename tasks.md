@@ -412,3 +412,15 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 验证：397/397 绿（P2-2 server-resilience 全量并发下一次时序抖动，单文件与全量复跑均绿，挂账观察）；真机 `opencode plugin update` exit=0 首次成功 + verify-install 7/7 PASS（0.16.2 @ 0fbcdfc，src 71 / test 41，宿主日志无 TUI 注册失败）
 - [x] 发布 0fbcdfc + tag v0.16.2 远端核实（master == tag == origin）
 - [x] 用户活体冒烟（一分钟）：打开状态弹窗 → ESC 关闭 → r 刷新 → 再 ESC——ora-9 P1#3 承重假设实锤成立（2026-10-14 用户真机四步全过）；双端口存活观察项随会话重启收敛
+
+## v0.17.0 弹窗点击关闭 + KPI 双写法 + 看板载入即取新 + EACCES 端口修复（push #41，2026-10-14，orchestrator 直养）
+
+- [x] 用户需求三连（真机冒烟后追加）：弹窗右上角显示 esc 点击即关闭；KPI 补缩写注记；网页 F5 保证同步最新数据
+- [x] 右上角 ✕ ESC：content 模块按最宽正文行右对齐补位 + 行携带 closeAction，render 层给标题条 <text> 挂 onMouseDown（@opentui/core RenderableOptions 原生 prop，0.5.14 d.ts 类型链实证 TextBufferOptions→RenderableOptions）；宿主不投递鼠标事件时退化纯提示，ESC 键保底（键层冒烟已真机验证）
+- [x] KPI 双写法：35,509,713（35.5M）——全量与紧凑唯一相遇处，<1000 不注记；模型榜/趋势维持紧凑
+- [x] F5 取新：app.js 载入先 await GET /api/refresh（只清 60s TTL 缓存）再拉区块；失败退化为 TTL 语义不阻塞
+- [x] EACCES 修复（真机全量红→绿实证）：Windows WinNAT 保留段跨重启漂移，server 端口重试链旧契约把 EACCES 当致命错 → 撞保留段启动即死；改为与 EADDRINUSE 同按前进类 +1 重试；致命类样本换 EADDRNOTAVAIL；旧「EACCES 快速失败」双锁改写为新契约锁 + 新增保留段跳过回归锁
+- [x] 探针纪律升级：tarball 探针目录先 npm init 自带 package.json，切断 npm 向上找项目根到家目录的路径（0.16.2 污染类根防）；本轮实证家目录零污染
+- [x] 验证：401/401 绿 + check 0 + 探针门禁过（103 包 5 秒）+ 敏感扫描四项清零 + verify-install 7/7 PASS（0.17.0 @ b6d0af5）
+- [x] 发布 b6d0af5 + tag v0.17.0 远端核实；plugin update 首跑 exit=1 带瞬态栈但安装已完整落盘（verify 7/7 实证），复跑干净收敛（exit=0「No plugin updates available」）——瞬态挂账观察
+- [ ] 用户真机冒烟（重启 TUI 后）：/insight-status → 标题条右上角见 ✕ ESC → 鼠标点击关闭 → KPI 行见「全量（缩写）」→ 网页 F5 数据全新；若点击无效（宿主未开鼠标上报）则 ESC 键兜底属预期降级
