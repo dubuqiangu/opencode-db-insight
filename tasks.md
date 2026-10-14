@@ -423,4 +423,19 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 探针纪律升级：tarball 探针目录先 npm init 自带 package.json，切断 npm 向上找项目根到家目录的路径（0.16.2 污染类根防）；本轮实证家目录零污染
 - [x] 验证：401/401 绿 + check 0 + 探针门禁过（103 包 5 秒）+ 敏感扫描四项清零 + verify-install 7/7 PASS（0.17.0 @ b6d0af5）
 - [x] 发布 b6d0af5 + tag v0.17.0 远端核实；plugin update 首跑 exit=1 带瞬态栈但安装已完整落盘（verify 7/7 实证），复跑干净收敛（exit=0「No plugin updates available」）——瞬态挂账观察
-- [ ] 用户真机冒烟（重启 TUI 后）：/insight-status → 标题条右上角见 ✕ ESC → 鼠标点击关闭 → KPI 行见「全量（缩写）」→ 网页 F5 数据全新；若点击无效（宿主未开鼠标上报）则 ESC 键兜底属预期降级
+- [ ] 用户真机冒烟（重启 TUI 后）：/insight-status → 标题条右上角见 ✕ ESC → 鼠标点击关闭 → KPI 行见「全量（缩写）」→ 网页 F5 数据全新；若点击无效（宿主未开鼠标上报）则 ESC 键兜底属预期降级（**v0.18.0 起弹窗已整体移除，前两项作废**；网页 F5 与 EACCES 两项仍有效，并入 v0.18.0 冒烟清单）
+
+## v0.18.0 数据挖掘扩容版：Agent 榜 + 工具错误率 + 范围选择器 + 目录导航 − /insight-status（push #42，2026-10-14，exp-12 + fix-27/28/29 + des-21×2 五车道）
+
+- [x] 需求（用户原话）：继续挖掘数据库看 /insight 页面还能展示什么；追加四笔：删 /insight-status、模型榜加 7/30/90/全部时间范围（默认全部）+ 压缩高度、时段热力「要么不展示要么动态」（选动态）、页首目录点击跳转
+- [x] 数据探矿（orchestrator 直做，node:sqlite 只读探针）：schema 全量 dump + 聚合探针锁定四矿脉——工具段 47,050 全带 state.status（error 5,648/12%）、agent 分布 librarian 209/fixer 153/explore 74、reasoning 23,042/37,204 行非零、cache_read 45 亿；贫矿排除：cost 总计 $0.13、summary_additions 几乎全 NULL、resume_attempts/fork 全 0
+- [x] 现状盘点（exp-12）：15 条 API + 15 区块逐一对照，实锤 AgentStat 与 reasoningShare 早已在现有载荷里躺着——Agent 榜/Reasoning 列为纯前端，tool-health 是唯一新后端面
+- [x] fix-27 `GET /api/tool-health`：两段式抽取加 `$.state.status`（不动 agent 统计既有抽取）、computeToolHealth 纯聚合（unknown 计 total 不计桶、total 降序+tool 升序决胜）、路由 + 缓存 + 10 测试；真库实跑前五：shell 13,529（err 7.6%）/ read 9,533（1.1%）/ edit 7,174（6.0%）/ grep 4,509（13.7% 最刺眼）/ bash 3,057（1.0%）
+- [x] des-21 第一批：Agent 排行榜（`.tables` 区 span-both 全宽、tokens 降序、top-3 偏好工具 chip）、Reasoning 列文案对齐英文、工具 TOP10 错误色带（≥10% 红 / <10% 琥珀）+ `err N%` 标注 + tooltip 增行 + 全局错误率摘要行；DOM shim 契约冒烟 16/16
+- [x] fix-29 删 /insight-status：status-dialog 三模块 + status-panel-data + 39 条测试移除；命令收敛三条；`queryAssistantStepRows`/`parseAssistantStepRow`/`AssistantStepRow` 经 grep 验证保留（sql-aggregation-parity 以它为 JS 聚合基线，属测试资产非死代码）；文档 stale 引用由 orchestrator 清（DESIGN 命令树/模块树/§8、README 两处；CHANGELOG/M6/tasks 历史区按史实保留）
+- [x] fix-28 `/api/models?days=`：scan-floor 下推 + JS 本地午夜回收（复刻 hour-heatmap 惯例）、缺省/非法/0/负 = 全量且缓存键保持旧无参形状、clamp 1..366 后入键（1000≡366 共享条目）+ 10 测试；真库冒烟 7 天窗 11 模型 vs 全量 88（firstSeen 全落窗内）
+- [x] des-21 第二批：模型榜范围选择器（序列守卫 + 分桶缓存 + 未命中保留旧表不闪骨架）+ 限高 464px sticky 表头滚动、时段热力 7/30/90/全部选择器 + 副文案动态化、页首 13 chip 目录导航（.toc-flash 高亮 + reduced-motion 降级 + scroll-margin）；契约冒烟 15/15 + 上批回归 16/16；esbuild 过程抓到 state 键重复真 bug 当场修复
+- [x] 热力图谜底记档：后端无 bug——days 下推与窗口回收一直正确；「永远像近一周」= 数据集中（近 7 天 5,646 步 / 近 14 天 30,791 步 / 近 30 天 86%）+ 7 行=周几的视觉误读；故选动态化而非隐藏
+- [x] 验证：382/382 绿 + check 0（401→382 = +10 tool-health +10 models-days-window −39 status-dialog 链）；合流后 orchestrator 复跑全量确认无 lane 间咬合问题
+- [ ] 发布门禁：敏感扫描 → tarball 探针 → commit/push/tag → plugin update → verify-install 7/7
+- [ ] 用户真机冒烟（重启 TUI 后）：/insight 打开看板 → 页首目录 chip 跳转 → Agent 榜（librarian 应居首）→ 工具榜错误色带 + 全局错误率 → 模型榜切 7 天/全部 + 限高滚动 → 时段热力切窗口文案随动 → 输入 / 确认只剩三条命令 → 网页 F5 数据全新（承 0.17.0 遗留）→ 0.18.0 加载后行为正常
