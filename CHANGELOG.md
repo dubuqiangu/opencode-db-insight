@@ -8,6 +8,22 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.18.1] - 2026-10-15 · 全仓审视收口：样板归并 + 双定义收敛 + R1 状态一致性修复
+
+> 用户驱动「审视并优化整个项目代码，不破坏功能、不引入风险」：ora-10 全仓行为保持审视（P1×4 / P2×4 / 拒绝×9 + 风险点 R1/R2），orchestrator 裁决放行 P1-1/2/3/4 与 R1，拒绝 P2-1/2/3（收益配不上验证成本）与 P2-4（行为变更，按其自身注释「再留一版」）。前端执行 lane 中途遭遇 provider 403，剩余四区块转换与 R1 四处由 orchestrator 按审视处方直养补完。
+
+### Fixed
+- **R1 缓存命中渲染不清失败计数**（低危 UI 状态机不一致，0.18.0 引入范围缓存后出现）：四处缓存命中路径（trend/models/heatmap 范围切换 + 会话列表 applyNextView）此前只渲数据不记成功——窗口 B 失败后切回已缓存的窗口 A，顶栏仍报「N 个区块加载失败」。models/heatmap 侧连带修复：加载失败时回正 `state.cache.models` / `state.cache.hourHeatmap` 指针（置 null），防主题重渲把旧窗口数据渲在当前窗口按钮高亮下（窗口错配）。
+
+### Refactored（行为保持，均由 382/382 套件或全仓 grep 锁定）
+- **P1-1**：`parseExtractedFieldList` 逐字节双定义收敛进 `src/db/rows.ts`（五车道并行期刻意隔离的产物，两条 lane 均终态后收口；函数体一字未改）。
+- **P1-2**：`INTERNAL_ERROR_MESSAGE` 双定义单源化——`request-handler.ts` 改从 `api.ts` import。
+- **P1-3**：format.js 三个零消费者死导出删除（`formatPointDelta` / `formatRatioDelta` / `svgElement`，全仓 grep 实证后删）。
+- **P1-4**：app.js 七个同构简单区块加载器（overview / calendar / agents / survival / compaction / todo / directories）归并为 `createSimpleSectionLoader` 工厂，四要素声明式装配，重试闭包由工厂自引用保持等价；带序列守卫的 trend / models / heatmap 与特化失败路径的 tool-health 刻意保持手写。
+
+### Tests
+- 382/382 全绿（套件零增删，全部为等价重构）+ check 0 + esbuild 逐文件解析；R1 为 app.js 交互层修复（无测试锁的面），验收靠代码路径核对 + 真机冒烟（切窗口失败 → 切回缓存窗口 → 顶栏失败计数消失）。
+
 ## [0.18.0] - 2026-10-14 · 数据挖掘扩容版：Agent 榜 + 工具错误率 + 范围选择器 + 目录导航 -/insight-status
 
 > 用户驱动「继续挖掘数据库，看 /insight 页面还能展示什么」：先对真实库做全量 schema 探矿（47,050 个工具段全带 `state.status`、86% 步数集中在近 30 天等事实），再对表现状盘点找差集，得出四个未展示矿脉；随后追加三笔看板易用性改造与一条命令删除。四条并行 lane（fix-27/fix-28/fix-29/des-21×2）交付。

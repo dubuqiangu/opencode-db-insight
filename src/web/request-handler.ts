@@ -9,16 +9,13 @@ import type { IncomingMessage, RequestListener, ServerResponse } from "node:http
 import { readFile } from "node:fs/promises"
 
 import type { SqliteReadConnection } from "../db/types.ts"
-import { handleApiRequest, type RawTextResponse } from "./api.ts"
+import { handleApiRequest, INTERNAL_ERROR_MESSAGE, type RawTextResponse } from "./api.ts"
 import { matchApiRoute } from "./router.ts"
 import { contentTypeForFilePath, resolveStaticFilePath } from "./static-files.ts"
 
 /** Message shown for GET / until the M3 dashboard lands in public/. */
 export const DASHBOARD_NOT_DEPLOYED_MESSAGE =
   "dashboard not deployed yet: src/web/public/index.html is missing (frontend arrives in M3)"
-
-/** Error body of the opaque 500 answers (details go to console.error only). */
-export const INTERNAL_ERROR_MESSAGE = "internal error"
 
 /**
  * Allowed Host header values (P1-6): the loopback literal or localhost,

@@ -64,6 +64,22 @@ export function parseJsonText(rawValue: unknown): unknown {
   }
 }
 
+/**
+ * Parse the JSON array text produced by a multi-path json_extract() or
+ * a json_group_array() fallback (one JSON parse per row, returning only
+ * the small extracted values). Anything unexpected degrades to an empty
+ * list — matching how the full-row JS pipeline degraded unparseable rows.
+ */
+export function parseExtractedFieldList(rawFieldList: unknown): unknown[] {
+  if (typeof rawFieldList !== "string") return []
+  try {
+    const parsedFields: unknown = JSON.parse(rawFieldList)
+    return Array.isArray(parsedFields) ? parsedFields : []
+  } catch {
+    return []
+  }
+}
+
 /** Look up a possibly-nested JSON object field, null-safe. */
 export function readRecordField(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
   return asRecord(record[key])

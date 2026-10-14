@@ -133,16 +133,36 @@ function markSection(sectionName, didSucceed) {
 }
 
 /* ---------- 各区块：加载 + 渲染 + 容错 ---------- */
-async function loadOverviewSection() {
-  try {
-    state.cache.overview = await fetchOverview();
-    renderKpiRow(kpiRowElement, state.cache.overview);
-    markSection("overview", true);
-  } catch (error) {
-    renderError(kpiRowElement, error, loadOverviewSection);
-    markSection("overview", false);
+
+/**
+ * 简单区块加载器工厂（P1-4 样板归并）：七个同构区块
+ * （overview / calendar / agents / survival / compaction / todo / directories）
+ * 的 try{取数→渲染→markSection(true)} / catch{renderError→markSection(false)}
+ * 样板收口到此。各区块只声明四要素：区块名 / 容器 / 取数闭包（含写缓存，
+ * 与手写版的赋值顺序一致）/ 渲染闭包。重试闭包由 loadSection 自引用——
+ * renderError 的重试按钮与手写版行为完全等价。
+ * 不并入：带序列守卫的 trend / models / heatmap 与特化失败路径的
+ * tool-health（保持手写，见下文）。
+ */
+function createSimpleSectionLoader(sectionName, container, fetchSectionData, renderSectionData) {
+  async function loadSection() {
+    try {
+      renderSectionData(await fetchSectionData());
+      markSection(sectionName, true);
+    } catch (error) {
+      renderError(container, error, loadSection);
+      markSection(sectionName, false);
+    }
   }
+  return loadSection;
 }
+
+const loadOverviewSection = createSimpleSectionLoader(
+  "overview",
+  kpiRowElement,
+  async () => (state.cache.overview = await fetchOverview()),
+  (overviewStats) => renderKpiRow(kpiRowElement, overviewStats),
+);
 
 /**
  * 范围切换渲染序列守卫（同 session-replay 的 renderSequence 模式）：
@@ -182,16 +202,12 @@ function renderTrendSectionFromCache() {
     : `窗口命中率 <b class="num">${formatPercent(funnelSummary.windowHitRate)}</b> · 供给 <span class="num">${formatTokens(funnelSummary.supply)}</span>`;
 }
 
-async function loadCalendarSection() {
-  try {
-    state.cache.calendarTrend = await fetchTrend(TREND_CALENDAR_WINDOW_DAYS);
-    renderCalendarHeatmap(calendarHeatmapElement, state.cache.calendarTrend);
-    markSection("calendar", true);
-  } catch (error) {
-    renderError(calendarHeatmapElement, error, loadCalendarSection);
-    markSection("calendar", false);
-  }
-}
+const loadCalendarSection = createSimpleSectionLoader(
+  "calendar",
+  calendarHeatmapElement,
+  async () => (state.cache.calendarTrend = await fetchTrend(TREND_CALENDAR_WINDOW_DAYS)),
+  (calendarTrend) => renderCalendarHeatmap(calendarHeatmapElement, calendarTrend),
+);
 
 async function loadToolsSection() {
   try {
@@ -208,16 +224,12 @@ async function loadToolsSection() {
 
 /** Agent 排行榜：同一 /api/agents 端点的独立加载/独立容错（与 tools 区块
  * 各自请求，服务端 60s TTL 下两次请求不双倍成本）。 */
-async function loadAgentSection() {
-  try {
-    state.cache.agents = await fetchAgents();
-    renderAgentTable(agentTableElement, state.cache.agents);
-    markSection("agents", true);
-  } catch (error) {
-    renderError(agentTableElement, error, loadAgentSection);
-    markSection("agents", false);
-  }
-}
+const loadAgentSection = createSimpleSectionLoader(
+  "agents",
+  agentTableElement,
+  async () => (state.cache.agents = await fetchAgents()),
+  (agentStats) => renderAgentTable(agentTableElement, agentStats),
+);
 
 /** 工具标题旁的全局错误率摘要行：Global error rate = Σerror / Σtotal。 */
 function renderToolHealthCaption(toolHealthStats) {
@@ -280,6 +292,9 @@ async function loadModelsSection() {
     if (requestToken !== modelsLoadSequence || requestRange !== state.modelRange) return;
     renderError(modelTableElement, error, loadModelsSection);
     markSection("models", false);
+    // R1：失败回正指针——否则主题重渲会把旧窗口数据渲在当前窗口按钮
+    // 高亮下（窗口错配）。null 让模型过滤/主题重渲走空数据而非错配数据。
+    state.cache.models = null;
   }
 }
 
@@ -289,6 +304,9 @@ function onModelRangeSelected(nextRange) {
   if (cachedMetrics !== undefined) {
     state.cache.models = cachedMetrics;
     renderModelTable(modelTableElement, cachedMetrics, state.modelFilter, onModelSelected);
+    // R1：缓存命中同样记成功——否则先前窗口的失败计数残留顶栏，且
+    // models 指针已指向完好的缓存数据，状态栏与数据面必须一致。
+    markSection("models", true);
   } else {
     loadModelsSection();
   }
@@ -361,6 +379,8 @@ async function loadHourHeatmapSection() {
     if (requestToken !== heatmapLoadSequence || requestDays !== state.heatmapDays) return;
     renderError(hourHeatmapElement, error, loadHourHeatmapSection);
     markSection("hour-heatmap", false);
+    // R1：失败回正指针，防主题重渲渲出窗口错配的旧格子（同 models）。
+    state.cache.hourHeatmap = null;
   }
 }
 
@@ -371,6 +391,8 @@ function onHeatmapRangeSelected(nextDays) {
   if (cachedCells !== undefined) {
     state.cache.hourHeatmap = cachedCells;
     renderHourHeatmap(hourHeatmapElement, cachedCells);
+    // R1：缓存命中同样记成功（同 onModelRangeSelected 的理由）。
+    markSection("hour-heatmap", true);
   } else {
     loadHourHeatmapSection();
   }
@@ -389,49 +411,34 @@ function bindHeatmapRangeSwitch() {
   });
 }
 
-async function loadSessionSurvivalSection() {
-  try {
-    state.cache.sessionSurvival = await fetchSessionSurvival();
-    renderSessionSurvivalCard(sessionSurvivalElement, state.cache.sessionSurvival);
-    markSection("session-survival", true);
-  } catch (error) {
-    renderError(sessionSurvivalElement, error, loadSessionSurvivalSection);
-    markSection("session-survival", false);
-  }
-}
+const loadSessionSurvivalSection = createSimpleSectionLoader(
+  "session-survival",
+  sessionSurvivalElement,
+  async () => (state.cache.sessionSurvival = await fetchSessionSurvival()),
+  (survivalStats) => renderSessionSurvivalCard(sessionSurvivalElement, survivalStats),
+);
 
-async function loadCompactionSection() {
-  try {
-    state.cache.compaction = await fetchCompaction();
-    renderCompactionPanel(compactionPanelElement, state.cache.compaction);
-    markSection("compaction", true);
-  } catch (error) {
-    renderError(compactionPanelElement, error, loadCompactionSection);
-    markSection("compaction", false);
-  }
-}
+const loadCompactionSection = createSimpleSectionLoader(
+  "compaction",
+  compactionPanelElement,
+  async () => (state.cache.compaction = await fetchCompaction()),
+  (compactionStats) => renderCompactionPanel(compactionPanelElement, compactionStats),
+);
 
-async function loadTodoSection() {
-  try {
-    state.cache.todo = await fetchTodo();
-    renderTodoCard(todoCardElement, state.cache.todo);
-    markSection("todo", true);
-  } catch (error) {
-    renderError(todoCardElement, error, loadTodoSection);
-    markSection("todo", false);
-  }
-}
+const loadTodoSection = createSimpleSectionLoader(
+  "todo",
+  todoCardElement,
+  async () => (state.cache.todo = await fetchTodo()),
+  (todoStats) => renderTodoCard(todoCardElement, todoStats),
+);
 
-async function loadDirectorySection() {
-  try {
-    state.cache.directories = await fetchDirectoryStats(10);
-    renderDirectoryPanel(directoryPanelElement, state.cache.directories, state.directoryFilter, onDirectorySelected);
-    markSection("directories", true);
-  } catch (error) {
-    renderError(directoryPanelElement, error, loadDirectorySection);
-    markSection("directories", false);
-  }
-}
+const loadDirectorySection = createSimpleSectionLoader(
+  "directories",
+  directoryPanelElement,
+  async () => (state.cache.directories = await fetchDirectoryStats(10)),
+  (directoryStats) =>
+    renderDirectoryPanel(directoryPanelElement, directoryStats, state.directoryFilter, onDirectorySelected),
+);
 
 /* ---------- 模型 / 目录下钻过滤 ---------- */
 function onModelSelected(modelId) {
@@ -501,6 +508,8 @@ function bindRangeSwitch() {
     }
     if (state.cache.rangeTrend[state.range] !== undefined) {
       renderTrendSectionFromCache();
+      // R1：缓存命中同样记成功——先前窗口的失败计数不得残留顶栏。
+      markSection("trend", true);
     } else {
       loadTrendSection();
     }

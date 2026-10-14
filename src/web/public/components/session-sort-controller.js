@@ -189,6 +189,9 @@ export function createSessionSortController({
     if (nextRange === ""
       && viewState.cache.has(sessionSortCacheKey(nextSortKey, nextSortOrder, nextDirectory, ""))) {
       renderCurrent();
+      // R1：缓存命中同样记成功——此前视图的加载失败计数不得残留顶栏
+      //（renderCurrent 纯渲染不碰计数，网络成功路径在 load() 里已记）。
+      markSectionSucceeded();
     } else {
       renderSessionPage(null);
       load();

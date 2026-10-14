@@ -33,19 +33,6 @@ export function formatPercent(fraction, digits = 1) {
   return (fraction * 100).toFixed(digits) + "%";
 }
 
-/** 环比百分点差：+2.1pp / -0.8pp。 */
-export function formatPointDelta(current, previous) {
-  if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
-  const deltaPp = (current - previous) * 100;
-  return deltaPp.toFixed(1) + "pp";
-}
-
-/** 相对变化：previous 为 0 时返回 null（避免 ∞）。 */
-export function formatRatioDelta(current, previous) {
-  if (!Number.isFinite(current) || !Number.isFinite(previous) || previous === 0) return null;
-  return ((current - previous) / previous * 100).toFixed(1) + "%";
-}
-
 /** 本地时区 'YYYY-MM-DD' → 当日零点 epoch 毫秒。 */
 export function dateKeyToEpoch(dateKey) {
   const [year, month, day] = dateKey.split("-").map(Number);
@@ -137,13 +124,4 @@ const HTML_ESCAPE_MAP = {
 /** HTML 文本转义（SVG/DOM 模板里插用户可见字符串前必过）。 */
 export function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (char) => HTML_ESCAPE_MAP[char]);
-}
-
-/** 创建带命名空间与属性的 SVG 元素。 */
-export function svgElement(tagName, attributes = {}) {
-  const element = document.createElementNS("http://www.w3.org/2000/svg", tagName);
-  for (const [name, value] of Object.entries(attributes)) {
-    if (value !== undefined && value !== null) element.setAttribute(name, String(value));
-  }
-  return element;
 }

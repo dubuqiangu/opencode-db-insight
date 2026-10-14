@@ -22,6 +22,7 @@ import {
   asRecord,
   coerceNumber,
   coerceText,
+  parseExtractedFieldList,
   readAgentName,
   readRowNumber,
   UNKNOWN_MODEL_ID,
@@ -46,22 +47,6 @@ import {
   type AgentStat,
   type AgentStepUsageSample,
 } from "../stats/agent-fingerprint.ts"
-
-/**
- * Parse the JSON array text produced by the multi-path json_extract()
- * (one JSON parse per row, returning only the small extracted values).
- * Anything unexpected degrades to an empty list, i.e. all-zero tokens —
- * matching how the old parser degraded unparseable rows.
- */
-function parseExtractedFieldList(rawFieldList: unknown): unknown[] {
-  if (typeof rawFieldList !== "string") return []
-  try {
-    const parsedFields: unknown = JSON.parse(rawFieldList)
-    return Array.isArray(parsedFields) ? parsedFields : []
-  } catch {
-    return []
-  }
-}
 
 /**
  * Content arrays longer than this fall back to a json_each walk for tool

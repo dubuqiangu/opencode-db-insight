@@ -439,3 +439,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 验证：382/382 绿 + check 0（401→382 = +10 tool-health +10 models-days-window −39 status-dialog 链）；合流后 orchestrator 复跑全量确认无 lane 间咬合问题
 - [x] 发布门禁：敏感扫描四类清零 → tarball 探针过（68 包干净安装）→ c333dc4 feat + d7aeee4 台账 → push + tag v0.18.0 远端核实（master == tag == d7aeee4）→ verify-install 7/7 PASS（0.18.0 @ d7aeee4，src 70=70 / test 40=40）→ 全引用 update 复跑 exit=0「No plugin updates available」干净收敛。**勘误**：`opencode plugin update` 传短 id（`opencode-db-insight`）会报「Plugin is not configured」exit=1——CLI 只认全引用 `github:dubuqiangu/opencode-db-insight`；0.17.0 台账的「update 首跑瞬态挂账」按此修正理解（应验过均为短 id 调用，非瞬态）
 - [ ] 用户真机冒烟（重启 TUI 后）：/insight 打开看板 → 页首目录 chip 跳转 → Agent 榜（librarian 应居首）→ 工具榜错误色带 + 全局错误率 → 模型榜切 7 天/全部 + 限高滚动 → 时段热力切窗口文案随动 → 输入 / 确认只剩三条命令 → 网页 F5 数据全新（承 0.17.0 遗留）→ 0.18.0 加载后行为正常
+
+## v0.18.1 全仓审视收口：样板归并 + 双定义收敛 + R1 状态一致性修复（push #43，2026-10-15，ora-10 审视 + fix-30/des-21 执行 + orchestrator 直养补完）
+
+- [x] 需求（用户原话）：审视并优化整个项目的代码，但是不要破坏原有的功能，也不要引入新的风险
+- [x] ora-10 全仓行为保持审视：P1×4（机械可执行）/ P2×4（存疑）/ 拒绝×9（含 tui.tsx 改名、序列守卫工厂化、stride 游走合并等「看似可简化实为 load-bearing」项）+ 风险点 R1（缓存命中不清 failedSections）/ R2（tool-health 无重试入口，有意设计，仅记档）；排除清单全部按约定绕开（两段式抽取、TTL、端口重试、vendor define、parity 资产等）
+- [x] 裁决：放行 P1-1/2/3/4 + R1（des-21 刚合流产物里的真 bug 顺手修）；拒绝 P2-1/2/3（app.js 无测试锁的面，收益配不上验证成本）与 P2-4（index.ts 端口写入清理是行为变更，其注释自述「再留一版」，非本审视范围）
+- [x] fix-30（P1-1/P1-2 后端）：parseExtractedFieldList 双定义收敛进 rows.ts（函数体一字未改，调用侧 stride/path-builder/字段表全不动）+ INTERNAL_ERROR_MESSAGE 单源化（request-handler 改 import api.ts，方向无环已验证）；382/382 + check 0
+- [x] des-21 前端 lane 中途 provider 403 阵亡（P1-3 已完成：format.js 三死导出 grep 实证后删；P1-4 完成 3/7：overview/calendar/agents 工厂化；R1 未动）
+- [x] orchestrator 直养补完（剩余量小且机械，上下文已在手）：P1-4 后四区块（survival/compaction/todo/directories）转换 + R1 四处（trend/models/heatmap 缓存命中补 markSection(true) + session-sort-controller applyNextView 补 markSectionSucceeded()）+ models/heatmap 失败回正 state.cache.models/hourHeatmap 指针置 null（防主题重渲窗口错配）；esbuild 逐文件解析过 + 382/382 + check 0
+- [ ] 发布门禁：敏感扫描 → tarball 探针 → commit/push/tag v0.18.1 → plugin update（全引用）→ verify-install 7/7
+- [ ] 用户真机冒烟追加两项：① R1 场景——任一区块加载失败后切回已缓存窗口，顶栏失败计数应消失；② 七个简单区块（KPI/日历/Agent 榜/存活/压缩/todo/目录）初载与重试按钮行为与 0.18.0 无异

@@ -13,7 +13,7 @@
  */
 
 import type { SqliteReadConnection } from "./types.ts"
-import { asRecord, coerceText } from "./rows.ts"
+import { asRecord, coerceText, parseExtractedFieldList } from "./rows.ts"
 import { ASSISTANT_OBJECT_DATA_PREDICATE } from "./scan-conventions.ts"
 import {
   computeToolHealth,
@@ -48,22 +48,6 @@ function buildToolHealthPartFieldPaths(): string {
   return partFieldPaths.join(", ")
 }
 
-/**
- * Parse the JSON array text produced by the multi-path json_extract()
- * or the json_group_array() fallback (one JSON parse per row,
- * returning only the small extracted values). Anything unexpected
- * degrades to an empty list — same convention as the agent stats.
- */
-function parseExtractedPartFieldList(rawFieldList: unknown): unknown[] {
-  if (typeof rawFieldList !== "string") return []
-  try {
-    const parsedFields: unknown = JSON.parse(rawFieldList)
-    return Array.isArray(parsedFields) ? parsedFields : []
-  } catch {
-    return []
-  }
-}
-
 /** Status bucket for tool parts whose state.status is not a string. */
 const UNKNOWN_TOOL_STATUS = "unknown"
 
@@ -82,7 +66,7 @@ const UNKNOWN_TOOL_STATUS = "unknown"
  * total but in no bucket.
  */
 function extractToolHealthSamples(rawPartFields: unknown): ToolHealthSample[] {
-  const partFields = parseExtractedPartFieldList(rawPartFields)
+  const partFields = parseExtractedFieldList(rawPartFields)
   const flatPartFields =
     partFields.length > 0 && Array.isArray(partFields[0]) ? partFields.flat() : partFields
 
