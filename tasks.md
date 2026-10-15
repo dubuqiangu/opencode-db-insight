@@ -458,5 +458,5 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] des-22（版面三件）：等高封顶 `--table-body-cap: 464px` 共享变量 + `align-self: start` 自然收尾；首列 sticky 冻结（双主题令牌 `--panel-accent-tint`、三态底色、corner-th 层叠、inset 分隔线，scrollport = .model-body 单一滚动容器）；会话选择器 sticky 控制行右缘同轴；panel-sub 文案按定稿逐字落
 - [x] fix-32（自动刷新）：默认 5m 可调 关/1m/5m/15m（localStorage `insight-auto-refresh-minutes`，防 Number(null)===0 误读）；refreshAllSections 按当前视图原样重取全区块 + 会话列表 refreshCurrentView()（仅失效当前组合缓存）；防重入 + 隐藏暂停 + 回前台过期补刷（失败轮也计时戳防连环重刷）；控件 JS 注入零新增 CSS
 - [x] 合流回归：384/384 全绿（+2 净增）+ check 0 + esbuild 全改动 JS 逐文件解析过
-- [ ] 发布门禁：敏感扫描 → tarball 探针 → commit/push/tag v0.19.0 → plugin update（全引用，首跑 exit=1 属一过性、复跑收敛）→ verify-install 7/7
+- [x] 发布门禁：敏感扫描四类清零 → tarball 探针过（68 包干净安装，407.8KB）→ 793f52f → push + tag v0.19.0 远端核实（master == tag == 793f52f）→ plugin update 全引用一次干净通过（本次无一过性）→ verify-install 7/7 PASS（0.19.0 @ 793f52f，src 70=70 / test 40=40）
 - [ ] 用户真机冒烟（重启 TUI 后）：四处切换器标签与样式一致（All 排最后）→ 模型榜点 glm-5.3 等「只出现在步骤里」的模型行 → 会话列表非空且都是用过它的会话 → 会话列表与模型榜两块等高、无大片空白 → 模型榜横向拖动时模型名列冻结 → 顶部自动刷新选择器（默认 5m）挂后台 5 分钟数据自刷 → 切到别的标签页再切回若已过期立即刷新 → F5 数据全新 → 承接 0.18.1 未验的 R1 场景与七区块回归
