@@ -317,6 +317,13 @@ export function resolveSessionRange(
  * SQLite as a bind parameter. Bind order (v0.9.0, locked by
  * test/session-range-filter.test.ts): directory, range threshold,
  * limit, offset.
+ *
+ * Step enrichment switch (v0.19.1, P2-4): `includeStepModelIds`
+ * defaults to true (the dashboard sessions page consumes modelIds for
+ * the client-side model drill-down). Callers that never read
+ * modelIds — the CSV export loop and the TUI export picker — pass
+ * false to skip the per-page step-model aggregation entirely; their
+ * summaries then carry only the launch model in modelIds.
  */
 export function querySessionList(
   db: SqliteReadConnection | null,
@@ -326,6 +333,7 @@ export function querySessionList(
   sortOrderValue: string | null | undefined = DEFAULT_SESSION_SORT_ORDER,
   directoryValue: string | null | undefined = null,
   rangeStartMs: number | null | undefined = null,
+  includeStepModelIds: boolean = true,
 ): SessionSummary[] | null {
   if (db === null) return null
   const safeLimit = clampPaginationValue(limit, 1, 500)
@@ -374,9 +382,19 @@ export function querySessionList(
   }
   // 空页不做聚合：没有任何 summary 需要装饰，省掉一次全表扫描；
   // 这也使「捕获空结果连接」的既有 SQL 字节锁测试（目录/范围/排序
-  // 注入面）继续只捕获列表语句本身。非空页才建全量 step 模型 Map。
+  // 注入面）继续只捕获列表语句本身。非空页才建 step 模型 Map。
   if (sessionSummaries.length === 0) return sessionSummaries
-  const stepModelIdsBySessionId = queryStepModelIdsBySessionId(db)
+  // P2-4（v0.19.1 性能热修）第一档：不消费 modelIds 的调用点（CSV
+  // 导出循环、TUI 导出选单）传 false 跳过 step 富化——modelIds 只由
+  // 会话列表的客户端模型过滤消费，为不读它的路径逐行解析 47k 条
+  // assistant JSON 是纯浪费。此时 modelIds 只含启动模型。
+  if (!includeStepModelIds) return sessionSummaries
+  // P2-4 第二档：富化查询改 IN 下推——只扫当页会话的 id 集（全表版
+  // 真库实测 ~2.6s/次，IN 下推版 ~531ms/页，见 queryStepModelIdsBySessionId）。
+  const stepModelIdsBySessionId = queryStepModelIdsBySessionId(
+    db,
+    sessionSummaries.map((sessionSummary) => sessionSummary.id),
+  )
   for (const sessionSummary of sessionSummaries) {
     sessionSummary.modelIds = buildSessionModelIds(
       sessionSummary.modelId,
@@ -409,7 +427,7 @@ export function querySessionSummaryById(
   if (rowRecord === null) return null
   // 单查路径也填 modelIds（仅扫该会话的 step 行，低频路径，代价可忽略）：
   // 与列表路径同一口径，保证同一会话从两条路径取出的形状逐字段一致。
-  const stepModelIdsBySessionId = queryStepModelIdsBySessionId(db, sessionId)
+  const stepModelIdsBySessionId = queryStepModelIdsBySessionId(db, [sessionId])
   return parseSessionSummaryRow(rowRecord, stepModelIdsBySessionId.get(sessionId))
 }
 
@@ -421,34 +439,45 @@ export function querySessionSummaryById(
  * 启动模型出现，按启动模型过滤必然点出行列表空。会话列表因此改按
  * 「会话内 step 级出现过」过滤，本查询就是那个集合的 SQL 侧来源。
  *
- * `sessionId` 给定时只扫该会话（by-id 单查路径复用同一口径，保证两条
- * 路径产出的 SessionSummary 形状一致——sql-aggregation-parity 的
- * by-id 逐字段锁依赖这一点）；缺省扫全表（列表路径一次建全量 Map）。
- * 谓词复用聚合统计的共享 ASSISTANT_OBJECT_DATA_PREDICATE：与排行榜
- * 扫描同一批行，空 model.id 由 JS 侧归一为 "unknown"（镜像
- * parseAssistantStepRow / queryModelMetrics 的归一，保证点排行榜的
- * "unknown" 行下钻也能命中）。
+ * `sessionIds` 是本次富化要覆盖的会话 id 集（by-id 单查路径传单个
+ * id；列表路径传当页整页 id 集——P2-4 IN 下推：谓词置于 json 函数
+ * 谓词之前，SQLite 的 AND 按书写序短路，47k 行逐行 JSON 解析缩到
+ * 只解析当页会话的行，真库实测 ~2.6s/次 → ~531ms/页）。两条路径复用
+ * 同一口径，保证产出的 SessionSummary 形状一致（sql-aggregation-parity
+ * 的 by-id 逐字段锁依赖这一点）。谓词复用聚合统计的共享
+ * ASSISTANT_OBJECT_DATA_PREDICATE：与排行榜扫描同一批行，空 model.id
+ * 由 JS 侧归一为 "unknown"（镜像 parseAssistantStepRow / queryModelMetrics
+ * 的归一，保证点排行榜的 "unknown" 行下钻也能命中）。
  */
 function queryStepModelIdsBySessionId(
   db: SqliteReadConnection,
-  sessionId?: string,
+  sessionIds: string[],
 ): Map<string, Set<string>> {
-  const hasSessionFilter = sessionId !== undefined
+  // 空 id 集不发 SQL：IN () 不是合法语句，且没有会话就没有富化可做。
+  if (sessionIds.length === 0) return new Map()
+  const sessionFilterSql = `session_id IN (${sessionIds.map(() => "?").join(", ")})`
   let rawRows: unknown[]
   try {
     rawRows = db
       .prepare(
         `SELECT session_id, json_extract(data, '$.model.id') AS model_id
          FROM session_message
-         WHERE ${hasSessionFilter ? "session_id = ? AND " : ""}${ASSISTANT_OBJECT_DATA_PREDICATE}
+         WHERE ${sessionFilterSql} AND ${ASSISTANT_OBJECT_DATA_PREDICATE}
          GROUP BY session_id, model_id`,
       )
-      .all(...(hasSessionFilter ? [sessionId] : []))
-  } catch {
-    // 极简库降级：只有 session_v2 的库（CSV 导出测试夹具即此形态）没有
-    // session_message 表——step 集合整体置空，summary 的 modelIds 只含
-    // 启动模型。富化失败不得牵连列表/导出主查询（后者依赖 session_v2
+      .all(...sessionIds)
+  } catch (error) {
+    // R-D（v0.19.1 catch 宽度加固）：「no such table」是已知且合法的
+    // 降级场景——只有 session_v2 的库（CSV 导出测试夹具即此形态）没有
+    // session_message 表，静默降级即可；其余任何错误（真实 SQL 错误、
+    // 库损坏）必须先 console.error 再降级，防无痕复发 v0.19.0 修过的
+    // bug。降级语义不变：step 集合整体置空，summary 的 modelIds 只含
+    // 启动模型；富化失败不得牵连列表/导出主查询（后者依赖 session_v2
     // 单表，语义上就不需要 step 数据）。
+    const failureMessage = error instanceof Error ? error.message : String(error)
+    if (!/no such table/i.test(failureMessage)) {
+      console.error("opencode-db-insight: step model id aggregation failed", error)
+    }
     return new Map()
   }
 

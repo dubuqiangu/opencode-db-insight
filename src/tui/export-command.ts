@@ -112,7 +112,18 @@ export async function pickSessionForExport(
   const dialogSelect = readDialogSelect(context)
   if (dialogSelect === null) return null
 
-  const recentSessions = querySessionList(databaseConnection, RECENT_SESSION_PICK_COUNT, 0)
+  // P2-4（v0.19.1）：选单只展示 title/时间/启动模型/agent，不消费
+  // modelIds——关掉 step 富化，省掉一次当页 step 聚合扫描。
+  const recentSessions = querySessionList(
+    databaseConnection,
+    RECENT_SESSION_PICK_COUNT,
+    0,
+    undefined,
+    undefined,
+    null,
+    null,
+    false,
+  )
   if (recentSessions === null || recentSessions.length === 0) return null
 
   try {

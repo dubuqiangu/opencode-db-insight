@@ -317,13 +317,18 @@ export function createFakeInsightDatabase(
       // 只统计 assistant 且 data 为 JSON 对象的消息（与下方 assistant-step
       // 镜像同一判定）；model.id 缺失/非对象按 SQL NULL 服务（查询层跳过），
       // 空串原样服务（查询层归一 "unknown"，镜像真实 json_extract）。
+      // v0.19.1 P2-4 IN 下推：富化只扫给定 id 集——session_id IN (?, ...)
+      // 的绑定参数即当页（或单查）会话 id，镜像同一过滤。
       if (sql.includes("GROUP BY session_id, model_id")) {
-        const isPerSessionAggregate = sql.includes("session_id = ?")
+        const isPageScopedAggregate = sql.includes("session_id IN (")
         return {
           all: (...parameters: unknown[]) => {
+            const pageScopedSessionIds = isPageScopedAggregate
+              ? new Set(parameters.map((pageSessionId) => String(pageSessionId ?? "")))
+              : null
             const aggregatedRows: Array<{ session_id: string; model_id: unknown }> = []
             for (const [sessionId, messageFixtures] of Object.entries(scenario.messagesBySessionId)) {
-              if (isPerSessionAggregate && sessionId !== String(parameters[0] ?? "")) continue
+              if (pageScopedSessionIds !== null && !pageScopedSessionIds.has(sessionId)) continue
               for (const messageFixture of messageFixtures) {
                 if (messageFixture.type !== "assistant") continue
                 if (

@@ -8,6 +8,24 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.19.1] - 2026-10-16 · ora-11 审视处方热修：性能 + 健壮性
+
+> ora-11 全仓审视（v0.19.0 增量面）结论：无 P1；P2×6 全部放行。核心是 P2-4 性能热修——真库实测 modelIds 全表 GROUP BY 单次 ~2.6s（47k 行逐行 JSON 解析），自 0.19.0 起被会话列表每次排序/翻页、CSV 导出、每轮自动刷新反复触发。
+
+### Fixed
+- **P2-1**：localStorage 从整页启动的硬依赖降为可失败项——禁用站点数据的浏览器/嵌入 WebView 下 `getItem` 抛异常会白屏整个看板；读侧回退默认 5m，写侧 setItem 失败不阻塞间隔应用（修 UI 值与定时器错位）。
+- **P2-2**：`refreshCurrentView` 删掉 `cache.delete` 分支——load() 成功本就无条件回写缓存，先删只会在失败时赔掉完好缓存；补该公开入口的首批测试（失败保缓存 + 成功回写）。
+- **P2-3**：`renderCurrent()` 稳定视图缓存 miss 落骨架后直接补请求（对齐时间窗分支形状；v0.7.0 老问题，自动刷新把暴露窗口放宽后收口）。
+- **P2-5**：修正与 fixture 相反的测试注释（fix-31 lane 524 阵亡半成品，断言本身正确）。
+- **P2-6**：回放页停留期间自动刷新不再照跑（tick/补刷判定加 dashboardElement.hidden；切回看板由补刷判定追平）。
+- **R-D**：step 富化降级 catch 收窄——非「no such table」错误先 console.error 再降级，防 0.19.0 修过的「点模型空列表」以无痕方式复发。
+
+### Performance
+- **P2-4 三档**：`querySessionList` 加 `includeStepModelIds` 开关（默认 true）——CSV 导出循环与 TUI 导出选单传 false（不消费 modelIds，白付 2.6s）；看板路径富化改 **IN 下推**（当页 15 id 前置短路，2.6s → ~531ms）；回放标题查找与看板共用路由、无法区分消费意图，由 IN 下推统一覆盖，不加投机性路由参数。残余 531ms/页（无 session_id 索引的行扫描底价）记 R-A 观察档。
+
+### Tests
+- 386/386 全绿（+2：refreshCurrentView 双场景）+ check 0 + esbuild 逐文件解析；R-B/R-C/R-A/R-E 台账记档见 tasks.md。
+
 ## [0.19.0] - 2026-10-16 · 模型下钻口径修复 + 看板自动刷新 + 版面一致性
 
 > 用户驱动五条意见 + 定时刷新需求，三 lane 并行（fixer ×2 + designer）+ orchestrator 接管收尾。fix-31 lane 中途遭 provider 524 阵亡，落盘工作近完成，由 orchestrator 补一处极简库降级并接管验证。

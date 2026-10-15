@@ -77,16 +77,16 @@ function sessionSortCacheKey(sortKey, sortOrder, directory, range) {
  *   当前值）；点击同一目录重复传入时由调用方先做 toggle 归 null
  * - changeRange(range)：时间范围切换（sort/directory 维持当前值）
  * - renderCurrent()：保证当前视图有内容可渲——稳定视图（空 range）读
- *   缓存（未入缓存渲骨架）；时间窗视图（非空 range）无缓存可依，骨架
- *   + 直取。模型下钻过滤变化后调用（过滤是客户端的，但数据源仍按
- *   视图属性决定直取与否）。
+ *   缓存；缓存 miss（v0.19.1 起）与时间窗视图同形状：骨架 + 直取，
+ *   不再留一副等触发方补请求的裸骨架。模型下钻过滤变化后调用（过滤
+ *   是客户端的，但数据源仍按视图属性决定直取与否）。
  * - renderCurrentIfLoaded()：仅在缓存持有当前组合时渲染（主题切换后
  *   重读配色调用）。时间窗视图从不入缓存，故对它恒为 no-op——见模块
  *   头「已知代价」。
  * - refreshCurrentView()：后台定时刷新入口（app.js 的 refreshAllSections
- *   调用）——失效当前视图组合的缓存条目后重取。只动当前组合的条目，
- *   其他组合缓存保留（切回去仍即时命中）；时间窗视图本就不入缓存，
- *   直接重取。
+ *   调用）——对当前视图直接重取，不再先删缓存条目（v0.19.1 P2-2：
+ *   失败不赔缓存，成功由 load() 自然写回）。只动当前组合，其他组合
+ *   缓存保留（切回去仍即时命中）。
  */
 export function createSessionSortController({
   containerElement,
@@ -121,10 +121,19 @@ export function createSessionSortController({
 
   function renderCurrent() {
     if (viewState.range === "") {
-      // 稳定视图：缓存即真相（未入缓存 → 骨架，由触发加载的路径补请求）
-      renderSessionPage(
-        viewState.cache.get(sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, "")) ?? null,
+      const cachedSessionPayload = viewState.cache.get(
+        sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, ""),
       );
+      if (cachedSessionPayload !== undefined) {
+        // 稳定视图：缓存即真相，命中直渲。
+        renderSessionPage(cachedSessionPayload);
+        return;
+      }
+      // P2-3（v0.19.1）：缓存 miss（典型：load() 失败后缓存仍空）不再
+      // 只落骨架等触发方补请求——与时间窗分支同形状：骨架 + 直取，
+      // 否则模型过滤等入口会在失败后留下一副永不恢复的骨架。
+      renderSessionPage(null);
+      load();
       return;
     }
     // 时间窗视图：缓存从不持有它——直取。判定看视图不看动作，模型
@@ -221,18 +230,14 @@ export function createSessionSortController({
   }
 
   /**
-   * 后台定时刷新（v0.18.x）：失效当前视图组合的缓存条目后重取。
-   * 时间窗视图（非空 range）从不入缓存，直接 load() 即是重取；
-   * 稳定视图先删条目再 load()——load 成功后会写回新数据，缓存自然
-   * 更新到墙钟当下的集合。不做全量 cache.clear()：其他组合的条目
-   * 与本视图无关，保留它们让用户切回时仍即时命中。
+   * 后台定时刷新（v0.18.x）：对当前视图直接重取。时间窗视图（非空
+   * range）从不入缓存，load() 即是重取；稳定视图也不再先删条目
+   * （v0.19.1 ora-11 P2-2：delete 是纯负资产——load 失败会把整页
+   * 好数据赔成错误态，缓存也随之变空；成功路径 load 本身就会写回
+   * 缓存，删除步骤没有任何收益）。不做全量 cache.clear()：其他组合
+   * 的条目与本视图无关，保留它们让用户切回时仍即时命中。
    */
   function refreshCurrentView() {
-    if (viewState.range === "") {
-      viewState.cache.delete(
-        sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, ""),
-      );
-    }
     load();
   }
 

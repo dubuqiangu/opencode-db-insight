@@ -590,14 +590,21 @@ let autoRefreshTimerId = null;
  * 读取持久化的刷新间隔。注意先判 null 再 Number()：getItem 缺省返回
  * null，Number(null) === 0 会把「从未设置」误读成「关闭」——首次访问
  * 应落默认 5m 而不是静默关闭。
+ * P2-1（v0.19.1）：整个读取包 try/catch——localStorage 本身不可用
+ * （隐私模式/存储被策略禁用会抛 SecurityError）时回退默认 5m，
+ * 读侧失败不得拖垮 init 造成白屏。正常环境行为零变化。
  */
 function readStoredAutoRefreshMinutes() {
-  const storedValue = window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY);
-  if (storedValue === null) return AUTO_REFRESH_DEFAULT_MINUTES;
-  const storedMinutes = Number(storedValue);
-  return AUTO_REFRESH_CHOICES.includes(storedMinutes)
-    ? storedMinutes
-    : AUTO_REFRESH_DEFAULT_MINUTES;
+  try {
+    const storedValue = window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY);
+    if (storedValue === null) return AUTO_REFRESH_DEFAULT_MINUTES;
+    const storedMinutes = Number(storedValue);
+    return AUTO_REFRESH_CHOICES.includes(storedMinutes)
+      ? storedMinutes
+      : AUTO_REFRESH_DEFAULT_MINUTES;
+  } catch {
+    return AUTO_REFRESH_DEFAULT_MINUTES;
+  }
 }
 
 /**
@@ -638,7 +645,10 @@ async function refreshAllSections() {
 
 /** 定时 tick：隐藏时跳过（无人看着的后台刷新是纯浪费——服务端每请求现查）。 */
 function onAutoRefreshTick() {
-  if (document.hidden) return;
+  // P2-6（v0.19.1）：回放页（dashboard 隐藏）同样跳过——回放数据不消费
+  // 看板区块，回放期间刷看板是纯浪费；切回看板后由 onVisibilityChange
+  // 的补刷判定追平。
+  if (document.hidden || dashboardElement.hidden) return;
   void refreshAllSections();
 }
 
@@ -648,7 +658,9 @@ function onAutoRefreshTick() {
  * 既有定时器自然触发。自动刷新关闭（interval = 0）时不补。
  */
 function onVisibilityChange() {
-  if (document.hidden || state.autoRefreshMinutes === 0) return;
+  // P2-6（v0.19.1）：从回放页切回看板（document 可见但 dashboard 仍
+  // 隐藏）不触发补刷；dashboard 可见时才按间隔判定补。
+  if (document.hidden || dashboardElement.hidden || state.autoRefreshMinutes === 0) return;
   const intervalMilliseconds = state.autoRefreshMinutes * 60000;
   if (Date.now() - state.lastRefreshCompletedAt >= intervalMilliseconds) {
     void refreshAllSections();
@@ -699,7 +711,14 @@ function mountAutoRefreshControl() {
     const nextMinutes = Number(intervalSelectElement.value);
     if (!AUTO_REFRESH_CHOICES.includes(nextMinutes)) return;
     state.autoRefreshMinutes = nextMinutes;
-    window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, String(nextMinutes));
+    // P2-1（v0.19.1）：写侧包 try/catch——持久化失败只影响下次访问的
+    // 初值；且无论 setItem 成败都应用间隔，否则下拉显示新值而定时器
+    // 还是旧间隔（UI 值与定时器错位）。
+    try {
+      window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, String(nextMinutes));
+    } catch {
+      /* 隐私模式/存储禁用：本次会话照常生效，仅不跨会话记忆 */
+    }
     applyAutoRefreshInterval(nextMinutes);
   });
 

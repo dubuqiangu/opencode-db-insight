@@ -1516,6 +1516,100 @@ test("session-sort-controller: a stale rejection is dropped, a fresh one renders
   )
 })
 
+test("session-sort-controller: refreshCurrentView on a stable view refetches — success overwrites the cache, failure keeps it (v0.19.1 P2-2)", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+  })
+
+  // Seed the stable view's cache slot with an initial payload.
+  controller.load() // request 0: time_updated desc, 全部
+  harness.settleWithMarker(0, "stable cached marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("stable cached marker"))
+
+  // Failure leg: the background refresh blows up — the cache entry must
+  // survive it (the pre-fix delete-then-load would have thrown the good
+  // payload away and left the view with nothing but the error state).
+  controller.refreshCurrentView() // request 1
+  assert.equal(harness.pendingRequests.length, 2, "refreshCurrentView re-issues the current view")
+  harness.rejectWith(1, "refresh blew up")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("refresh blew up"), "the failed refresh surfaces the error state")
+  // Proof the cache survived: switching away and back renders the old
+  // payload with ZERO new requests.
+  controller.changeSort("tokens", "desc") // request 2 — uncached sort: skeleton + request
+  controller.changeSort("time_updated", "desc") // cache hit: renders the surviving entry
+  assert.equal(
+    harness.pendingRequests.length,
+    3,
+    "a cache hit after a failed refresh must not issue a fourth request — the entry survived the failure",
+  )
+  assert.ok(container.innerHTML.includes("stable cached marker"))
+
+  // Success leg: the next refresh succeeds — the cache entry must be
+  // overwritten with the fresh payload (load() writes the cache back).
+  controller.refreshCurrentView() // request 3
+  assert.equal(harness.pendingRequests.length, 4)
+  harness.settleWithMarker(3, "refreshed marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("refreshed marker"))
+  // Proof of the overwrite: back to the stable view is a hit that shows
+  // the NEW payload, still with no extra request.
+  controller.changeSort("tokens", "desc") // request 4 — the tokens slot is still unfilled
+  controller.changeSort("time_updated", "desc") // cache hit: the refreshed payload
+  assert.equal(harness.pendingRequests.length, 5, "the overwritten entry renders without another request")
+  assert.ok(container.innerHTML.includes("refreshed marker"))
+  assert.ok(!container.innerHTML.includes("stable cached marker"))
+})
+
+test("session-sort-controller: renderCurrent on a stable view with a cache miss fetches instead of a bare skeleton (v0.19.1 P2-3)", async () => {
+  const { createSessionSortController } = await import(
+    "../src/web/public/components/session-sort-controller.js"
+  )
+  const container = freshContainer()
+  const harness = createDeferredSessionPageHarness()
+  const controller = createSessionSortController({
+    containerElement: container,
+    fetchSessionsPage: harness.fetchSessionsPage,
+    getModelFilter: () => null,
+  })
+
+  // The initial load fails — the stable view's cache slot stays empty and
+  // the container shows the error state.
+  controller.load() // request 0
+  harness.rejectWith(0, "first load blew up")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("first load blew up"))
+
+  // renderCurrent on the cache miss must ISSUE A REQUEST (the pre-fix
+  // behavior left a bare skeleton that nothing would ever refill).
+  controller.renderCurrent() // request 1 — P2-3: skeleton + fetch
+  assert.equal(
+    harness.pendingRequests.length,
+    2,
+    "renderCurrent after a failed load must issue a fresh request, not a bare skeleton",
+  )
+  assert.equal(harness.pendingRequests[1]!.sortKey, "time_updated")
+
+  harness.settleWithMarker(1, "recovered marker")
+  await flushControllerMicrotasks()
+  assert.ok(container.innerHTML.includes("recovered marker"))
+
+  // The recovery also parked in the cache: switching away and back is an
+  // immediate hit with no new request.
+  controller.changeSort("tokens", "desc") // request 2
+  controller.changeSort("time_updated", "desc") // cache hit
+  assert.equal(harness.pendingRequests.length, 3, "the recovered entry renders without another request")
+  assert.ok(container.innerHTML.includes("recovered marker"))
+})
+
 /* ------------- directory drill-down (v0.7.0) ------------- */
 
 test("session-sort-controller: directory drill-down gets its own cache slot and the guard validates the directory snapshot", async () => {
@@ -1702,7 +1796,8 @@ test("renderSessionList model filter hits step-level modelIds and degrades to mo
     "modelIds 命中过滤：step 里用过该模型的会话必须留下（含启动模型不同的）",
   )
 
-  // modelIds 不含该模型 → 过滤掉（delta 只用过 claude-opus-5）。
+  // modelIds 不含该模型 → 过滤掉（delta 的 modelIds 是 glm-5.3 /
+  // glm-5.3-flash，从没用过 claude-opus-5——过滤词不在任何集合里）。
   const stepModelMissPayload = {
     total: null as const,
     sessions: [

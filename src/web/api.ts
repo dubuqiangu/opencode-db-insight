@@ -60,7 +60,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.19.0"
+export const INSIGHT_VERSION = "0.19.1"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -534,6 +534,9 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         // filtered subset exactly as it does unfiltered.
         const exportPageSize = 500
         for (let pageOffset = 0; ; pageOffset += exportPageSize) {
+          // P2-4（v0.19.1）：CSV 不消费 modelIds，导出循环的每页查询
+          // 关掉 step 富化——真库实测富化占导出耗时的大头（全表版
+          // ~2.6s/次），而这里写出的列一个都不来自 step 数据。
           const summaryPage = querySessionList(
             database,
             exportPageSize,
@@ -542,6 +545,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             DEFAULT_SESSION_SORT_ORDER,
             exportDirectoryFilter,
             exportRangeStartMs,
+            false,
           )
           // Unreachable with a non-null db; kept as belt-and-braces so a
           // mid-export null can never crash the handler.

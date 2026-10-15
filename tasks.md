@@ -460,3 +460,20 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 合流回归：384/384 全绿（+2 净增）+ check 0 + esbuild 全改动 JS 逐文件解析过
 - [x] 发布门禁：敏感扫描四类清零 → tarball 探针过（68 包干净安装，407.8KB）→ 793f52f → push + tag v0.19.0 远端核实（master == tag == 793f52f）→ plugin update 全引用一次干净通过（本次无一过性）→ verify-install 7/7 PASS（0.19.0 @ 793f52f，src 70=70 / test 40=40）
 - [ ] 用户真机冒烟（重启 TUI 后）：四处切换器标签与样式一致（All 排最后）→ 模型榜点 glm-5.3 等「只出现在步骤里」的模型行 → 会话列表非空且都是用过它的会话 → 会话列表与模型榜两块等高、无大片空白 → 模型榜横向拖动时模型名列冻结 → 顶部自动刷新选择器（默认 5m）挂后台 5 分钟数据自刷 → 切到别的标签页再切回若已过期立即刷新 → F5 数据全新 → 承接 0.18.1 未验的 R1 场景与七区块回归
+
+## ora-11 全仓审视（v0.19.0 增量面，2026-10-16）裁决记录
+
+- [x] 结论：**无 P1**；P2×6 全部放行（→ v0.19.1 热修，fix-33 执行）+ R×5 记档；标签统一连锁面 / des-22 CSS 全套 / refreshInFlight 护栏 / visibilitychange 补刷语义 / R1 状态机在自动刷新轮次下的一致性——全部推演放行
+- [x] **P2-4/R-A 实测证据（真库计时入档）**：modelIds 全表 GROUP BY 单次 **2581/2620/3246ms**（47k assistant 行逐行 JSON 解析，962 组）；IN 下推版（session_id IN 当页 15 id 前置）**531/528/533ms**（无 session_message.session_id 索引的行扫描底价）。含义：0.19.0 起会话列表每次排序/翻页服务端拖 2.6s、CSV 导出点击连吃两回、自动刷新每轮 2.6s 同步阻塞事件循环——升级为准 P1 热修；IN 下推为过渡方案，残余 531ms/页记 R-A 观察档
+- [x] P2-1 localStorage 白屏风险（读侧 try/catch 回退默认 5；写侧 setItem 失败不阻塞 applyAutoRefreshInterval）
+- [x] P2-2 refreshCurrentView 的 cache.delete 纯负资产（load() 成功本就无条件回写缓存；先删只会在失败时赔掉完好缓存）→ 删分支 + 补该入口首个测试
+- [x] P2-3 renderCurrent() 稳定视图缓存 miss 落骨架后直接 load()（对齐时间窗分支形状；v0.7.0 老问题被 auto-refresh 放宽暴露）
+- [x] P2-5 fix-31 测试注释与 fixture 相反（web-components ~L1705，524 阵亡半成品，断言本身正确）
+- [x] P2-6 回放页停留期间自动刷新照跑 → tick/补刷判定加 dashboardElement.hidden
+- [x] R-D catch 宽度一行加固：非「no such table」错误先 console.error 再降级（防 v0.19.0 修过的 bug 无痕复发）
+- [x] **R-B 台账修正（R2 处境变化）**：v0.18.1 R2 裁定「tool-health 无重试入口，F5 兜底」自 v0.19.0 起不再成立——自动刷新每轮都调 loadToolHealthSection，构成事实重试通道（默认 5m 自愈）。边界如实记档：① 仅自动刷新非关时成立，手动关闭后退回 F5 兜底；② 失败仍按设计静默（摘要行清空 + 顶栏计数），无错误占位。**不改代码**
+- [x] **R-C 记档（设计取舍，不修）**：自动刷新把瞬时故障从静默陈旧变成可见错误态——「如实反映」哲学的自然延伸，接受；冒烟清单补场景：拔起后端 5s → 下一轮错误态 → 恢复后端 → 再下一轮自愈
+- [ ] **R-E 真机观察挂账**：node:sqlite 同步 API + 自动刷新一轮 14 端点串行阻塞事件循环——0.19.1 后单轮最重面 = modelIds IN 下推 ~531ms + 日历 366 天端点；真机停在回放页观察整 5 分钟边界的翻页延迟手感，超标再议（调大默认间隔/错峰加载均为行为变更，下版决策）
+- [x] fix-33 落地（六处方全落实）：P2-4 三档（开关 false 于 CSV/TUI 直调两处；看板富化 IN 下推 2.6s→531ms；回放标题路径由 IN 下推统一覆盖、不加投机参数）+ P2-1 localStorage 双侧 try/catch + P2-2 删 cache.delete 并补入口首测 + P2-3 稳定分支 miss 补请求（补测）+ P2-5 注释纠正 + P2-6 回放页停刷 + R-D catch 收窄；386/386（+2）+ check 0 + esbuild 过
+- [ ] v0.19.1 发布门禁：敏感扫描 → tarball 探针 → commit/push/tag → plugin update → verify-install 7/7
+- [ ] v0.20.0（用户已批）：统计维度「会话」贯穿全看板（全部会话口径保留，单会话模式下退化面板隐藏）+ 会话列表命中率/Reasoning/步数三列 + 子代理树归总（session_v2.parent_id，593/944 子会话）+ 会话 token 分布直方图（p50/p90/p99）+ 回放累计消耗曲线/峰值上下文/分位徽章；性能设计点：步数计数与 modelIds 合并为一次 GROUP BY
