@@ -92,6 +92,19 @@ export interface SessionSummary {
   /** session_v2.tokens_cache_read, coerced value-by-value (v0.13.0). */
   tokensCacheRead: number
   cost: number
+  /**
+   * 模型下钻口径（v0.19.0 修复「点模型行 → 会话列表空」）：该会话内
+   * 出现过的模型 id 集合 = step 级 `session_message.data` 的
+   * `$.model.id`（与模型排行榜同源，空 id 与排行榜一致归一为
+   * "unknown"）∪ 会话启动模型 session_v2.model 的 .id（"unknown"
+   * 占位不计入——那是缺数据，不是真用过）。两条产出路径
+   * （querySessionList / querySessionSummaryById）都填充且口径相同，
+   * 所以同一会话从任意路径取出的形状一致（P2-2 的 by-id 逐字段
+   * 锁继续成立）。无 step 且启动模型未知的会话为空数组（诚实：
+   * 没有任何已知模型出现过）。前端据此做模型行下钻的行过滤，
+   * 旧宿主 wire 缺字段时组件回退 modelId 精确匹配。
+   */
+  modelIds: string[]
 }
 
 /**

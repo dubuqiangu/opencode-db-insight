@@ -450,3 +450,13 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] orchestrator 直养补完（剩余量小且机械，上下文已在手）：P1-4 后四区块（survival/compaction/todo/directories）转换 + R1 四处（trend/models/heatmap 缓存命中补 markSection(true) + session-sort-controller applyNextView 补 markSectionSucceeded()）+ models/heatmap 失败回正 state.cache.models/hourHeatmap 指针置 null（防主题重渲窗口错配）；esbuild 逐文件解析过 + 382/382 + check 0
 - [x] 发布门禁：敏感扫描四类清零 → tarball 探针过（68 包干净安装）→ d3a17f9 → push + tag v0.18.1 远端核实（master == tag == d3a17f9）→ verify-install 7/7 PASS（0.18.1 @ d3a17f9，src 70=70 / test 40=40）。**update 假警报完整归因（修正 0.18.0 勘误）**：两个独立现象——① 短 id 确定性报「Plugin is not configured」exit=1（CLI 只认全引用）；② 全引用在**刚推送后的首跑**也会一过性 exit=1 带栈（本次实证），verify-install 内嵌同命令成功落盘、随后独立复跑 exit=0「No plugin updates available」干净收敛。结论：以 verify-install 的 7/7 为安装实证唯一标准，update 首跑 exit=1 一律复跑收敛后再看
 - [ ] 用户真机冒烟追加两项：① R1 场景——任一区块加载失败后切回已缓存窗口，顶栏失败计数应消失；② 七个简单区块（KPI/日历/Agent 榜/存活/压缩/todo/目录）初载与重试按钮行为与 0.18.0 无异
+
+## v0.19.0 模型下钻口径修复 + 看板自动刷新 + 版面一致性（push #44，2026-10-16，fix-31/fix-32/des-22 三 lane 并行 + orchestrator 接管收尾）
+
+- [x] 用户五条意见 + 定时刷新需求：① 参考同类生态调研（lib-4 同类工具 15 条候选 + lib-5 deepseek harness 定性：DeepSeek 官方 dsh，⭐250k，8 条可借鉴面板模式，已留档待用户勾选）② 四处 7d/30d/90d/All 风格一致 ③ 模型点行会话列表空的口径 bug ④ 会话列表与模型榜高度对齐 ⑤ 模型榜首列冻结 ⑥ 后台定时刷新（F5 本就现查新数据）
+- [x] fix-31（模型下钻 + 标签统一）：根因诊断 = 排行榜行取 step 级 `$.model.id`、列表按启动模型 `session_v2.model` 过滤，两口径天然错开（探针实证 top3 step 模型按启动模型计的会话数全 0）。修复 = SessionSummary 增 `modelIds`（step 集合 ∪ 启动模型，双路径同口径），列表按命中过滤 + 旧 wire 降级；SESSION_RANGE_OPTIONS 标签统一 7d/30d/90d/All（All 排最后，rangeValue 契约值未动）。lane 收尾时遭 provider 524 阵亡，落盘近完成（+319/−30 含测试），orchestrator 接管：补一处极简库降级（无 session_message 表时富化查询置空集合——CSV 导出夹具即此形态，5 个 real-SQL 红收敛）+ 验证
+- [x] des-22（版面三件）：等高封顶 `--table-body-cap: 464px` 共享变量 + `align-self: start` 自然收尾；首列 sticky 冻结（双主题令牌 `--panel-accent-tint`、三态底色、corner-th 层叠、inset 分隔线，scrollport = .model-body 单一滚动容器）；会话选择器 sticky 控制行右缘同轴；panel-sub 文案按定稿逐字落
+- [x] fix-32（自动刷新）：默认 5m 可调 关/1m/5m/15m（localStorage `insight-auto-refresh-minutes`，防 Number(null)===0 误读）；refreshAllSections 按当前视图原样重取全区块 + 会话列表 refreshCurrentView()（仅失效当前组合缓存）；防重入 + 隐藏暂停 + 回前台过期补刷（失败轮也计时戳防连环重刷）；控件 JS 注入零新增 CSS
+- [x] 合流回归：384/384 全绿（+2 净增）+ check 0 + esbuild 全改动 JS 逐文件解析过
+- [ ] 发布门禁：敏感扫描 → tarball 探针 → commit/push/tag v0.19.0 → plugin update（全引用，首跑 exit=1 属一过性、复跑收敛）→ verify-install 7/7
+- [ ] 用户真机冒烟（重启 TUI 后）：四处切换器标签与样式一致（All 排最后）→ 模型榜点 glm-5.3 等「只出现在步骤里」的模型行 → 会话列表非空且都是用过它的会话 → 会话列表与模型榜两块等高、无大片空白 → 模型榜横向拖动时模型名列冻结 → 顶部自动刷新选择器（默认 5m）挂后台 5 分钟数据自刷 → 切到别的标签页再切回若已过期立即刷新 → F5 数据全新 → 承接 0.18.1 未验的 R1 场景与七区块回归

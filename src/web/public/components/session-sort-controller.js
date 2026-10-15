@@ -83,6 +83,10 @@ function sessionSortCacheKey(sortKey, sortOrder, directory, range) {
  * - renderCurrentIfLoaded()：仅在缓存持有当前组合时渲染（主题切换后
  *   重读配色调用）。时间窗视图从不入缓存，故对它恒为 no-op——见模块
  *   头「已知代价」。
+ * - refreshCurrentView()：后台定时刷新入口（app.js 的 refreshAllSections
+ *   调用）——失效当前视图组合的缓存条目后重取。只动当前组合的条目，
+ *   其他组合缓存保留（切回去仍即时命中）；时间窗视图本就不入缓存，
+ *   直接重取。
  */
 export function createSessionSortController({
   containerElement,
@@ -216,5 +220,29 @@ export function createSessionSortController({
     applyNextView(viewState.key, viewState.order, viewState.directory, nextRange);
   }
 
-  return { load, changeSort, changeDirectory, changeRange, renderCurrent, renderCurrentIfLoaded };
+  /**
+   * 后台定时刷新（v0.18.x）：失效当前视图组合的缓存条目后重取。
+   * 时间窗视图（非空 range）从不入缓存，直接 load() 即是重取；
+   * 稳定视图先删条目再 load()——load 成功后会写回新数据，缓存自然
+   * 更新到墙钟当下的集合。不做全量 cache.clear()：其他组合的条目
+   * 与本视图无关，保留它们让用户切回时仍即时命中。
+   */
+  function refreshCurrentView() {
+    if (viewState.range === "") {
+      viewState.cache.delete(
+        sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, ""),
+      );
+    }
+    load();
+  }
+
+  return {
+    load,
+    changeSort,
+    changeDirectory,
+    changeRange,
+    renderCurrent,
+    renderCurrentIfLoaded,
+    refreshCurrentView,
+  };
 }

@@ -40,7 +40,7 @@
  *
  * v0.9.0 时间范围：面板顶部一枚胶囊分段控件（复用趋势图 .range-switch
  * 的既有语言，零新样式体系），词表 = data-source.SESSION_RANGE_OPTIONS
- * （7d/30d/90d + 全部），点击产出 onSessionRangeChange 回调由控制器带
+ * （7d/30d/90d + All），点击产出 onSessionRangeChange 回调由控制器带
  * ?range= 重新请求（服务端过滤 timeUpdated，与客户端模型过滤、服务端
  * 目录过滤三者 AND 叠加）。范围选择器贯穿加载/空态/表格三态——空结果
  * 时用户仍能切回更宽的范围，不把自己锁死在空态里。
@@ -108,7 +108,9 @@ function costCell(costValue) {
 /**
  * 渲染会话列表。
  * sessionPayload = { total, sessions: SessionSummary[] } 或 null。
- * modelFilter：非 null 时只显示该模型的会话（客户端行过滤）。
+ * modelFilter：非 null 时只显示该模型的会话（客户端行过滤；口径 =
+ * 会话内 step 级出现过的模型集合 modelIds——与模型排行榜同源，旧 wire
+ * 缺 modelIds 时回退 session.modelId 启动模型精确匹配）。
  * sortKey / sortOrder：当前服务端排序（默认与后端契约默认一致）。
  * onSessionSortChange(nextSortKey, nextSortOrder)：列头点击回调，
  * 传 null 时列头不挂排序交互（纯展示用法）。
@@ -120,7 +122,7 @@ function costCell(costValue) {
  * 时间范围选择器（v0.9.0）：复用趋势图 .range-switch 胶囊分段控件的
  * 既有语言与样式，词表/label 从 data-source.SESSION_RANGE_OPTIONS 取
  * （不在此复制词表）。每个按钮带 .session-range-button 钩子类，取值在
- * data-session-range（全部 = ""，与「缺省即全量」的契约归一）。
+ * data-session-range（All = ""，与「缺省即全量」的契约归一）。
  */
 function sessionRangeSelectorHtml(rangeFilter) {
   const rangeButtonsHtml = SESSION_RANGE_OPTIONS.map((rangeOption) => {
@@ -142,14 +144,17 @@ function bindSessionRangeSelector(container, onSessionRangeChange) {
 /**
  * 渲染会话列表。
  * sessionPayload = { total, sessions: SessionSummary[] } 或 null。
- * modelFilter：非 null 时只显示该模型的会话（客户端行过滤）。
+ * modelFilter：非 null 时只显示该模型的会话（客户端行过滤；口径 =
+ * 会话内 step 级出现过的模型集合 modelIds，与模型排行榜同源——按启动
+ * 模型过滤会让 top 榜模型点出空列表，v0.19.0 修复；旧 wire 缺
+ * modelIds 时回退启动模型精确匹配）。
  * sortKey / sortOrder：当前服务端排序（默认与后端契约默认一致）。
  * onSessionSortChange(nextSortKey, nextSortOrder)：列头点击回调，
  * 传 null 时列头不挂排序交互（纯展示用法）。
  * directoryFilter（v0.7.0）：非 null/"" 时当前会话列表已由服务端按
  * 该目录精确匹配过滤（?directory=），本组件只负责把它说出来——
  * 过滤本身不在此发生，行序仍等于 payload 序。
- * rangeFilter / onSessionRangeChange（v0.9.0）：当前时间范围（""=全部）
+ * rangeFilter / onSessionRangeChange（v0.9.0）：当前时间范围（""=All）
  * 与切换回调；回调为 null 时不渲染范围选择器（纯展示用法）。
  */
 export function renderSessionList(
@@ -176,9 +181,17 @@ export function renderSessionList(
   }
 
   const allSessions = sessionPayload.sessions ?? [];
+  // 模型下钻口径（v0.19.0 修复）：排行榜行来自 step 级 $.model.id，而
+  // session.modelId 只是会话启动模型——按启动模型过滤会让「明明有使用」
+  // 的模型点出空列表。改按 modelIds（会话内 step 级出现过的模型集合，
+  // 含启动模型）命中过滤；旧宿主 wire 缺 modelIds 时回退启动模型精确
+  // 匹配（向后兼容降级，行为不劣于修复前）。
   const sessions = modelFilter === null
     ? allSessions
-    : allSessions.filter((session) => session.modelId === modelFilter);
+    : allSessions.filter((session) =>
+        Array.isArray(session.modelIds)
+          ? session.modelIds.includes(modelFilter)
+          : session.modelId === modelFilter);
 
   if (sessions.length === 0) {
     // 空态文案按过滤叠加组合给出：目录/时间范围（服务端过滤）与模型
@@ -206,7 +219,7 @@ export function renderSessionList(
       emptyHint = "这个目录在最近的会话里没出现过，试试点击其他目录行或取消过滤";
     } else if (hasRangeFilter) {
       emptyTitle = `最近 ${rangeLabelText}没有会话更新`;
-      emptyHint = "试试切换到更长的时间范围，或选择「全部」";
+      emptyHint = "试试切换到更长的时间范围，或选择「All」";
     } else {
       emptyTitle = "没有会话记录";
       emptyHint = "数据库里还没有 session_v2 记录";

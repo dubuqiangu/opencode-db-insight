@@ -115,7 +115,12 @@ function createDirectoryFixtureDatabase(): SqliteReadWriteConnection {
     "CREATE TABLE session_v2 (" +
       "id TEXT, title TEXT, model TEXT, agent TEXT, directory TEXT, " +
       "time_created INTEGER, time_updated INTEGER, " +
-      "tokens_input REAL, tokens_output REAL, tokens_cache_read REAL, cost REAL);",
+      "tokens_input REAL, tokens_output REAL, tokens_cache_read REAL, cost REAL);" +
+      // v0.19.0 起会话列表还会扫 session_message 聚合 step 级模型 id
+      // （modelIds），空表即可——本文件的目录语义与 step 数据无关。
+      "CREATE TABLE session_message (" +
+      "id TEXT, session_id TEXT, type TEXT, seq INTEGER, " +
+      "time_created INTEGER, time_updated INTEGER, data TEXT);",
   )
   const insertSession = database.prepare(
     "INSERT INTO session_v2 (id, title, model, agent, directory, time_created, time_updated, " +

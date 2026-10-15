@@ -17,6 +17,9 @@
     --text-faint: #5d6b84;
     --accent: #4ade80;
     --accent-soft: rgba(74, 222, 128, 0.14);
+    /* --accent-soft 叠在 --panel 上的不透明合成值：sticky 单元格必须铺
+     * 实底防行透出（半透明会让滚动内容从冻结列后面显出来）。 */
+    --panel-accent-tint: #18312d;
     --blue: #7aa2f7;
     --purple: #c084fc;
     --amber: #fbbf24;
@@ -51,6 +54,8 @@
     --text-faint: #8b95a9;
     --accent: #0f9d63;
     --accent-soft: rgba(15, 157, 99, 0.10);
+    /* 同暗色主题：accent-soft 与 panel 的不透明合成值，供 sticky 单元格铺底。 */
+    --panel-accent-tint: #e7f5ef;
     --blue: #3b6fe0;
     --purple: #9333ea;
     --amber: #b45309;

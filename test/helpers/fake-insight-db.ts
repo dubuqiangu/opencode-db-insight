@@ -312,6 +312,38 @@ export function createFakeInsightDatabase(
       }
     }
     if (sql.includes("FROM session_message")) {
+      // v0.19.0 step 级模型聚合（querySessionList / querySessionSummaryById
+      // 的 modelIds 来源）：镜像 SQL 的 (session_id, $.model.id) GROUP BY——
+      // 只统计 assistant 且 data 为 JSON 对象的消息（与下方 assistant-step
+      // 镜像同一判定）；model.id 缺失/非对象按 SQL NULL 服务（查询层跳过），
+      // 空串原样服务（查询层归一 "unknown"，镜像真实 json_extract）。
+      if (sql.includes("GROUP BY session_id, model_id")) {
+        const isPerSessionAggregate = sql.includes("session_id = ?")
+        return {
+          all: (...parameters: unknown[]) => {
+            const aggregatedRows: Array<{ session_id: string; model_id: unknown }> = []
+            for (const [sessionId, messageFixtures] of Object.entries(scenario.messagesBySessionId)) {
+              if (isPerSessionAggregate && sessionId !== String(parameters[0] ?? "")) continue
+              for (const messageFixture of messageFixtures) {
+                if (messageFixture.type !== "assistant") continue
+                if (
+                  typeof messageFixture.data !== "object" ||
+                  messageFixture.data === null ||
+                  Array.isArray(messageFixture.data)
+                ) continue
+                const modelRecord = (messageFixture.data as Record<string, unknown>)["model"]
+                const modelId =
+                  typeof modelRecord === "object" && modelRecord !== null && !Array.isArray(modelRecord)
+                    ? (modelRecord as Record<string, unknown>)["id"]
+                    : undefined
+                aggregatedRows.push({ session_id: sessionId, model_id: modelId ?? null })
+              }
+            }
+            return aggregatedRows
+          },
+          get: () => undefined,
+        }
+      }
       const isPerSessionQuery = sql.includes("session_id = ?")
       const hasTimeFloor = sql.includes("time_created >= ?")
       return {
@@ -397,6 +429,9 @@ export function buildFakeSessionSummary(
     id: "ses_export_fixture",
     title: "导出测试会话",
     modelId: "glm-5.3",
+    // v0.19.0：类型必填；fake 的 session_v2 行由 toSessionV2Row 重新派生，
+    // 真正回给查询层的 modelIds 走 session_message 聚合分支，此字段仅满足类型。
+    modelIds: ["glm-5.3"],
     agent: "fixer",
     directory: "",
     timeCreated: new Date(2026, 9, 5, 15, 30).getTime(),

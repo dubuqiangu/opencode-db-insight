@@ -83,16 +83,19 @@ export const DEFAULT_SESSION_SORT_KEY = "time_updated";
 export const DEFAULT_SESSION_SORT_ORDER = "desc";
 
 /**
- * 会话面板时间范围词表（v0.9.0 契约）：rangeValue 即 ?range= 合法值。
- * "" = 全部：缺省/空同为「不过滤」（与 directory 的归一逻辑一致）；
+ * 会话面板时间范围词表（v0.9.0 契约）：rangeValue 即 ?range= 合法值，
+ * 一个都不许改（是 /api/sessions 与 CSV 导出的 ?range= 契约）。
+ * "" = 全量：缺省/空同为「不过滤」（与 directory 的归一逻辑一致）；
  * 词表外的非空值后端 400 防御，前端 UI 只从这张表产生值。
  * 过滤口径 = timeUpdated（「最近 N 天内有更新」）。
+ * label 统一规格（v0.19.0）：与 index.html 三处静态切换器一致取
+ * 7d / 30d / 90d / All，All（空 rangeValue）排最后。
  */
 export const SESSION_RANGE_OPTIONS = [
-  { rangeValue: "", label: "全部" },
-  { rangeValue: "7d", label: "7 天" },
-  { rangeValue: "30d", label: "30 天" },
-  { rangeValue: "90d", label: "90 天" },
+  { rangeValue: "7d", label: "7d" },
+  { rangeValue: "30d", label: "30d" },
+  { rangeValue: "90d", label: "90d" },
+  { rangeValue: "", label: "All" },
 ];
 export const DEFAULT_SESSION_RANGE = "";
 

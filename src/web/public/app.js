@@ -1,5 +1,5 @@
 /**
- * 应用装配：hash 路由 + 各区块数据获取与渲染 + 时间范围切换。
+ * 应用装配：hash 路由 + 各区块数据获取与渲染 + 时间范围切换 + 后台定时刷新。
  * 每个区块独立加载/独立容错（API 挂了不白屏），数据统一走
  * data-source.js（当前 mock，M2 后切真实 API 只改那一处）。
  */
@@ -51,6 +51,12 @@ const state = {
   // 活动时段热力窗口（?days= 值）：默认 90（契约缺省）。All 用 366。
   heatmapDays: 90,
   healthStatus: "连接中…",
+  // 后台定时刷新（v0.18.x）：间隔分钟数（0 = 关），持久化到 localStorage；
+  // refreshInFlight 挡重入（上一轮没跑完时 tick 直接跳过）；
+  // lastRefreshCompletedAt 供 visibilitychange 回前台时判断是否补刷。
+  autoRefreshMinutes: 5,
+  refreshInFlight: false,
+  lastRefreshCompletedAt: 0,
   cache: {
     overview: undefined,
     calendarTrend: undefined,
@@ -101,6 +107,7 @@ const sessionFilterChipElement = document.getElementById("session-filter-chip");
 const rangeSwitchElement = document.getElementById("range-switch");
 const statusDotElement = document.getElementById("status-dot");
 const statusTextElement = document.getElementById("status-text");
+const topStatusElement = document.getElementById("top-status");
 
 /* ---------- 状态指示 ---------- */
 function updateStatus() {
@@ -562,6 +569,144 @@ function routeByHash() {
   sessionViewElement.hidden = true;
 }
 
+/* ---------- 后台定时自动刷新（v0.18.x） ---------- */
+
+/** localStorage 键：见名知意——插件专属前缀 + 语义单位（分钟）。 */
+const AUTO_REFRESH_STORAGE_KEY = "insight-auto-refresh-minutes";
+/** 合法取值：0 = 关，其余为分钟数。非法/损坏的存量值一律回退默认。 */
+const AUTO_REFRESH_CHOICES = [0, 1, 5, 15];
+const AUTO_REFRESH_DEFAULT_MINUTES = 5;
+/** 下拉项文案（键 = 分钟数，与 AUTO_REFRESH_CHOICES 一一对应）。 */
+const AUTO_REFRESH_OPTION_LABELS = new Map([
+  [0, "自动刷新: 关"],
+  [1, "自动刷新: 1m"],
+  [5, "自动刷新: 5m"],
+  [15, "自动刷新: 15m"],
+]);
+
+let autoRefreshTimerId = null;
+
+/**
+ * 读取持久化的刷新间隔。注意先判 null 再 Number()：getItem 缺省返回
+ * null，Number(null) === 0 会把「从未设置」误读成「关闭」——首次访问
+ * 应落默认 5m 而不是静默关闭。
+ */
+function readStoredAutoRefreshMinutes() {
+  const storedValue = window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY);
+  if (storedValue === null) return AUTO_REFRESH_DEFAULT_MINUTES;
+  const storedMinutes = Number(storedValue);
+  return AUTO_REFRESH_CHOICES.includes(storedMinutes)
+    ? storedMinutes
+    : AUTO_REFRESH_DEFAULT_MINUTES;
+}
+
+/**
+ * 全量刷新一轮：以当前 state 各维度（range/modelRange/heatmapDays/
+ * 过滤器）原样重取全部区块——等于用户当前视图的强制重拉，不改变任何
+ * 交互状态。各 loader 自带序列守卫与独立容错：并发时晚到的旧响应会被
+ * 弹掉，失败的区块走既有 renderError + markSection(false)，顶栏失败
+ * 计数如实反映。可重入保护：上一轮未收尾时本次直接跳过（连续 tick
+ * 不会堆叠请求）。健康探活一并刷新，让顶栏连接文案跟数据同步更新。
+ */
+async function refreshAllSections() {
+  if (state.refreshInFlight) return;
+  state.refreshInFlight = true;
+  try {
+    await Promise.allSettled([
+      loadHealthStatus(),
+      loadOverviewSection(),
+      loadTrendSection(),
+      loadCalendarSection(),
+      loadHourHeatmapSection(),
+      loadToolsSection(),
+      loadToolHealthSection(),
+      loadAgentSection(),
+      loadModelsSection(),
+      sessionSortController.refreshCurrentView(),
+      loadCompactionSection(),
+      loadSessionSurvivalSection(),
+      loadTodoSection(),
+      loadDirectorySection(),
+    ]);
+  } finally {
+    // allSettled 后必然到达：无论个别区块成败都收尾并记时间戳——
+    // 补刷判定用它防「回前台瞬间连环重刷刚失败过的区块」。
+    state.refreshInFlight = false;
+    state.lastRefreshCompletedAt = Date.now();
+  }
+}
+
+/** 定时 tick：隐藏时跳过（无人看着的后台刷新是纯浪费——服务端每请求现查）。 */
+function onAutoRefreshTick() {
+  if (document.hidden) return;
+  void refreshAllSections();
+}
+
+/**
+ * visibilitychange 补刷：隐藏期间被跳过的 tick 不再等下一个整周期——
+ * 回到可见且距上一轮收尾已超过当前间隔时立即补一次；间隔内则等
+ * 既有定时器自然触发。自动刷新关闭（interval = 0）时不补。
+ */
+function onVisibilityChange() {
+  if (document.hidden || state.autoRefreshMinutes === 0) return;
+  const intervalMilliseconds = state.autoRefreshMinutes * 60000;
+  if (Date.now() - state.lastRefreshCompletedAt >= intervalMilliseconds) {
+    void refreshAllSections();
+  }
+}
+
+/** 应用间隔：先清旧定时器再按需建新（变更即重置，避免双定时器叠加）。 */
+function applyAutoRefreshInterval(refreshMinutes) {
+  if (autoRefreshTimerId !== null) {
+    window.clearInterval(autoRefreshTimerId);
+    autoRefreshTimerId = null;
+  }
+  if (refreshMinutes > 0) {
+    autoRefreshTimerId = window.setInterval(onAutoRefreshTick, refreshMinutes * 60000);
+  }
+}
+
+/**
+ * 注入自动刷新下拉控件（全部 JS 创建，不改 index.html）：挂在顶栏
+ * #top-status 右侧，与 trend 的 .range-switch 同一行——容器复用
+ * .range-switch 胶囊描边；styles.css 无原生 select 样式，select 本体
+ * 用最小内联样式对齐 .range-switch button 的字号/配色语言。
+ */
+function mountAutoRefreshControl() {
+  const controlNavElement = document.createElement("nav");
+  controlNavElement.className = "range-switch";
+  controlNavElement.setAttribute("aria-label", "后台自动刷新间隔");
+
+  const intervalSelectElement = document.createElement("select");
+  intervalSelectElement.setAttribute("aria-label", "自动刷新间隔");
+  intervalSelectElement.title = "后台定时刷新全部区块";
+  // 复用容器胶囊内的按钮语言：无描边（描边归容器）、同字号、同灰阶。
+  intervalSelectElement.style.border = "none";
+  intervalSelectElement.style.background = "transparent";
+  intervalSelectElement.style.color = "var(--text-dim)";
+  intervalSelectElement.style.fontSize = "12.5px";
+  intervalSelectElement.style.padding = "4px 10px";
+
+  for (const refreshMinutes of AUTO_REFRESH_CHOICES) {
+    const optionElement = document.createElement("option");
+    optionElement.value = String(refreshMinutes);
+    optionElement.textContent = AUTO_REFRESH_OPTION_LABELS.get(refreshMinutes);
+    intervalSelectElement.appendChild(optionElement);
+  }
+  intervalSelectElement.value = String(state.autoRefreshMinutes);
+
+  intervalSelectElement.addEventListener("change", () => {
+    const nextMinutes = Number(intervalSelectElement.value);
+    if (!AUTO_REFRESH_CHOICES.includes(nextMinutes)) return;
+    state.autoRefreshMinutes = nextMinutes;
+    window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, String(nextMinutes));
+    applyAutoRefreshInterval(nextMinutes);
+  });
+
+  controlNavElement.appendChild(intervalSelectElement);
+  topStatusElement.insertAdjacentElement("afterend", controlNavElement);
+}
+
 /* ---------- 启动 ---------- */
 async function startInitialLoad() {
   renderKpiRow(kpiRowElement, null);
@@ -594,6 +739,13 @@ function init() {
   bindHeatmapRangeSwitch();
   bindTocNavigation();
   renderHourHeatmapSub();
+  // 后台定时刷新：读持久化间隔 → 注入下拉控件 → 启动定时器；首次加载
+  // 视为一次完整刷新，作为补刷判定的时间基准。
+  state.autoRefreshMinutes = readStoredAutoRefreshMinutes();
+  mountAutoRefreshControl();
+  applyAutoRefreshInterval(state.autoRefreshMinutes);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  state.lastRefreshCompletedAt = Date.now();
   window.addEventListener("hashchange", routeByHash);
   // 系统深浅色切换时，图表配色从 CSS 变量重读一遍
   onSchemeChange(() => {

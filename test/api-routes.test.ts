@@ -18,7 +18,7 @@ import {
   type ApiRequestContext,
 } from "../src/web/api.ts"
 import { INSIGHT_SERVICE_NAME } from "../src/insight-service-identity.ts"
-import type { SqliteReadConnection } from "../src/db/types.ts"
+import type { SessionSummary, SqliteReadConnection } from "../src/db/types.ts"
 import { matchApiRoute } from "../src/web/router.ts"
 import { clearResultCache, resultCacheSize } from "../src/stats/cache.ts"
 import {
@@ -517,6 +517,64 @@ test("sessions cache keys carry resolved sort/order: distinct combos get entries
     handleApiRequest(contextWithQuery("order=DESC%3B%20DROP%20TABLE%20session_v2"))
     handleApiRequest(contextWithQuery("sort=unknown_sort_key&order=garbage"))
     assert.equal(resultCacheSize(), 5, "defaults and garbage share the default key")
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("/api/sessions rows carry step-level modelIds (v0.19.0 drill-down payload)", () => {
+  clearResultCache()
+  try {
+    // 下钻口径载荷锁：排行榜行来自 step 级 $.model.id，会话行必须带上
+    // 「会话内出现过」的模型集合，点模型行才不至于对着空列表。
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({ id: "ses_model_ids_step" }),
+        buildFakeSessionSummary({ id: "ses_model_ids_quiet", modelId: "claude-sonnet-4.6" }),
+      ],
+      messagesBySessionId: {
+        // 启动模型 glm-5.3（fixture 默认）之外，step 里还用过 flash。
+        ses_model_ids_step: [
+          {
+            type: "assistant",
+            data: { model: { id: "glm-5.3-flash", providerID: "futureppo" }, tokens: { input: 1, output: 1 } },
+          },
+          // user 消息不算 step，其模型不得混进集合。
+          { type: "user", data: { model: { id: "model-user-only" } } },
+        ],
+      },
+      systemPromptBySessionId: {},
+    })
+
+    const sessionsRoute = matchApiRoute("/api/sessions")!
+    const apiResponse = handleApiRequest({
+      route: sessionsRoute,
+      searchParams: new URLSearchParams(""),
+      database: fakeDatabase,
+      databasePath: "test://model-ids-payload",
+      serverPort: 18789,
+    })
+    assert.equal(apiResponse.statusCode, 200)
+    const sessionRows = apiResponse.body as SessionSummary[]
+    assert.equal(sessionRows.length, 2)
+
+    const stepSessionRow = sessionRows.find((sessionRow) => sessionRow.id === "ses_model_ids_step")!
+    assert.ok(
+      Array.isArray(stepSessionRow.modelIds),
+      "every sessions row carries the modelIds array",
+    )
+    assert.deepEqual(
+      [...stepSessionRow.modelIds].sort(),
+      ["glm-5.3", "glm-5.3-flash"],
+      "modelIds = step 集合 ∪ 启动模型（user 消息不计入）",
+    )
+
+    const quietSessionRow = sessionRows.find((sessionRow) => sessionRow.id === "ses_model_ids_quiet")!
+    assert.deepEqual(
+      quietSessionRow.modelIds,
+      ["claude-sonnet-4.6"],
+      "无 step 的会话只含启动模型",
+    )
   } finally {
     clearResultCache()
   }

@@ -36,7 +36,11 @@ import {
   parseSessionModelColumn,
   readAgentName,
   readRowNumber,
+  UNKNOWN_MODEL_ID,
 } from "./rows.ts"
+// 与聚合统计共用的 step 级谓词（单点纪律）：modelIds 的 step 集合必须
+// 和模型排行榜扫的是同一批行，否则下钻口径又会漂移。
+import { ASSISTANT_OBJECT_DATA_PREDICATE } from "./scan-conventions.ts"
 
 // SQL-side statistics aggregations (P0-1); re-exported for the API layer.
 export {
@@ -366,7 +370,18 @@ export function querySessionList(
   for (const rawRow of rawRows) {
     const rowRecord = asRecord(rawRow)
     if (rowRecord === null) continue
-    sessionSummaries.push(parseSessionSummaryRow(rowRecord))
+    sessionSummaries.push(parseSessionSummaryRow(rowRecord, undefined))
+  }
+  // 空页不做聚合：没有任何 summary 需要装饰，省掉一次全表扫描；
+  // 这也使「捕获空结果连接」的既有 SQL 字节锁测试（目录/范围/排序
+  // 注入面）继续只捕获列表语句本身。非空页才建全量 step 模型 Map。
+  if (sessionSummaries.length === 0) return sessionSummaries
+  const stepModelIdsBySessionId = queryStepModelIdsBySessionId(db)
+  for (const sessionSummary of sessionSummaries) {
+    sessionSummary.modelIds = buildSessionModelIds(
+      sessionSummary.modelId,
+      stepModelIdsBySessionId.get(sessionSummary.id),
+    )
   }
   return sessionSummaries
 }
@@ -392,16 +407,94 @@ export function querySessionSummaryById(
     .get(sessionId)
   const rowRecord = asRecord(rawRow)
   if (rowRecord === null) return null
-  return parseSessionSummaryRow(rowRecord)
+  // 单查路径也填 modelIds（仅扫该会话的 step 行，低频路径，代价可忽略）：
+  // 与列表路径同一口径，保证同一会话从两条路径取出的形状逐字段一致。
+  const stepModelIdsBySessionId = queryStepModelIdsBySessionId(db, sessionId)
+  return parseSessionSummaryRow(rowRecord, stepModelIdsBySessionId.get(sessionId))
+}
+
+/**
+ * Step 级模型 id 聚合（v0.19.0 模型下钻口径修复）：每对
+ * (session_id, $.model.id) 一行。为什么需要它——模型排行榜的行来自
+ * step 级 `$.model.id`，而会话的 `modelId` 只是 session_v2.model 声明的
+ * 启动模型；实测 top 榜模型（glm-5.3-flash / claude-opus-5 …）从不作为
+ * 启动模型出现，按启动模型过滤必然点出行列表空。会话列表因此改按
+ * 「会话内 step 级出现过」过滤，本查询就是那个集合的 SQL 侧来源。
+ *
+ * `sessionId` 给定时只扫该会话（by-id 单查路径复用同一口径，保证两条
+ * 路径产出的 SessionSummary 形状一致——sql-aggregation-parity 的
+ * by-id 逐字段锁依赖这一点）；缺省扫全表（列表路径一次建全量 Map）。
+ * 谓词复用聚合统计的共享 ASSISTANT_OBJECT_DATA_PREDICATE：与排行榜
+ * 扫描同一批行，空 model.id 由 JS 侧归一为 "unknown"（镜像
+ * parseAssistantStepRow / queryModelMetrics 的归一，保证点排行榜的
+ * "unknown" 行下钻也能命中）。
+ */
+function queryStepModelIdsBySessionId(
+  db: SqliteReadConnection,
+  sessionId?: string,
+): Map<string, Set<string>> {
+  const hasSessionFilter = sessionId !== undefined
+  let rawRows: unknown[]
+  try {
+    rawRows = db
+      .prepare(
+        `SELECT session_id, json_extract(data, '$.model.id') AS model_id
+         FROM session_message
+         WHERE ${hasSessionFilter ? "session_id = ? AND " : ""}${ASSISTANT_OBJECT_DATA_PREDICATE}
+         GROUP BY session_id, model_id`,
+      )
+      .all(...(hasSessionFilter ? [sessionId] : []))
+  } catch {
+    // 极简库降级：只有 session_v2 的库（CSV 导出测试夹具即此形态）没有
+    // session_message 表——step 集合整体置空，summary 的 modelIds 只含
+    // 启动模型。富化失败不得牵连列表/导出主查询（后者依赖 session_v2
+    // 单表，语义上就不需要 step 数据）。
+    return new Map()
+  }
+
+  const stepModelIdsBySessionId = new Map<string, Set<string>>()
+  for (const rawRow of rawRows) {
+    const rowRecord = asRecord(rawRow)
+    if (rowRecord === null) continue
+    const stepSessionId = coerceText(rowRecord["session_id"])
+    // json_extract 对缺失/JSON null 的 $.model.id 返回 NULL——那是
+    // 「没有模型可下钻」的行，不是 "unknown" 桶；只有显式空串才归一
+    // 为 "unknown"（与排行榜 JS 侧 rawModelId === "" 的判定一致）。
+    const rawModelId = rowRecord["model_id"]
+    if (rawModelId === null || rawModelId === undefined) continue
+    const stepModelId = coerceText(rawModelId)
+    const normalizedModelId = stepModelId === "" ? UNKNOWN_MODEL_ID : stepModelId
+    const modelIdSet = stepModelIdsBySessionId.get(stepSessionId) ?? new Set<string>()
+    modelIdSet.add(normalizedModelId)
+    stepModelIdsBySessionId.set(stepSessionId, modelIdSet)
+  }
+  return stepModelIdsBySessionId
+}
+
+/**
+ * 组装单个 summary 的 modelIds：step 集合 ∪ 启动模型（"unknown" 占位
+ * 不计入——缺数据不是「用过」）。无 step 且启动模型未知 → 空数组。
+ */
+function buildSessionModelIds(
+  modelId: string,
+  stepModelIdSet: Set<string> | undefined,
+): string[] {
+  const modelIds = new Set<string>(stepModelIdSet ?? [])
+  if (modelId !== UNKNOWN_MODEL_ID) modelIds.add(modelId)
+  return [...modelIds]
 }
 
 /** Shared column mapping of one session_v2 row into a SessionSummary. */
-function parseSessionSummaryRow(rowRecord: Record<string, unknown>): SessionSummary {
+function parseSessionSummaryRow(
+  rowRecord: Record<string, unknown>,
+  stepModelIdSet: Set<string> | undefined,
+): SessionSummary {
   const { modelId } = parseSessionModelColumn(rowRecord["model"])
   return {
     id: coerceText(rowRecord["id"]),
     title: coerceText(rowRecord["title"]),
     modelId,
+    modelIds: buildSessionModelIds(modelId, stepModelIdSet),
     agent: readAgentName(rowRecord["agent"]),
     directory: coerceText(rowRecord["directory"]),
     timeCreated: coerceNumber(rowRecord["time_created"]),

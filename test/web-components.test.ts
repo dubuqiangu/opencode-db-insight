@@ -874,6 +874,11 @@ interface SessionListFixtureSummary {
   tokensInput?: number
   tokensOutput?: number
   tokensCacheRead?: number
+  /**
+   * v0.19.0 下钻口径：会话内 step 级出现过的模型 id 集合。可选以模拟
+   * 旧宿主 wire（缺字段 → 组件回退 modelId 启动模型精确匹配）。
+   */
+  modelIds?: string[]
 }
 
 function sessionSortFixturePayload(): { total: null; sessions: SessionListFixtureSummary[] } {
@@ -1664,6 +1669,69 @@ test("renderSessionList labels the directory filter in the footnote and explains
   assert.match(container.innerHTML, /没有 glm-5\.3 在该目录下的会话/)
 })
 
+test("renderSessionList model filter hits step-level modelIds and degrades to modelId on legacy wire (v0.19.0)", async () => {
+  const { renderSessionList } = await import(
+    "../src/web/public/components/session-list.js"
+  )
+  const container = freshContainer()
+
+  // 下钻口径回归锁（v0.19.0 修复「模型有使用，session 却是空的」）：
+  // 排行榜行来自 step 级 $.model.id——charlie 的启动模型是
+  // claude-sonnet-4.6，但它的 step 里用过 glm-5.3，点 glm-5.3 行必须
+  // 命中 charlie；按旧口径（modelId 精确匹配）charlie 会被漏掉。
+  const stepModelPayload = {
+    total: null as const,
+    sessions: [
+      {
+        id: "ses_example_alpha", title: "alpha fixture", modelId: "glm-5.3",
+        modelIds: ["glm-5.3"], agent: "build", directory: "D:/projects/example-alpha",
+        timeCreated: 1000, timeUpdated: 5000, tokens: 1500, cost: 1.0,
+      },
+      {
+        id: "ses_example_charlie", title: "charlie fixture", modelId: "claude-sonnet-4.6",
+        modelIds: ["claude-sonnet-4.6", "glm-5.3"], agent: "build", directory: "D:/projects/example-alpha",
+        timeCreated: 3000, timeUpdated: 7000, tokens: 900, cost: 0.5,
+      },
+    ],
+  }
+
+  renderSessionList(container, stepModelPayload, "glm-5.3", "time_updated", "desc", null)
+  assert.deepEqual(
+    container.querySelectorAll("tr.session-row").map((sessionRow) => sessionRow.dataset.sessionId),
+    ["ses_example_alpha", "ses_example_charlie"],
+    "modelIds 命中过滤：step 里用过该模型的会话必须留下（含启动模型不同的）",
+  )
+
+  // modelIds 不含该模型 → 过滤掉（delta 只用过 claude-opus-5）。
+  const stepModelMissPayload = {
+    total: null as const,
+    sessions: [
+      {
+        id: "ses_example_delta", title: "delta fixture", modelId: "glm-5.3",
+        modelIds: ["glm-5.3", "glm-5.3-flash"], agent: "build", directory: "D:/projects/example-alpha",
+        timeCreated: 1000, timeUpdated: 5000, tokens: 900, cost: 2.5,
+      },
+    ],
+  }
+  renderSessionList(container, stepModelMissPayload, "claude-opus-5", "time_updated", "desc", null)
+  assert.match(container.innerHTML, /没有 claude-opus-5 的会话/, "a model absent from every modelIds set yields the model-flavored empty state")
+
+  // 旧宿主 wire 缺 modelIds → 回退启动模型精确匹配（行为不劣于修复前）。
+  const legacyWirePayload = {
+    total: null as const,
+    sessions: [
+      { id: "ses_example_echo", title: "echo fixture", modelId: "glm-5.3", agent: "plan", directory: "D:/projects/example-alpha", timeCreated: 1000, timeUpdated: 5000, tokens: 600, cost: 1.0 },
+      { id: "ses_example_foxtrot", title: "foxtrot fixture", modelId: "claude-sonnet-4.6", agent: "plan", directory: "D:/projects/example-alpha", timeCreated: 2000, timeUpdated: 9000, tokens: 300, cost: 0 },
+    ],
+  }
+  renderSessionList(container, legacyWirePayload, "glm-5.3", "time_updated", "desc", null)
+  assert.deepEqual(
+    container.querySelectorAll("tr.session-row").map((sessionRow) => sessionRow.dataset.sessionId),
+    ["ses_example_echo"],
+    "legacy wire without modelIds falls back to the modelId exact match",
+  )
+})
+
 test("getMockSessions mirrors the backend directory filter contract: exact match, miss = empty, absent/empty = no filter", async () => {
   const { getMockSessions } = await import("../src/web/public/mock-data.js")
   const unfilteredPage = getMockSessions()
@@ -1796,13 +1864,13 @@ test("renderSessionList renders the range switch, keeps it across states and rou
     "without a callback the panel shows no range switch",
   )
 
-  // Default state: four preset buttons, exactly one active — 全部 ("").
+  // Default state: four preset buttons, exactly one active — All ("").
   renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "", captureRangeChange)
   const rangeButtons = container.querySelectorAll("button.session-range-button")
-  assert.equal(rangeButtons.length, 4, "全部 / 7 天 / 30 天 / 90 天 presets")
+  assert.equal(rangeButtons.length, 4, "7d / 30d / 90d / All presets")
   assert.ok(
     container.innerHTML.includes('class="session-range-button active" data-session-range=""'),
-    "the default 全部 preset is the active one",
+    "the default All preset is the active one",
   )
 
   // Clicks route through the callback with the wire vocabulary.
@@ -1817,7 +1885,7 @@ test("renderSessionList renders the range switch, keeps it across states and rou
   clickRangePreset("90d")
   assert.deepEqual(rangeChangeEvents, ["7d", "", "30d", "90d"])
 
-  // Re-render with an active range moves the active pill to 30 天.
+  // Re-render with an active range moves the active pill to 30d.
   renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "30d", captureRangeChange)
   assert.ok(
     container.innerHTML.includes('class="session-range-button active" data-session-range="30d"'),
@@ -1833,7 +1901,7 @@ test("renderSessionList renders the range switch, keeps it across states and rou
   assert.equal(container.querySelectorAll("button.session-range-button").length, 4, "the switch stays up during loading")
   renderSessionList(container, { total: null, sessions: [] }, null, "time_updated", "desc", null, null, "7d", captureRangeChange)
   assert.equal(container.querySelectorAll("button.session-range-button").length, 4, "the switch stays up on empty results")
-  assert.match(container.innerHTML, /最近 7 天没有会话更新/)
+  assert.match(container.innerHTML, /最近 7d没有会话更新/)
 })
 
 test("session-sort-controller: range switches keep the other filters and reuse their dimension untouched", async () => {
@@ -2649,10 +2717,10 @@ test("sessionsExportCsvPath and the export entry carry the range alongside the d
   assert.ok(
     bothFiltersEntryHtml.includes(`href="/api/export/sessions.csv?directory=D%3A%2Fprojects%2Fexample-alpha${escapedAmpersand}range=30d"`),
   )
-  assert.match(bothFiltersEntryHtml, /导出当前目录下最近 30 天有更新的会话/)
+  assert.match(bothFiltersEntryHtml, /导出当前目录下最近 30d有更新的会话/)
   const rangeOnlyEntryHtml = sessionsCsvExportEntryHtml(null, "7d", true)
   assert.ok(rangeOnlyEntryHtml.includes('href="/api/export/sessions.csv?range=7d"'))
-  assert.match(rangeOnlyEntryHtml, /导出最近 7 天有更新的会话/)
+  assert.match(rangeOnlyEntryHtml, /导出最近 7d有更新的会话/)
   const unfilteredEntryHtml = sessionsCsvExportEntryHtml(null, "", true)
   assert.ok(unfilteredEntryHtml.includes('href="/api/export/sessions.csv"'))
   assert.match(unfilteredEntryHtml, /导出全部会话/)
@@ -2667,7 +2735,7 @@ test("renderSessionList states the active range in the footnote and threads it i
   // Directory + range stack in the footnote language; the export href
   // carries both params.
   renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, "D:/projects/example-alpha", "7d")
-  assert.match(container.innerHTML, /目录：D:\/projects\/example-alpha · 最近 7 天/)
+  assert.match(container.innerHTML, /目录：D:\/projects\/example-alpha · 最近 7d/)
   assert.ok(
     // Attribute-escaped ampersand in the anchor href (same escapeHtml
     // insertion point as every other external string); assembled at
@@ -2676,9 +2744,9 @@ test("renderSessionList states the active range in the footnote and threads it i
     "the export href threads the range through the same single point",
   )
 
-  // Default range (全部) → no range part in the footnote, bare-ish export path.
+  // Default range (All) → no range part in the footnote, bare-ish export path.
   renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "")
-  assert.ok(!container.innerHTML.includes("最近 7 天"), "no range part without an active range")
+  assert.ok(!container.innerHTML.includes("最近 7d"), "no range part without an active range")
   assert.ok(container.innerHTML.includes('href="/api/export/sessions.csv"'))
 })
 
