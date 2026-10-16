@@ -1,5 +1,6 @@
 /**
- * 会话列表：标题 / 模型 / agent / 创建时间 / 更新时间 / 入 / 出 / tokens / cost。
+ * 会话列表：标题 / 模型 / agent / 创建时间 / 更新时间 / 入 / 出 / tokens /
+ * 命中率 / Reasoning / 步数 / cost。
  * 行 hover 高亮，点击跳 #/session/:id（M4 回放页，暂为占位路由）。
  * 支持按模型过滤（模型排行榜行下钻）。
  *
@@ -44,9 +45,15 @@
  * ?range= 重新请求（服务端过滤 timeUpdated，与客户端模型过滤、服务端
  * 目录过滤三者 AND 叠加）。范围选择器贯穿加载/空态/表格三态——空结果
  * 时用户仍能切回更宽的范围，不把自己锁死在空态里。
+ *
+ * v0.20.0 会话作用域 + 子代理归总：三根新列（命中率/Reasoning/步数）
+ * 紧跟 Tokens 列之后；父会话行加「+N 子会话」徽标、子会话行加 ↳ 层级
+ * 标记（归总显示，不做可展开树）；行内「只看此会话」小按钮把会话 id
+ * 上抛给 app 层进入作用域。作用域锁定视图（renderOptions.sessionScopeId）
+ * 只显示该会话自身一行，排序/范围/导出全部锁定。
  */
 
-import { formatTokens, formatDateTime, formatRelative, escapeHtml } from "../format.js";
+import { formatTokens, formatCount, formatPercent, formatDateTime, formatRelative, escapeHtml } from "../format.js";
 import { modelPalette } from "../theme.js";
 import { buildEmptyHtml, buildLoadingHtml } from "./state-views.js";
 import { sessionsCsvExportEntryHtml } from "./session-csv-export.js";
@@ -64,6 +71,8 @@ const VISIBLE_ROWS = 15;
  * 列定义：sortKey 与后端 ?sort= 白名单（db/queries.ts）一一对应；null 不可排序。
  * 入/出（v0.13.0）：sortKey 恒 null——白名单不扩；title 字段是纯展示列的
  * 口径提示（不可排序的列头没有「点击排序」可说，改说口径）。
+ * 命中率/Reasoning/步数（v0.20.0）：紧跟 Tokens 折叠总量之后、Cost 之前，
+ * 同为纯展示列（白名单不扩）；三列都在非冻结区，表头复用 .num 右对齐。
  */
 const COLUMNS = [
   { label: "标题", sortKey: "title", numeric: false },
@@ -74,6 +83,9 @@ const COLUMNS = [
   { label: "入", sortKey: null, numeric: true, title: "入 = 纯输入 tokens.input（不含 cache.read，与 KPI 卡「入」同口径）" },
   { label: "出", sortKey: null, numeric: true, title: "出 = tokens.output（与 KPI 卡「出」同口径）" },
   { label: "Tokens", sortKey: "tokens", numeric: true },
+  { label: "命中率", sortKey: null, numeric: true, title: "严格口径 = cache.read / (input + cache.read + cache.write) · 分母为 0 或旧数据缺字段时无值（—）" },
+  { label: "Reasoning", sortKey: null, numeric: true, title: "本会话 tokens.reasoning 累计（v0.20.0 富化字段，旧数据缺列时显示 —）" },
+  { label: "步数", sortKey: null, numeric: true, title: "本会话的 assistant 消息数（v0.20.0 富化字段）" },
   { label: "Cost", sortKey: "cost", numeric: true },
 ];
 
@@ -103,6 +115,86 @@ function costCell(costValue) {
     return `<span title="无成本记录（本库 cost 字段常为 0，DESIGN §5）">—</span>`;
   }
   return `$${String(roundedCost)}`;
+}
+
+/**
+ * 命中率单元格（v0.20.0）：严格口径 cacheRead / (input + cacheRead +
+ * cacheWrite)。旧 wire 缺任一字段 → 不可计算，渲染占位 "—"（区分于
+ * 0：0 是真数据诚实渲染，缺失是「未记录」语义，同 costCell 降级惯例）；
+ * 三字段齐全但分母为 0 同样 "—"。
+ */
+function strictHitRateCell(session) {
+  const cacheRead = session.tokensCacheRead;
+  const paidInput = session.tokensInput;
+  const cacheWrite = session.tokensCacheWrite;
+  if (![cacheRead, paidInput, cacheWrite].every((tokenValue) => Number.isFinite(tokenValue))) {
+    return `<span title="旧数据没有 cache/input 分项记录，无法计算命中率">—</span>`;
+  }
+  const denominator = cacheRead + paidInput + cacheWrite;
+  if (denominator === 0) {
+    return `<span title="本会话没有输入与缓存读写，无法计算命中率">—</span>`;
+  }
+  return formatPercent(cacheRead / denominator);
+}
+
+/**
+ * Reasoning 单元格（v0.20.0）：字段缺失（旧 wire/旧库缺列）渲染 "—"，
+ * 不把 undefined 喂给 formatTokens 出 NaN。
+ */
+function reasoningTokensCell(session) {
+  if (!Number.isFinite(session.tokensReasoning)) {
+    return `<span title="旧数据没有 reasoning 记录">—</span>`;
+  }
+  return formatTokens(session.tokensReasoning);
+}
+
+/** 步数单元格（v0.20.0）：assistant 消息数；字段缺失渲染 "—"。 */
+function stepCountCell(session) {
+  if (!Number.isFinite(session.stepCount)) {
+    return `<span title="旧数据没有步数记录">—</span>`;
+  }
+  return formatCount(session.stepCount);
+}
+
+/**
+ * 标题单元格（v0.20.0 子代理归总 + 行内「只看此会话」动作）：
+ * - 子会话行（parentSessionId 非 null）：标题前加 ↳ 层级标记（极小、
+ *   悬浮说明语义），不做可展开树——递归展开留给后续版本；
+ * - 父会话行（childSessionCount > 0）：标题旁加「+N 直接子会话」小徽标，
+ *   悬浮报直接子代数量与合计 tokens（childTokensTotal 缺失时只报数量），
+ *   并说明「仅直接子代，不含孙代」——多级树真实存在（会话可同时是子与父），
+ *   只报直接子代，不报整棵子树；
+ * - 「只看此会话」：克制的文本小按钮，复用 .badge 描边徽标语言
+ *   （行内无先例按钮，badge 是本表既有的最小可点击视觉单位；点击
+ *   上抛 onSessionScopeChange，且必须 stopPropagation——行本体点击
+ *   是进回放页，两个动作不能同时触发）。
+ *   作用域已激活时（sessionScopeId 非 null）列表锁定为单会话视图，
+ *   不再渲染该按钮。
+ */
+function buildTitleCellHtml(session, sessionScopeId, onSessionScopeChange) {
+  const titleCellParts = [];
+  if (session.parentSessionId !== null && session.parentSessionId !== undefined) {
+    titleCellParts.push(
+      `<span class="session-child-marker" style="margin-right:4px" title="子代理会话（由父会话派生）">↳</span>`,
+    );
+  }
+  titleCellParts.push(
+    `<span class="session-title-cell" title="${escapeHtml(session.title)}">${escapeHtml(session.title)}</span>`,
+  );
+  if (Number.isFinite(session.childSessionCount) && session.childSessionCount > 0) {
+    const childTokensNote = Number.isFinite(session.childTokensTotal)
+      ? ` · 合计 tokens ${formatTokens(session.childTokensTotal)}`
+      : "";
+    titleCellParts.push(
+      `<span class="badge session-child-count-badge" title="${escapeHtml(`${session.childSessionCount} 个直接子代理会话 · 仅直接子代，不含孙代${childTokensNote}`)}">+${session.childSessionCount} 直接子会话</span>`,
+    );
+  }
+  if (onSessionScopeChange !== null && sessionScopeId === null) {
+    titleCellParts.push(
+      `<button type="button" class="badge session-scope-button" data-session-scope-id="${escapeHtml(session.id)}" data-session-scope-title="${escapeHtml(session.title)}" title="把看板各统计切换为只统计此会话（顶栏 ✕ 退出）">只看此会话</button>`,
+    );
+  }
+  return titleCellParts.join("");
 }
 
 /**
@@ -156,6 +248,11 @@ function bindSessionRangeSelector(container, onSessionRangeChange) {
  * 过滤本身不在此发生，行序仍等于 payload 序。
  * rangeFilter / onSessionRangeChange（v0.9.0）：当前时间范围（""=All）
  * 与切换回调；回调为 null 时不渲染范围选择器（纯展示用法）。
+ * renderOptions（v0.20.0）：{ sessionScopeId, onSessionScopeChange }——
+ * sessionScopeId 非 null 表示列表已锁定为该会话的单行视图（排序/范围
+ * 选择器与 CSV 导出入口一并锁定不渲染，行内「只看此会话」按钮也不出
+ * 现）；onSessionScopeChange(sessionId, sessionTitle) 是行内按钮回调，
+ * null 时不渲染按钮（纯展示用法）。
  */
 export function renderSessionList(
   container,
@@ -167,12 +264,18 @@ export function renderSessionList(
   directoryFilter = null,
   rangeFilter = DEFAULT_SESSION_RANGE,
   onSessionRangeChange = null,
+  renderOptions = {},
 ) {
+  const sessionScopeId = renderOptions.sessionScopeId ?? null;
+  const onSessionScopeChange = renderOptions.onSessionScopeChange ?? null;
+  const isScopeLocked = sessionScopeId !== null;
   const hasDirectoryFilter = directoryFilter !== null && directoryFilter !== "";
   const rangeLabelText = sessionRangeLabel(rangeFilter);
   const hasRangeFilter = rangeFilter !== null && rangeFilter !== "" && rangeLabelText !== null;
   // 选择器贯穿三态（加载/空态/表格）：空结果时用户仍能切回更宽范围。
-  const rangeSelectorHtml = onSessionRangeChange === null ? "" : sessionRangeSelectorHtml(rangeFilter);
+  // 作用域锁定视图不渲染：列表只剩一个会话，时间范围切换没有对象。
+  const rangeSelectorHtml =
+    onSessionRangeChange === null || isScopeLocked ? "" : sessionRangeSelectorHtml(rangeFilter);
 
   if (sessionPayload === null) {
     container.innerHTML = `${rangeSelectorHtml}${buildLoadingHtml(4)}`;
@@ -264,7 +367,7 @@ export function renderSessionList(
       : "总量 = 入 + 出 + cache.read";
     return `
     <tr class="session-row" data-session-id="${escapeHtml(session.id)}" title="查看会话回放（M4）">
-      <td class="primary"><span class="session-title-cell" title="${escapeHtml(session.title)}">${escapeHtml(session.title)}</span></td>
+      <td class="primary">${buildTitleCellHtml(session, sessionScopeId, onSessionScopeChange)}</td>
       <td><span class="model-cell"><span class="dot" style="background:${modelColor.get(session.modelId) ?? "transparent"}"></span><span class="name">${escapeHtml(session.modelId)}</span></span></td>
       <td><span class="badge">${escapeHtml(session.agent)}</span></td>
       <td class="num" title="${formatDateTime(session.timeCreated)}">${formatRelative(session.timeCreated, now)}</td>
@@ -272,6 +375,9 @@ export function renderSessionList(
       <td class="num" title="入 = 纯输入 tokens.input · cache.read 另计 · 与 KPI 卡「入」同口径">${formatTokens(tokensInput)}</td>
       <td class="num" title="出 = tokens.output · 与 KPI 卡「出」同口径">${formatTokens(tokensOutput)}</td>
       <td class="num primary" title="${totalCellTitle}">${formatTokens(session.tokens)}</td>
+      <td class="num">${strictHitRateCell(session)}</td>
+      <td class="num">${reasoningTokensCell(session)}</td>
+      <td class="num">${stepCountCell(session)}</td>
       <td class="num">${costCell(session.cost)}</td>
     </tr>`;
   }).join("");
@@ -279,6 +385,11 @@ export function renderSessionList(
   const hiddenAfterFilterCount = allSessions.length - sessions.length;
   const remainingCount = Math.max(0, sessions.length - VISIBLE_ROWS);
   const footNoteParts = [];
+  if (isScopeLocked) {
+    // 锁定视图的脚注首要信息：说明这不是「只剩一条」的全量列表，而是
+    // 作用域收窄后的单会话视图（排序/导出锁定原因也一并说清）。
+    footNoteParts.push(`只看此会话 · 排序与导出已锁定`);
+  }
   // v0.7.0/v0.9.0：目录与时间范围都是服务端参数，先于客户端模型过滤说
   if (hasDirectoryFilter) footNoteParts.push(`目录：${escapeHtml(directoryFilter)}`);
   if (hasRangeFilter) footNoteParts.push(`最近 ${rangeLabelText}`);
@@ -303,8 +414,11 @@ export function renderSessionList(
   // v0.8.0：CSV 导出入口（真实模式常显 / mock 模式渲染期即无，见
   // session-csv-export.js）。href 经 data-source 单点构造，directoryFilter/
   // rangeFilter 即 controller 透传的当前过滤值——不另存状态。原生
-  // <a download>，无需 JS 点击处理器。
-  const csvExportEntryHtml = sessionsCsvExportEntryHtml(directoryFilter, rangeFilter);
+  // <a download>，无需 JS 点击处理器。作用域锁定视图不渲染：导出端点
+  // 不吃 ?session=，此刻入口导出的是全量列表，与锁定视图口径错位。
+  const csvExportEntryHtml = isScopeLocked
+    ? ""
+    : sessionsCsvExportEntryHtml(directoryFilter, rangeFilter);
   if (csvExportEntryHtml !== "") footNoteParts.push(csvExportEntryHtml);
 
   container.innerHTML = `
@@ -345,5 +459,22 @@ export function renderSessionList(
       // 读取端 app.js routeByHash 用 decodeURIComponent 还原，往返一致。
       window.location.hash = `/session/${encodeURIComponent(row.dataset.sessionId)}`;
     });
+  }
+
+  // v0.20.0 行内「只看此会话」：stopPropagation 是硬要求——不拦的话点击
+  // 会冒泡到行本体，进回放页与进入作用域两个动作同时触发（真实 DOM 语义；
+  // 事件对象缺失的测试环境降级为直接上抛，不影响回放路由的既有行为）。
+  if (onSessionScopeChange !== null) {
+    for (const scopeButton of container.querySelectorAll("button.session-scope-button")) {
+      scopeButton.addEventListener("click", (event) => {
+        if (event !== null && typeof event === "object" && typeof event.stopPropagation === "function") {
+          event.stopPropagation();
+        }
+        onSessionScopeChange(
+          scopeButton.dataset.sessionScopeId ?? "",
+          scopeButton.dataset.sessionScopeTitle ?? "",
+        );
+      });
+    }
   }
 }

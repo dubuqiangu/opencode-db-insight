@@ -580,6 +580,70 @@ test("/api/sessions rows carry step-level modelIds (v0.19.0 drill-down payload)"
   }
 })
 
+test("/api/sessions rows carry the v0.20.0 enrichment fields (stepCount / addon columns / child aggregates)", () => {
+  clearResultCache()
+  try {
+    // 载荷富化锁：stepCount 走轻计数分支（type='assistant' 行数），
+    // tokens_reasoning / tokens_cache_write / parent_id 走 session_v2
+    // 附加列点查，childSessionCount / childTokensTotal 走 parent_id
+    // 自连接归总（一层直接子代）。父子两夹具的 token 分量互异，任何
+    // 列交换 / 折叠错误都在逐字段断言下变红。
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_parent_origin",
+          tokensReasoning: 321,
+          tokensCacheWrite: 65,
+          tokensInput: 100,
+          tokensOutput: 50,
+          tokensCacheRead: 25,
+          tokens: 175,
+        }),
+        buildFakeSessionSummary({
+          id: "ses_child_branch",
+          parentSessionId: "ses_parent_origin",
+          tokensInput: 10,
+          tokensOutput: 20,
+          tokensCacheRead: 30,
+          tokens: 60,
+        }),
+      ],
+      messagesBySessionId: {
+        // 3 条 assistant + 1 条 user：stepCount 只数 assistant。
+        ses_parent_origin: [
+          { type: "assistant", data: { tokens: { input: 1 } } },
+          { type: "assistant", data: { tokens: { input: 1 } } },
+          { type: "assistant", data: { tokens: { input: 1 } } },
+          { type: "user", data: { text: "user 消息不计数" } },
+        ],
+        ses_child_branch: [{ type: "assistant", data: { tokens: { input: 1 } } }],
+      },
+      systemPromptBySessionId: {},
+    })
+
+    const apiResponse = handleApiRequest(apiContextFor("/api/sessions", fakeDatabase))
+    assert.equal(apiResponse.statusCode, 200)
+    const sessionRows = apiResponse.body as SessionSummary[]
+    assert.equal(sessionRows.length, 2)
+
+    const parentSessionRow = sessionRows.find((sessionRow) => sessionRow.id === "ses_parent_origin")!
+    assert.equal(parentSessionRow.stepCount, 3, "stepCount = assistant 行数，user 消息不计")
+    assert.equal(parentSessionRow.tokensReasoning, 321)
+    assert.equal(parentSessionRow.tokensCacheWrite, 65)
+    assert.equal(parentSessionRow.parentSessionId, null, "无父会话保持 null")
+    assert.equal(parentSessionRow.childSessionCount, 1, "直接子代恰一条")
+    assert.equal(parentSessionRow.childTokensTotal, 60, "子代 tokens 三列合计（10+20+30）")
+
+    const childSessionRow = sessionRows.find((sessionRow) => sessionRow.id === "ses_child_branch")!
+    assert.equal(childSessionRow.stepCount, 1)
+    assert.equal(childSessionRow.parentSessionId, "ses_parent_origin")
+    assert.equal(childSessionRow.childSessionCount, 0)
+    assert.equal(childSessionRow.childTokensTotal, 0)
+  } finally {
+    clearResultCache()
+  }
+})
+
 test("/api/refresh clears the process-local cache and reports the evicted count (v0.14.0)", () => {
   clearResultCache()
   try {

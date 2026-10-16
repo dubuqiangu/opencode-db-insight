@@ -33,6 +33,10 @@
         <button type="button" data-range="all">All</button>
       </nav>
 
+      <!-- v0.20.0 单会话作用域 chip 的常驻容器：接线 lane 填充内容并摘掉
+           hidden；本体样式见 styles.css .scope-chip 一节。 -->
+      <div class="topbar-chip-slot" id="session-scope-chip" hidden></div>
+
       <div class="top-status" id="top-status">
         <span class="status-dot" id="status-dot"></span>
         <span id="status-text">连接中…</span>
@@ -51,6 +55,7 @@
           <button type="button" data-toc-target="panel-funnel">Token funnel</button>
           <button type="button" data-toc-target="panel-compaction">Compaction</button>
           <button type="button" data-toc-target="panel-survival">Session survival</button>
+          <button type="button" data-toc-target="panel-distribution">Session distribution</button>
           <button type="button" data-toc-target="panel-todo">Todo</button>
           <button type="button" data-toc-target="panel-models">Model leaderboard</button>
           <button type="button" data-toc-target="panel-agents">Agent leaderboard</button>
@@ -165,6 +170,18 @@
             </header>
             <div class="panel-body">
               <div id="todo-card" aria-label="Todo 完成率统计"></div>
+            </div>
+          </article>
+
+          <article id="panel-distribution" class="panel span-both">
+            <header class="panel-head">
+              <div>
+                <h2>会话 token 分布</h2>
+                <p class="panel-sub">tokens 总量分布 · 排除零消耗会话</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="session-distribution" aria-label="会话 token 总量分布直方图"></div>
             </div>
           </article>
         </section>

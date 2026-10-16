@@ -28,7 +28,10 @@
 
 import type { SqliteReadConnection } from "./types.ts"
 import { asRecord, coerceNumber, coerceText } from "./rows.ts"
-import { ASSISTANT_OBJECT_DATA_PREDICATE } from "./scan-conventions.ts"
+import {
+  ASSISTANT_OBJECT_DATA_PREDICATE,
+  buildSessionFilterSqlFragments,
+} from "./scan-conventions.ts"
 
 /** Default row limit for the directories list (DESIGN v0.3-A contract). */
 export const DEFAULT_DIRECTORY_LIMIT = 10
@@ -94,14 +97,21 @@ export function directoryDisplayName(directoryPath: string): string {
  * The SQL ORDER BY is kept as a pushdown nicety but the wire order is
  * owned by the explicit JS comparator, so the ordering contract cannot
  * depend on storage-engine collation details.
+ *
+ * v0.20.0 ?session= 过滤：sessionFilterId 非空时外层扫描追加
+ * AND id = ?（共享片段）——单会话视图只剩该会话的一个目录行；step
+ * 子查询不过滤（外层等值条件经 join 已把结果收窄到目标会话）。
+ * 缺省不过滤，SQL 字节与现行全量口径一致。
  */
 export function queryDirectoryStats(
   db: SqliteReadConnection | null,
   limit: number = DEFAULT_DIRECTORY_LIMIT,
+  sessionFilterId: string | null = null,
 ): DirectoryStats | null {
   if (db === null) return null
   const requestedLimit = Number.isFinite(limit) ? Math.floor(limit) : DEFAULT_DIRECTORY_LIMIT
   const boundedLimit = Math.min(Math.max(requestedLimit, 1), MAX_DIRECTORY_LIMIT)
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   const rawRows = db
     .prepare(
@@ -122,11 +132,11 @@ export function queryDirectoryStats(
                   WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}
                   GROUP BY session_id) step_counts
          ON step_counts.session_id = s.id
-       WHERE s.directory IS NOT NULL AND s.directory != ''
+       WHERE s.directory IS NOT NULL AND s.directory != ''${sessionFilter.sessionRowAndConditionSql}
        GROUP BY s.directory
        ORDER BY step_count DESC, session_count DESC, directory_name ASC`,
     )
-    .all()
+    .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 
   const directoryRows: DirectoryStat[] = []
   let totalSessions = 0

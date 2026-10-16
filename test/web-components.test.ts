@@ -1023,13 +1023,38 @@ test("renderSessionList renders the v0.13.0 入/出 columns beside the folded To
 
   renderSessionList(container, breakdownPayload, null, "time_updated", "desc", noopSortChange)
 
-  // Nine headers total; the sortable set is still exactly the five backend
-  // whitelist keys — the new columns join the non-sortable display columns.
-  assert.equal(container.querySelectorAll("th").length, 9, "the session table now has nine columns")
+  // Twelve headers total; the sortable set is still exactly the five backend
+  // whitelist keys — the v0.13.0 入/出 pair and the v0.20.0
+  // 命中率/Reasoning/步数 trio all join the non-sortable display columns.
+  assert.equal(container.querySelectorAll("th").length, 12, "the v0.20.0 session table has twelve columns")
   assert.deepEqual(
     container.querySelectorAll("th.sortable").map((headerCell) => headerCell.dataset.sortKey),
     ["title", "time_created", "time_updated", "tokens", "cost"],
-    "the 入/出 columns must not add server-sort keys (whitelist unchanged)",
+    "the 入/出 and 命中率/Reasoning/步数 columns must not add server-sort keys (whitelist unchanged)",
+  )
+
+  // v0.20.0 命中率/Reasoning/步数 (wiring lane): display-only columns that sit
+  // between the folded Tokens total and Cost, keep the .num alignment slot
+  // and carry a calibration tooltip instead of a data-sort-key — the backend
+  // ?sort= whitelist is not extended.
+  const hitRateHeader = container.querySelectorAll("th").find(
+    (headerCell) => (headerCell.attributes.get("title") ?? "").startsWith("严格口径 = "),
+  )!
+  const reasoningHeader = container.querySelectorAll("th").find(
+    (headerCell) => (headerCell.attributes.get("title") ?? "").startsWith("本会话 tokens.reasoning"),
+  )!
+  const stepHeader = container.querySelectorAll("th").find(
+    (headerCell) => (headerCell.attributes.get("title") ?? "").startsWith("本会话的 assistant 消息数"),
+  )!
+  for (const newDisplayHeader of [hitRateHeader, reasoningHeader, stepHeader]) {
+    assert.ok(newDisplayHeader.classTokenList().includes("num"), "the v0.20.0 display columns keep the .num alignment")
+    assert.ok(!newDisplayHeader.classTokenList().includes("sortable"), "the v0.20.0 display columns are not sortable")
+    assert.ok(!("sortKey" in newDisplayHeader.dataset), "the v0.20.0 display columns must not carry a sort key")
+  }
+  assert.match(
+    container.innerHTML,
+    />\s*Tokens\s*<\/th>[\s\S]*?>\s*命中率\s*<\/th>[\s\S]*?>\s*Reasoning\s*<\/th>[\s\S]*?>\s*步数\s*<\/th>[\s\S]*?>\s*Cost\s*<\/th>/,
+    "命中率/Reasoning/步数 must render between the folded Tokens total and Cost",
   )
 
   // Column order: the 入/出 pair sits between 更新时间 and the folded Tokens

@@ -12,6 +12,11 @@
  * v0.9.0 扩维：时间范围（?range=7d|30d|90d，timeUpdated 口径）同模式
  * 入控制器受控状态——单一真源在此，app/session-list 不另存副本。
  *
+ * v0.20.0 扩维：会话作用域（changeSessionScope）——缓存键追加 scope
+ * 段（见 sessionSortCacheKey），作用域载荷与全量载荷绝不共享条目；
+ * 作用域视图锁定为单会话行（排序/范围交互不挂），取数来源由注入的
+ * fetchSessionsPage 闭包按 scope 参数决定。
+ *
  * 缓存语义（v0.9.1，ora-5 审查 P2 修复）＝**稳定维度缓存 + 时间窗视图
  * 直取**：sort/order/directory 是稳定量——同键永远同义，可缓存；range
  * 非空是唯一随墙钟移动的维度，09:00 的「最近 7 天」与 18:00 的「最近
@@ -46,17 +51,21 @@ import {
   DEFAULT_SESSION_SORT_KEY,
   DEFAULT_SESSION_SORT_ORDER,
   DEFAULT_SESSION_RANGE,
+  SessionScopeNotFoundError,
 } from "../data-source.js";
 
 /**
- * sessions 缓存键：sort/order/directory/range 四维组合（后端缓存键
- * sessions:[limit,offset,sort,order,directory,range] 的前端对应）。
- * directory 为 null（无过滤）时以空串占位，与 "" 按后端契约同为
- * 「不过滤」——两端对空串的语义一致，键也归一；range 同理（""=全部）。
- * 只有 range 为空串的条目会被写入（见模块头缓存语义）。
+ * sessions 缓存键：sort/order/directory/range/sessionScope 五维组合
+ * （后端缓存键 sessions:[limit,offset,sort,order,directory,range] 的前端
+ * 对应；v0.20.0 scope 段与后端 ?session= 聚合缓存键的 session 维度同一
+ * 分离纪律——不同作用域的载荷绝不能共享条目，否则退出作用域会吃到
+ * 单会话口径的陈旧缓存）。directory 为 null（无过滤）时以空串占位，
+ * 与 "" 按后端契约同为「不过滤」——两端对空串的语义一致，键也归一；
+ * range / sessionScope 同理（""/null = 全部）。只有 range 为空串的条目
+ * 会被写入（见模块头缓存语义）。
  */
-function sessionSortCacheKey(sortKey, sortOrder, directory, range) {
-  return `${sortKey}:${sortOrder}:${encodeURIComponent(directory ?? "")}:${range ?? ""}`;
+function sessionSortCacheKey(sortKey, sortOrder, directory, range, sessionScopeId) {
+  return `${sortKey}:${sortOrder}:${encodeURIComponent(directory ?? "")}:${range ?? ""}:${encodeURIComponent(sessionScopeId ?? "")}`;
 }
 
 /**
@@ -64,9 +73,16 @@ function sessionSortCacheKey(sortKey, sortOrder, directory, range) {
  *
  * 依赖注入（app.js 装配，测试替身可换）：
  * - containerElement：会话列表容器（app.js 的 #session-list）
- * - fetchSessionsPage(sortKey, sortOrder, directory, range) → Promise<sessionPayload>：
- *   单页请求闭包，limit/offset 由装配方钉死（见头部 N-2 注释）
+ * - fetchSessionsPage(sortKey, sortOrder, directory, range, sessionScopeId)
+ *   → Promise<sessionPayload>：单页请求闭包，limit/offset 由装配方钉死
+ *   （见头部 N-2 注释）；sessionScopeId 非 null 时由闭包决定取数来源
+ *   （作用域视图 = 单会话载荷，不走 ?sort= 分页请求）
  * - getModelFilter() → string | null：模型下钻过滤（app 状态，只读访问器）
+ * - onSessionScopeChange(sessionId, sessionTitle)：行内「只看此会话」
+ *   按钮回调（透传给 session-list 渲染），null 时不渲染按钮
+ * - onSessionScopeVanished()：作用域请求撞上 SessionScopeNotFoundError
+ *   （会话已删）时的上抛口——app 层据此自动退出作用域；本模块不感知
+ *   全局 state，默认 no-op
  * - markSectionSucceeded() / markSectionFailed()：顶栏失败计数回调
  *
  * 返回：
@@ -76,6 +92,10 @@ function sessionSortCacheKey(sortKey, sortOrder, directory, range) {
  * - changeDirectory(directory | null)：目录下钻/取消（sort/range 维持
  *   当前值）；点击同一目录重复传入时由调用方先做 toggle 归 null
  * - changeRange(range)：时间范围切换（sort/directory 维持当前值）
+ * - changeSessionScope(sessionScopeId | null)（v0.20.0）：作用域进入/
+ *   退出（sort/order/directory/range 维持当前值）；缓存键带 scope 段，
+ *   两个作用域的条目互不污染。作用域激活期间视图锁定：列表只显示该
+ *   会话自身一行，排序/范围交互不挂
  * - renderCurrent()：保证当前视图有内容可渲——稳定视图（空 range）读
  *   缓存；缓存 miss（v0.19.1 起）与时间窗视图同形状：骨架 + 直取，
  *   不再留一副等触发方补请求的裸骨架。模型下钻过滤变化后调用（过滤
@@ -92,6 +112,8 @@ export function createSessionSortController({
   containerElement,
   fetchSessionsPage,
   getModelFilter,
+  onSessionScopeChange = null,
+  onSessionScopeVanished = () => {},
   markSectionSucceeded = () => {},
   markSectionFailed = () => {},
 }) {
@@ -100,29 +122,40 @@ export function createSessionSortController({
     order: DEFAULT_SESSION_SORT_ORDER,
     directory: null,
     range: DEFAULT_SESSION_RANGE,
+    // v0.20.0 会话作用域：null = 全部会话。入缓存键（见
+    // sessionSortCacheKey），不与无作用域条目混存。
+    sessionScope: null,
     cache: new Map(),
   };
   let loadSequence = 0;
 
-  /** 用当前视图状态渲染给定 payload（null = 骨架）。 */
+  /** 用当前视图状态渲染给定 payload（null = 骨架）。
+   * 作用域锁定视图（sessionScope 非 null）：排序/范围回调挂 null
+   * （session-list 据此不渲染交互件），目录/范围展示值也归空——
+   * 单会话载荷与这些服务端过滤维度口径错位，显示出来只会误导。 */
   function renderSessionPage(sessionPayload) {
+    const isScopeLocked = viewState.sessionScope !== null;
     renderSessionList(
       containerElement,
       sessionPayload,
       getModelFilter(),
       viewState.key,
       viewState.order,
-      changeSort,
-      viewState.directory,
-      viewState.range,
-      changeRange,
+      isScopeLocked ? null : changeSort,
+      isScopeLocked ? null : viewState.directory,
+      isScopeLocked ? "" : viewState.range,
+      isScopeLocked ? null : changeRange,
+      {
+        sessionScopeId: viewState.sessionScope,
+        onSessionScopeChange,
+      },
     );
   }
 
   function renderCurrent() {
     if (viewState.range === "") {
       const cachedSessionPayload = viewState.cache.get(
-        sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, ""),
+        sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, "", viewState.sessionScope),
       );
       if (cachedSessionPayload !== undefined) {
         // 稳定视图：缓存即真相，命中直渲。
@@ -144,7 +177,7 @@ export function createSessionSortController({
 
   function renderCurrentIfLoaded() {
     if (viewState.range !== "") return; // 时间窗视图不入缓存，恒 no-op（见模块头已知代价）
-    if (!viewState.cache.has(sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, ""))) return;
+    if (!viewState.cache.has(sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, "", viewState.sessionScope))) return;
     renderCurrent();
   }
 
@@ -162,12 +195,19 @@ export function createSessionSortController({
     const requestSortOrder = viewState.order;
     const requestDirectory = viewState.directory;
     const requestRange = viewState.range;
+    const requestSessionScope = viewState.sessionScope;
     try {
-      const sessionPayload = await fetchSessionsPage(requestSortKey, requestSortOrder, requestDirectory, requestRange);
+      const sessionPayload = await fetchSessionsPage(
+        requestSortKey,
+        requestSortOrder,
+        requestDirectory,
+        requestRange,
+        requestSessionScope,
+      );
       // 时间窗条目不写缓存：同键不蕴含同义（墙钟移动），Map 只服务稳定维度。
       if (requestRange === "") {
         viewState.cache.set(
-          sessionSortCacheKey(requestSortKey, requestSortOrder, requestDirectory, ""),
+          sessionSortCacheKey(requestSortKey, requestSortOrder, requestDirectory, "", requestSessionScope),
           sessionPayload,
         );
       }
@@ -175,15 +215,25 @@ export function createSessionSortController({
         || requestSortKey !== viewState.key
         || requestSortOrder !== viewState.order
         || requestDirectory !== viewState.directory
-        || requestRange !== viewState.range) return;
+        || requestRange !== viewState.range
+        || requestSessionScope !== viewState.sessionScope) return;
       renderSessionPage(sessionPayload);
       markSectionSucceeded();
     } catch (error) {
+      // v0.20.0：作用域会话已删（SessionScopeNotFoundError）不落错误卡——
+      // 上抛给 app 层自动退出作用域并轻提示，本视图随退出后的全量重载
+      // 自然恢复。晚到的（快照已过期）作用域错误同样上抛：退出动作在
+      // app 层有「已退出则忽略」守卫，多路并发 404 不会重复退。
+      if (error instanceof SessionScopeNotFoundError) {
+        onSessionScopeVanished();
+        return;
+      }
       if (requestToken !== loadSequence
         || requestSortKey !== viewState.key
         || requestSortOrder !== viewState.order
         || requestDirectory !== viewState.directory
-        || requestRange !== viewState.range) return;
+        || requestRange !== viewState.range
+        || requestSessionScope !== viewState.sessionScope) return;
       renderError(containerElement, error, load);
       markSectionFailed();
     }
@@ -200,7 +250,7 @@ export function createSessionSortController({
     viewState.directory = nextDirectory;
     viewState.range = nextRange;
     if (nextRange === ""
-      && viewState.cache.has(sessionSortCacheKey(nextSortKey, nextSortOrder, nextDirectory, ""))) {
+      && viewState.cache.has(sessionSortCacheKey(nextSortKey, nextSortOrder, nextDirectory, "", viewState.sessionScope))) {
       renderCurrent();
       // R1：缓存命中同样记成功——此前视图的加载失败计数不得残留顶栏
       //（renderCurrent 纯渲染不碰计数，网络成功路径在 load() 里已记）。
@@ -230,6 +280,17 @@ export function createSessionSortController({
   }
 
   /**
+   * 作用域进入/退出（v0.20.0）：sort/order/directory/range 维持当前值。
+   * 缓存键带 scope 段——同一组合在两个作用域下是两个条目，切回旧作用
+   * 域仍即时命中；无作用域条目绝不会被作用域载荷污染。
+   */
+  function changeSessionScope(nextSessionScopeId) {
+    if (viewState.sessionScope === nextSessionScopeId) return;
+    viewState.sessionScope = nextSessionScopeId;
+    applyNextView(viewState.key, viewState.order, viewState.directory, viewState.range);
+  }
+
+  /**
    * 后台定时刷新（v0.18.x）：对当前视图直接重取。时间窗视图（非空
    * range）从不入缓存，load() 即是重取；稳定视图也不再先删条目
    * （v0.19.1 ora-11 P2-2：delete 是纯负资产——load 失败会把整页
@@ -246,6 +307,7 @@ export function createSessionSortController({
     changeSort,
     changeDirectory,
     changeRange,
+    changeSessionScope,
     renderCurrent,
     renderCurrentIfLoaded,
     refreshCurrentView,

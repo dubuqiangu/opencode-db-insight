@@ -226,6 +226,54 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .status-dot.ok { background: var(--accent); box-shadow: 0 0 6px var(--accent-soft); }
 .status-dot.err { background: var(--red); }
 
+/* ---------- 顶栏作用域 chip（只看此会话，v0.20.0） ---------- */
+/* 常驻隐藏容器由接线 lane 填充并摘掉 hidden；本体沿用 .filter-chip 的
+ * accent-soft 胶囊语言（components.css），但顶栏版收紧了最大宽并加
+ * 标题省略——与 .range-switch / 自动刷新控件同行共存不挤。
+ * :not([hidden]) 守住 UA 的 hidden 语义——元素上的 display 声明会
+ * 覆盖 UA 的 [hidden] { display: none }，直接写 display 会让它藏不住。 */
+.topbar-chip-slot:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-family: var(--font-num);
+  color: var(--text);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 3px 7px 3px 11px;
+  min-width: 0;
+  max-width: 340px;
+}
+.scope-chip .scope-chip-label { color: var(--text-dim); flex: none; }
+.scope-chip .scope-chip-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ✕ 与 .filter-chip button 同语言：圆角热区，hover 转 red。 */
+.scope-chip .scope-chip-clear {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 50%;
+}
+.scope-chip .scope-chip-clear:hover { color: var(--red); }
+@media (max-width: 760px) {
+  /* 窄屏顶栏换行后 chip 单独占行，标题省略上限收紧给控件让位。 */
+  .scope-chip { max-width: 180px; }
+}
+
 /* ---------- KPI 卡片行 ---------- */
 .kpi-row {
   display: grid;

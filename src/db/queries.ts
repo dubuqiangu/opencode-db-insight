@@ -36,11 +36,18 @@ import {
   parseSessionModelColumn,
   readAgentName,
   readRowNumber,
-  UNKNOWN_MODEL_ID,
 } from "./rows.ts"
-// 与聚合统计共用的 step 级谓词（单点纪律）：modelIds 的 step 集合必须
-// 和模型排行榜扫的是同一批行，否则下钻口径又会漂移。
-import { ASSISTANT_OBJECT_DATA_PREDICATE } from "./scan-conventions.ts"
+// ?session= 会话过滤片段（单点纪律）：本文件的落点是 queryTodoStats
+// （todo 表按 session_id 列过滤）；step/会话级聚合的落点在
+// aggregate-queries.ts / behavior-queries.ts / tool-health-queries.ts /
+// directory-queries.ts。
+import { buildSessionFilterSqlFragments } from "./scan-conventions.ts"
+// 会话富化（v0.19.0 modelIds + v0.20.0 附加字段）：独立模块，见
+// session-summary-enrichment.ts 的文件头说明（行为零变化的拆分）。
+import {
+  buildSessionModelIds,
+  enrichSessionSummaries,
+} from "./session-summary-enrichment.ts"
 
 // SQL-side statistics aggregations (P0-1); re-exported for the API layer.
 export {
@@ -380,28 +387,37 @@ export function querySessionList(
     if (rowRecord === null) continue
     sessionSummaries.push(parseSessionSummaryRow(rowRecord, undefined))
   }
-  // 空页不做聚合：没有任何 summary 需要装饰，省掉一次全表扫描；
-  // 这也使「捕获空结果连接」的既有 SQL 字节锁测试（目录/范围/排序
-  // 注入面）继续只捕获列表语句本身。非空页才建 step 模型 Map。
+  // 空页不做聚合：没有任何 summary 需要装饰，省掉额外扫描；这也使
+  // 「捕获空结果连接」的既有 SQL 字节锁测试（目录/范围/排序注入面）
+  // 继续只捕获列表语句本身。非空页才做富化。
   if (sessionSummaries.length === 0) return sessionSummaries
-  // P2-4（v0.19.1 性能热修）第一档：不消费 modelIds 的调用点（CSV
-  // 导出循环、TUI 导出选单）传 false 跳过 step 富化——modelIds 只由
-  // 会话列表的客户端模型过滤消费，为不读它的路径逐行解析 47k 条
-  // assistant JSON 是纯浪费。此时 modelIds 只含启动模型。
-  if (!includeStepModelIds) return sessionSummaries
-  // P2-4 第二档：富化查询改 IN 下推——只扫当页会话的 id 集（全表版
-  // 真库实测 ~2.6s/次，IN 下推版 ~531ms/页，见 queryStepModelIdsBySessionId）。
-  const stepModelIdsBySessionId = queryStepModelIdsBySessionId(
-    db,
-    sessionSummaries.map((sessionSummary) => sessionSummary.id),
-  )
-  for (const sessionSummary of sessionSummaries) {
-    sessionSummary.modelIds = buildSessionModelIds(
-      sessionSummary.modelId,
-      stepModelIdsBySessionId.get(sessionSummary.id),
-    )
-  }
+  // 富化统一走 enrichSessionSummaries（v0.19.1 的 modelIds IN 下推 +
+  // v0.20.0 的 stepCount / tokensReasoning / tokensCacheWrite /
+  // parentSessionId / childSessionCount / childTokensTotal）。
+  // includeStepModelIds=false 只跳过 modelIds 的 JSON 解析扫描
+  // （P2-4：CSV 导出循环、TUI 导出选单不消费 modelIds）；stepCount
+  // 轻计数与 v2 附加列点查不受开关控制（v0.20.0 契约）。
+  enrichSessionSummaries(db, sessionSummaries, includeStepModelIds)
   return sessionSummaries
+}
+
+/**
+ * 该会话 id 是否存在于 session_v2（v0.20.0 ?session= 参数校验的
+ * 数据面）：`SELECT 1` 点查，不做任何富化。API 层用它把未知 id
+ * 统一答成 404 "session not found"。库本身不可读（表缺失/损坏）时
+ * 同样返回 false——参数校验失败与「会话不存在」对调用方是同一个
+ * 答案，不必区分。
+ */
+export function sessionExistsInSessionV2(
+  db: SqliteReadConnection | null,
+  sessionId: string,
+): boolean {
+  if (db === null) return false
+  try {
+    return db.prepare("SELECT 1 FROM session_v2 WHERE id = ?").get(sessionId) !== undefined
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -425,92 +441,13 @@ export function querySessionSummaryById(
     .get(sessionId)
   const rowRecord = asRecord(rawRow)
   if (rowRecord === null) return null
-  // 单查路径也填 modelIds（仅扫该会话的 step 行，低频路径，代价可忽略）：
-  // 与列表路径同一口径，保证同一会话从两条路径取出的形状逐字段一致。
-  const stepModelIdsBySessionId = queryStepModelIdsBySessionId(db, [sessionId])
-  return parseSessionSummaryRow(rowRecord, stepModelIdsBySessionId.get(sessionId))
-}
-
-/**
- * Step 级模型 id 聚合（v0.19.0 模型下钻口径修复）：每对
- * (session_id, $.model.id) 一行。为什么需要它——模型排行榜的行来自
- * step 级 `$.model.id`，而会话的 `modelId` 只是 session_v2.model 声明的
- * 启动模型；实测 top 榜模型（glm-5.3-flash / claude-opus-5 …）从不作为
- * 启动模型出现，按启动模型过滤必然点出行列表空。会话列表因此改按
- * 「会话内 step 级出现过」过滤，本查询就是那个集合的 SQL 侧来源。
- *
- * `sessionIds` 是本次富化要覆盖的会话 id 集（by-id 单查路径传单个
- * id；列表路径传当页整页 id 集——P2-4 IN 下推：谓词置于 json 函数
- * 谓词之前，SQLite 的 AND 按书写序短路，47k 行逐行 JSON 解析缩到
- * 只解析当页会话的行，真库实测 ~2.6s/次 → ~531ms/页）。两条路径复用
- * 同一口径，保证产出的 SessionSummary 形状一致（sql-aggregation-parity
- * 的 by-id 逐字段锁依赖这一点）。谓词复用聚合统计的共享
- * ASSISTANT_OBJECT_DATA_PREDICATE：与排行榜扫描同一批行，空 model.id
- * 由 JS 侧归一为 "unknown"（镜像 parseAssistantStepRow / queryModelMetrics
- * 的归一，保证点排行榜的 "unknown" 行下钻也能命中）。
- */
-function queryStepModelIdsBySessionId(
-  db: SqliteReadConnection,
-  sessionIds: string[],
-): Map<string, Set<string>> {
-  // 空 id 集不发 SQL：IN () 不是合法语句，且没有会话就没有富化可做。
-  if (sessionIds.length === 0) return new Map()
-  const sessionFilterSql = `session_id IN (${sessionIds.map(() => "?").join(", ")})`
-  let rawRows: unknown[]
-  try {
-    rawRows = db
-      .prepare(
-        `SELECT session_id, json_extract(data, '$.model.id') AS model_id
-         FROM session_message
-         WHERE ${sessionFilterSql} AND ${ASSISTANT_OBJECT_DATA_PREDICATE}
-         GROUP BY session_id, model_id`,
-      )
-      .all(...sessionIds)
-  } catch (error) {
-    // R-D（v0.19.1 catch 宽度加固）：「no such table」是已知且合法的
-    // 降级场景——只有 session_v2 的库（CSV 导出测试夹具即此形态）没有
-    // session_message 表，静默降级即可；其余任何错误（真实 SQL 错误、
-    // 库损坏）必须先 console.error 再降级，防无痕复发 v0.19.0 修过的
-    // bug。降级语义不变：step 集合整体置空，summary 的 modelIds 只含
-    // 启动模型；富化失败不得牵连列表/导出主查询（后者依赖 session_v2
-    // 单表，语义上就不需要 step 数据）。
-    const failureMessage = error instanceof Error ? error.message : String(error)
-    if (!/no such table/i.test(failureMessage)) {
-      console.error("opencode-db-insight: step model id aggregation failed", error)
-    }
-    return new Map()
-  }
-
-  const stepModelIdsBySessionId = new Map<string, Set<string>>()
-  for (const rawRow of rawRows) {
-    const rowRecord = asRecord(rawRow)
-    if (rowRecord === null) continue
-    const stepSessionId = coerceText(rowRecord["session_id"])
-    // json_extract 对缺失/JSON null 的 $.model.id 返回 NULL——那是
-    // 「没有模型可下钻」的行，不是 "unknown" 桶；只有显式空串才归一
-    // 为 "unknown"（与排行榜 JS 侧 rawModelId === "" 的判定一致）。
-    const rawModelId = rowRecord["model_id"]
-    if (rawModelId === null || rawModelId === undefined) continue
-    const stepModelId = coerceText(rawModelId)
-    const normalizedModelId = stepModelId === "" ? UNKNOWN_MODEL_ID : stepModelId
-    const modelIdSet = stepModelIdsBySessionId.get(stepSessionId) ?? new Set<string>()
-    modelIdSet.add(normalizedModelId)
-    stepModelIdsBySessionId.set(stepSessionId, modelIdSet)
-  }
-  return stepModelIdsBySessionId
-}
-
-/**
- * 组装单个 summary 的 modelIds：step 集合 ∪ 启动模型（"unknown" 占位
- * 不计入——缺数据不是「用过」）。无 step 且启动模型未知 → 空数组。
- */
-function buildSessionModelIds(
-  modelId: string,
-  stepModelIdSet: Set<string> | undefined,
-): string[] {
-  const modelIds = new Set<string>(stepModelIdSet ?? [])
-  if (modelId !== UNKNOWN_MODEL_ID) modelIds.add(modelId)
-  return [...modelIds]
+  // 单查路径也走同一套富化（modelIds + v0.20.0 附加字段，仅扫该
+  // 会话的 id 集，低频路径，代价可忽略）：与列表路径同一口径，保证
+  // 同一会话从两条路径取出的形状逐字段一致（sql-aggregation-parity
+  // 的 by-id 逐字段锁依赖这一点）。
+  const sessionSummary = parseSessionSummaryRow(rowRecord, undefined)
+  enrichSessionSummaries(db, [sessionSummary], true)
+  return sessionSummary
 }
 
 /** Shared column mapping of one session_v2 row into a SessionSummary. */
@@ -536,6 +473,14 @@ function parseSessionSummaryRow(
     tokensOutput: coerceNumber(rowRecord["tokens_output"]),
     tokensCacheRead: coerceNumber(rowRecord["tokens_cache_read"]),
     cost: coerceNumber(rowRecord["cost"]),
+    // v0.20.0 附加字段的默认值：enrichSessionSummaries 按当页 id 集
+    // 覆盖；旧库缺列 / 空页 / 富化降级时保持这里的缺省（0 / null）。
+    tokensReasoning: 0,
+    tokensCacheWrite: 0,
+    stepCount: 0,
+    parentSessionId: null,
+    childSessionCount: 0,
+    childTokensTotal: 0,
   }
 }
 
@@ -589,10 +534,22 @@ export function querySessionMessages(
 /**
  * Todo completion counters for the todo widget. Statuses outside the three
  * known ones (e.g. "cancelled") only count towards `total`.
+ *
+ * v0.20.0 ?session= 过滤：todo 表带 session_id 列（活库探针），传入
+ * sessionFilterId 时按它收窄——单会话视图的 todo 卡片只统计该会话。
+ * 缺省（null）不过滤，SQL 字节与现行全量口径一致。
  */
-export function queryTodoStats(db: SqliteReadConnection | null): TodoStats | null {
+export function queryTodoStats(
+  db: SqliteReadConnection | null,
+  sessionFilterId: string | null = null,
+): TodoStats | null {
   if (db === null) return null
-  const rawRows = db.prepare("SELECT status, COUNT(*) AS statusCount FROM todo GROUP BY status").all()
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
+  const rawRows = db
+    .prepare(
+      `SELECT status, COUNT(*) AS statusCount FROM todo${sessionFilter.todoSessionWhereSql} GROUP BY status`,
+    )
+    .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 
   const todoStats: TodoStats = { total: 0, completed: 0, pending: 0, inProgress: 0 }
   for (const rawRow of rawRows) {

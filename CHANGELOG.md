@@ -8,6 +8,32 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.20.0] - 2026-10-16 · 统计维度「会话」贯穿 + 单会话指标集
+
+> 用户需求两条：① 所有统计指标可增加统计维度 session，之前的全部 session 口径保留；② 可增加有价值、不重复、不啰嗦的新指标。默认仍为「全部会话」口径（逐字节不变），从会话列表可进入单会话模式。
+
+### Added
+
+- **统计维度「会话」**：10 条聚合路由接受可选 `?session=<id>`（overview / trend / models / tool-health / agents / todo / hour-heatmap / session-survival / compaction / directories）；未知 id → 404 `{ error: "session not found" }`（校验在缓存前单点，不污染 60s TTL 缓存；与路径路由措辞刻意区分）；缓存键统一追加 session 维度。
+- **单会话模式 UI**：会话列表行内「只看此会话」→ 顶栏作用域 chip（`只看：<title> ✕`）；单会话下 7 个退化面板隐藏（逐日趋势 / 52 周日历 / 时段热力 / Agent 榜 / 目录 / 会话存活 / 分布卡）、7 个保留（KPI / Token 漏斗 / 模型榜 / 工具榜 / 工具健康 / 压缩 / todo，其中 todo 显示该会话自身）；TOC 同步隐藏；scope 会话消失（404）自动退出 + 轻提示，不弹错误卡。
+- **会话列表新列**：命中率（严格口径 `cache.read / (input + cache.read + cache.write)`）、Reasoning、步数；旧 wire 缺字段降级为「—」，区分「未记录」与「真 0」。
+- **子代理归总**：父会话行显示「+N 直接子会话」（tooltip 含合计 tokens，注明仅直接子代不含孙代），子会话行带层级标记。
+- **会话 token 分布卡**：新端点 `/api/session-distribution`（对数半档桶，排除零消耗会话）+ 直方图卡（p50/p90/p99 标线、样本数与均值）。
+- **回放页消耗曲线**：逐步累计 output + reasoning 曲线、峰值上下文徽标、本会话总量分位徽标（口径与分布端点一致：入 + 出 + cache.read）。
+
+### Changed
+
+- `SessionSummary` 载荷富化：`tokensReasoning` / `tokensCacheWrite` / `stepCount` / `parentSessionId` / `childSessionCount` / `childTokensTotal`（additive，旧前端忽略）。
+- 步数计数为独立轻 COUNT 查询（不解析 JSON），与 modelIds 扫描解耦：`includeStepModelIds=false`（CSV 导出 / TUI 选单）只跳过 JSON 富化，不跳过计数。
+
+### Fixed
+
+- **回放分位徽标口径**（ora-12 审视 P1）：徽标比对总量曾含 `reasoning`，而分布分位 / 列表 Tokens 列口径不含 → 系统性高估档位；已统一为 `入 + 出 + cache.read`（曲线与峰值上下文两条轴不变）。
+
+### Tests
+
+- 428/428 全绿 + check 0；新增 session 过滤（15 用例）、分布端点（8 用例）、作用域接线（16 用例）、回放曲线（口径封缝）等测试文件；orchestrator 另做真库端到端独立核对（富化六字段 / 分布数学 / 过滤结果与裸 SQL 全等）。
+
 ## [0.19.1] - 2026-10-16 · ora-11 审视处方热修：性能 + 健壮性
 
 > ora-11 全仓审视（v0.19.0 增量面）结论：无 P1；P2×6 全部放行。核心是 P2-4 性能热修——真库实测 modelIds 全表 GROUP BY 单次 ~2.6s（47k 行逐行 JSON 解析），自 0.19.0 起被会话列表每次排序/翻页、CSV 导出、每轮自动刷新反复触发。

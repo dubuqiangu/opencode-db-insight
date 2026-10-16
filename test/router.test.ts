@@ -24,6 +24,8 @@ test("matchApiRoute recognizes every static API route", () => {
   assert.deepEqual(matchApiRoute("/api/session-survival"), { routeName: "session-survival" })
   assert.deepEqual(matchApiRoute("/api/compaction"), { routeName: "compaction" })
   assert.deepEqual(matchApiRoute("/api/directories"), { routeName: "directories" })
+  // v0.20.0 会话 tokens 总量分布端点：两段静态路由，无路径参数。
+  assert.deepEqual(matchApiRoute("/api/session-distribution"), { routeName: "session-distribution" })
   // v0.14.0 cache-control route: same two-segment shape, no parameters.
   assert.deepEqual(matchApiRoute("/api/refresh"), { routeName: "refresh" })
 })

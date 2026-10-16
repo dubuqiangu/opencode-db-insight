@@ -28,6 +28,7 @@ import { MAX_TREND_DAYS, toLocalDateKey } from "../stats/daily-buckets.ts"
 import {
   ASSISTANT_OBJECT_DATA_PREDICATE,
   buildScanFloorEpochMs,
+  buildSessionFilterSqlFragments,
   buildWindowStartEpochMs,
 } from "./scan-conventions.ts"
 
@@ -50,24 +51,32 @@ const COMPACTION_TOP_SESSION_LIMIT = 10
  * cell — otherwise the heatmap would silently count days+1 (P1-1).
  * days is clamped to 1..MAX_TREND_DAYS like the trend route; a window of
  * days <= 0 skips the database and yields the zero-filled 168-cell grid.
+ *
+ * v0.20.0 ?session= 过滤：sessionFilterId 非空时 step 扫描前置
+ * session_id = ?（共享片段）。单会话下格子极少，自然退化不特判。
  */
 export function queryHourHeatmap(
   db: SqliteReadConnection | null,
   days: number = 90,
+  sessionFilterId: string | null = null,
 ): HourWeekdayCell[] | null {
   if (db === null) return null
   if (!Number.isFinite(days) || days <= 0) return bucketStepsByHourAndWeekday([])
   const boundedDays = Math.min(Math.floor(days), MAX_TREND_DAYS)
   const scanFloorMs = buildScanFloorEpochMs(boundedDays)
   const windowStartEpochMs = buildWindowStartEpochMs(boundedDays)
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   const rawRows = db
     .prepare(
       `SELECT time_created
        FROM session_message
-       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE} AND time_created >= ?`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE} AND time_created >= ?`,
     )
-    .all(scanFloorMs)
+    .all(
+      ...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]),
+      scanFloorMs,
+    )
 
   const stepSamples: StepTimestampSample[] = []
   for (const rawRow of rawRows) {
@@ -82,13 +91,23 @@ export function queryHourHeatmap(
  * Survival stats for GET /api/session-survival. SQL reads exactly the
  * four session_v2 columns computeSessionSurvival needs; durations, the
  * median and the outcome bucketing stay in the pure function.
+ *
+ * v0.20.0 ?session= 过滤：sessionFilterId 非空时扫描追加 WHERE id = ?
+ * （共享片段）——单会话样本退化为 1（median = 该会话时长），后端
+ * 不特判；面板在单会话视图的显隐由前端管。
  */
-export function querySessionSurvival(db: SqliteReadConnection | null): SessionSurvivalStats | null {
+export function querySessionSurvival(
+  db: SqliteReadConnection | null,
+  sessionFilterId: string | null = null,
+): SessionSurvivalStats | null {
   if (db === null) return null
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   const rawRows = db
-    .prepare("SELECT id, time_created, time_updated, idle_outcome FROM session_v2")
-    .all()
+    .prepare(
+      `SELECT id, time_created, time_updated, idle_outcome FROM session_v2${sessionFilter.sessionRowWhereSql}`,
+    )
+    .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 
   const lifetimeSamples: SessionLifetimeSample[] = []
   for (const rawRow of rawRows) {
@@ -145,11 +164,21 @@ export interface CompactionStats {
  *   in JS with toLocalDateKey — the daily-buckets 口径;
  * - topSessions: one GROUP BY session_id pass, count DESC with a
  *   session_id ASC tie-break so equal counts keep a stable order.
+ *
+ * v0.20.0 ?session= 过滤：三条扫描（byReason / recentDaily /
+ * topSessions）都以 session_message 为出发点，统一前置
+ * session_id = ?（共享片段）——单会话视图只统计该会话的压缩行。
+ * 缺省不过滤，SQL 字节与现行全量口径一致。
  */
-export function queryCompactionStats(db: SqliteReadConnection | null): CompactionStats | null {
+export function queryCompactionStats(
+  db: SqliteReadConnection | null,
+  sessionFilterId: string | null = null,
+): CompactionStats | null {
   if (db === null) return null
 
-  const compactionPredicate = "type = 'compaction'"
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
+  const stepFilterBinds = sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]
+  const compactionPredicate = `${sessionFilter.stepPredicatePrefixSql}type = 'compaction'`
 
   const reasonRows = db
     .prepare(
@@ -163,7 +192,7 @@ export function queryCompactionStats(db: SqliteReadConnection | null): Compactio
        WHERE ${compactionPredicate}
        GROUP BY reason_key`,
     )
-    .all()
+    .all(...stepFilterBinds)
 
   const byReason: Record<string, number> = {}
   let total = 0
@@ -183,7 +212,7 @@ export function queryCompactionStats(db: SqliteReadConnection | null): Compactio
        FROM session_message
        WHERE ${compactionPredicate} AND time_created >= ?`,
     )
-    .all(recentDailyFloorMs)
+    .all(...stepFilterBinds, recentDailyFloorMs)
 
   // Consecutive local date keys, oldest first, ending with today — the
   // same key generation bucketDailyTrend uses.
@@ -219,7 +248,7 @@ export function queryCompactionStats(db: SqliteReadConnection | null): Compactio
        ORDER BY session_count DESC, session_id ASC
        LIMIT ${COMPACTION_TOP_SESSION_LIMIT}`,
     )
-    .all()
+    .all(...stepFilterBinds)
 
   const topSessions: CompactionSessionCount[] = []
   for (const rawRow of topSessionRows) {

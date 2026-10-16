@@ -176,7 +176,8 @@ function createFixtureDatabase(databasePath: string): SqliteReadWriteConnection 
       `CREATE TABLE session_v2 (
          id TEXT, title TEXT, model TEXT, agent TEXT, directory TEXT,
          time_created INTEGER, time_updated INTEGER,
-         tokens_input REAL, tokens_output REAL, tokens_cache_read REAL, cost REAL)`,
+         tokens_input REAL, tokens_output REAL, tokens_cache_read REAL, cost REAL,
+         tokens_reasoning REAL, tokens_cache_write REAL, parent_id TEXT)`,
     )
     .run()
 
@@ -184,7 +185,7 @@ function createFixtureDatabase(databasePath: string): SqliteReadWriteConnection 
     "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
   )
   const insertSession = database.prepare(
-    "INSERT INTO session_v2 (id, title, model, agent, directory, time_created, time_updated, tokens_input, tokens_output, tokens_cache_read, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO session_v2 (id, title, model, agent, directory, time_created, time_updated, tokens_input, tokens_output, tokens_cache_read, cost, tokens_reasoning, tokens_cache_write, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   )
 
   let messageSeq = 0
@@ -203,10 +204,12 @@ function createFixtureDatabase(databasePath: string): SqliteReadWriteConnection 
   // Session rows: ses_build (has assistant steps), ses_review (no steps —
   // sessions must still count via membership), ses_orphan absent on
   // purpose (steps attribute defensively).
+  // v0.20.0 附加列：ses_review.parent_id 指向 ses_build（一层直接子代），
+  // 三列 token 附加值两行互异，列交换/折叠 bug 在逐字段断言下必红。
   insertSession.run("ses_build", "构建会话", '{"id":"glm-5.3","providerID":"futureppo"}', "build", "",
-    localNoonMs(5), localNoonMs(0), 900, 400, 5000, 1.5)
+    localNoonMs(5), localNoonMs(0), 900, 400, 5000, 1.5, 77, 88, null)
   insertSession.run("ses_review", "审查会话", '{"id":"claude-opus-5","providerID":"anthropic"}', "review", "",
-    localNoonMs(4), localNoonMs(3), 100, 50, 0, 0.25)
+    localNoonMs(4), localNoonMs(3), 100, 50, 0, 0.25, 11, 22, "ses_build")
 
   const assistantPayload = (overrides: Record<string, unknown>): string =>
     JSON.stringify({
@@ -359,6 +362,60 @@ test("fixture sessions round-trip through the list and by-id queries", { skip: s
     assert.equal(summary.tokensOutput, expectedOutput)
     assert.equal(summary.tokensCacheRead, expectedCacheRead)
     assert.equal(summary.tokens, expectedInput + expectedOutput + expectedCacheRead)
+  }
+
+  // v0.20.0 载荷富化字段锁（真实 SQL 语义，非 fake 镜像）：
+  // - stepCount 口径 = type='assistant' 原始行计数（轻 COUNT 查询，
+  //   不带 JSON 有效性谓词）——ses_build 的 assistant 行 = 2 条今日 +
+  //   1 条昨日 + 4 条畸形 data（"[]"/裸字符串/NULL/非法 JSON）共 7 条，
+  //   畸形行在这里必须计入（与 overview 的 JSON 对象口径有此细微差异，
+  //   契约明示）；ses_review 无消息 → 0（缺席保持默认值）。
+  // - tokens_reasoning / tokens_cache_write / parent_id：session_v2
+  //   附加列点查逐字段透传。
+  // - 子会话归总只做一层直接子代：ses_build 的直接子代恰 ses_review
+  //   （其 tokens 三列合计 = 100+50+0），childTokensTotal 与列表 Tokens
+  //   同一折叠口径。
+  const expectedEnrichmentBySessionId: Record<
+    string,
+    {
+      stepCount: number
+      tokensReasoning: number
+      tokensCacheWrite: number
+      parentSessionId: string | null
+      childSessionCount: number
+      childTokensTotal: number
+    }
+  > = {
+    ses_build: {
+      stepCount: 7,
+      tokensReasoning: 77,
+      tokensCacheWrite: 88,
+      parentSessionId: null,
+      childSessionCount: 1,
+      childTokensTotal: 150,
+    },
+    ses_review: {
+      stepCount: 0,
+      tokensReasoning: 11,
+      tokensCacheWrite: 22,
+      parentSessionId: "ses_build",
+      childSessionCount: 0,
+      childTokensTotal: 0,
+    },
+  }
+  for (const summary of sessionPage) {
+    assert.deepEqual(
+      {
+        stepCount: summary.stepCount,
+        tokensReasoning: summary.tokensReasoning,
+        tokensCacheWrite: summary.tokensCacheWrite,
+        parentSessionId: summary.parentSessionId,
+        childSessionCount: summary.childSessionCount,
+        childTokensTotal: summary.childTokensTotal,
+      },
+      expectedEnrichmentBySessionId[summary.id],
+      `${summary.id} 的 v0.20.0 富化字段必须逐字段命中夹具值`,
+    )
   }
 })
 

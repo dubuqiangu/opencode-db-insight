@@ -13,7 +13,9 @@
  *   service identity the TUI port discovery validates against
  *   (src/tui/discover-dashboard-port.ts);
  * - /api/refresh always answers 200 too (v0.14.0): clearing the
- *   process-local result cache needs no database and no cache slot.
+ *   process-local result cache needs no database and no cache slot;
+ * - v0.20.0 ?session=（聚合端点可选）：仅统计该会话；未知 id → 统一
+ *   404 {error: "session not found"}；空串按缺省（全部会话）处理。
  */
 
 import type { SessionMessageRecord, SessionSummary, SqliteReadConnection } from "../db/types.ts"
@@ -33,6 +35,7 @@ import {
   resolveSessionRange,
   resolveSessionSortKey,
   resolveSessionSortOrder,
+  sessionExistsInSessionV2,
 } from "../db/queries.ts"
 import {
   queryCompactionStats,
@@ -45,6 +48,7 @@ import {
   MAX_DIRECTORY_LIMIT,
   queryDirectoryStats,
 } from "../db/directory-queries.ts"
+import { querySessionTokenDistribution } from "../db/session-distribution-queries.ts"
 import { renderSessionMarkdown } from "../export/markdown.ts"
 import {
   renderSessionSummaryCsv,
@@ -60,7 +64,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.19.1"
+export const INSIGHT_VERSION = "0.20.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -70,6 +74,35 @@ export const SESSION_NOT_FOUND_MESSAGE = "session not found in current tables"
 
 /** 404 for sessions that exist in session_v2 but carry no messages (P2-7). */
 export const SESSION_EMPTY_MESSAGE = "session exists but has no messages"
+
+/**
+ * 404 for ?session= 参数指向不存在的会话（v0.20.0）：所有消费该参数
+ * 的聚合端点共用这一个 body——契约定稿为 { error: "session not found" }，
+ * 与路径路由的 SESSION_NOT_FOUND_MESSAGE（"session not found in
+ * current tables"）刻意不同：那是「legacy 表里也找不到」的历史语义，
+ * 这是参数校验语义，前端按新常量统一处理。
+ */
+export const SESSION_FILTER_NOT_FOUND_MESSAGE = "session not found"
+
+/**
+ * 消费 ?session= 的路由清单（v0.20.0 契约核心）：全部聚合端点。
+ * step 级（session_message 出发）与 会话级（session_v2 出发）的
+ * 过滤落点见各查询函数；/api/sessions（列表，已有自己的过滤维度）、
+ * 会话路径路由（/api/session/:id/…）与导出路由不吃该参数——传入
+ * 即忽略，不校验。
+ */
+const SESSION_FILTER_CONSUMING_ROUTE_NAMES: ReadonlySet<string> = new Set([
+  "overview",
+  "trend",
+  "models",
+  "tool-health",
+  "agents",
+  "todo",
+  "hour-heatmap",
+  "session-survival",
+  "compaction",
+  "directories",
+])
 
 /**
  * ?range= rejection (v0.9.0): an unknown non-empty preset answers a
@@ -268,11 +301,31 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
     return { statusCode: 503, body: { error: DATABASE_UNAVAILABLE_MESSAGE } }
   }
 
+  // v0.20.0 ?session= 参数（只对消费它的聚合端点生效）：空串/缺省 =
+  // 现行「全部会话」行为；非空则先做存在性校验（一次 session_v2 点
+  // 查，不进 TTL 缓存——新建会话立即可见），未知 id 统一 404，body
+  // 各端点一致（SESSION_FILTER_NOT_FOUND_MESSAGE），前端统一处理。
+  // 校验放在 switch 之前：一处实现，所有消费端点共享，不散落复制。
+  let sessionFilterId: string | null = null
+  if (SESSION_FILTER_CONSUMING_ROUTE_NAMES.has(route.routeName)) {
+    const sessionFilterParamValue = requestContext.searchParams.get("session") ?? ""
+    if (sessionFilterParamValue !== "") {
+      if (!sessionExistsInSessionV2(database, sessionFilterParamValue)) {
+        return { statusCode: 404, body: { error: SESSION_FILTER_NOT_FOUND_MESSAGE } }
+      }
+      sessionFilterId = sessionFilterParamValue
+    }
+  }
+
   try {
     switch (route.routeName) {
       case "overview": {
-        const overview = cachedResult(buildCacheKey("queryOverview", []), () =>
-          queryOverview(database),
+        // v0.20.0：缓存键追加 session 维度（"" = 缺省不过滤，与
+        // directory 同一等价纪律），同一会话的重复请求共享一条 60s
+        // TTL 条目。
+        const overview = cachedResult(
+          buildCacheKey("queryOverview", [sessionFilterId ?? ""]),
+          () => queryOverview(database, sessionFilterId),
         )
         return { statusCode: 200, body: overview }
       }
@@ -282,8 +335,9 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         // same bounded window, so ?days=1000 and ?days=366 share one entry
         // instead of spraying near-duplicates across the cache (P2-6).
         const boundedTrendDays = Math.min(trendDays, MAX_TREND_DAYS)
-        const trendPoints = cachedResult(buildCacheKey("queryDailyTrend", [boundedTrendDays]), () =>
-          queryDailyTrend(database, boundedTrendDays),
+        const trendPoints = cachedResult(
+          buildCacheKey("queryDailyTrend", [boundedTrendDays, sessionFilterId ?? ""]),
+          () => queryDailyTrend(database, boundedTrendDays, sessionFilterId),
         )
         return { statusCode: 200, body: trendPoints }
       }
@@ -308,21 +362,25 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         const modelMetrics = cachedResult(
           buildCacheKey(
             "queryModelMetrics",
-            boundedModelWindowDays === undefined ? [] : [boundedModelWindowDays],
+            boundedModelWindowDays === undefined
+              ? [sessionFilterId ?? ""]
+              : [boundedModelWindowDays, sessionFilterId ?? ""],
           ),
-          () => queryModelMetrics(database, boundedModelWindowDays),
+          () => queryModelMetrics(database, boundedModelWindowDays, sessionFilterId),
         )
         return { statusCode: 200, body: modelMetrics }
       }
       case "tool-health": {
-        const toolHealthStats = cachedResult(buildCacheKey("queryToolHealth", []), () =>
-          queryToolHealth(database),
+        const toolHealthStats = cachedResult(
+          buildCacheKey("queryToolHealth", [sessionFilterId ?? ""]),
+          () => queryToolHealth(database, sessionFilterId),
         )
         return { statusCode: 200, body: toolHealthStats }
       }
       case "agents": {
-        const agentStats = cachedResult(buildCacheKey("queryAgentStats", []), () =>
-          queryAgentStats(database),
+        const agentStats = cachedResult(
+          buildCacheKey("queryAgentStats", [sessionFilterId ?? ""]),
+          () => queryAgentStats(database, sessionFilterId),
         )
         return { statusCode: 200, body: agentStats }
       }
@@ -388,8 +446,9 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         return { statusCode: 200, body: sessionPage }
       }
       case "todo": {
-        const todoStats = cachedResult(buildCacheKey("queryTodoStats", []), () =>
-          queryTodoStats(database),
+        const todoStats = cachedResult(
+          buildCacheKey("queryTodoStats", [sessionFilterId ?? ""]),
+          () => queryTodoStats(database, sessionFilterId),
         )
         return { statusCode: 200, body: todoStats }
       }
@@ -400,20 +459,22 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         // ?days=1000 and ?days=366 would cache the same result twice.
         const boundedHeatmapDays = Math.min(heatmapDays, MAX_TREND_DAYS)
         const heatmapCells = cachedResult(
-          buildCacheKey("queryHourHeatmap", [boundedHeatmapDays]),
-          () => queryHourHeatmap(database, boundedHeatmapDays),
+          buildCacheKey("queryHourHeatmap", [boundedHeatmapDays, sessionFilterId ?? ""]),
+          () => queryHourHeatmap(database, boundedHeatmapDays, sessionFilterId),
         )
         return { statusCode: 200, body: heatmapCells }
       }
       case "session-survival": {
-        const survivalStats = cachedResult(buildCacheKey("querySessionSurvival", []), () =>
-          querySessionSurvival(database),
+        const survivalStats = cachedResult(
+          buildCacheKey("querySessionSurvival", [sessionFilterId ?? ""]),
+          () => querySessionSurvival(database, sessionFilterId),
         )
         return { statusCode: 200, body: survivalStats }
       }
       case "compaction": {
-        const compactionStats = cachedResult(buildCacheKey("queryCompactionStats", []), () =>
-          queryCompactionStats(database),
+        const compactionStats = cachedResult(
+          buildCacheKey("queryCompactionStats", [sessionFilterId ?? ""]),
+          () => queryCompactionStats(database, sessionFilterId),
         )
         return { statusCode: 200, body: compactionStats }
       }
@@ -430,10 +491,20 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         // deliberate, CHANGELOG-documented naming choice for this route.
         const boundedDirectoryLimit = Math.min(directoryLimit, MAX_DIRECTORY_LIMIT)
         const directoryStats = cachedResult(
-          buildCacheKey("directory-stats", [boundedDirectoryLimit]),
-          () => queryDirectoryStats(database, boundedDirectoryLimit),
+          buildCacheKey("directory-stats", [boundedDirectoryLimit, sessionFilterId ?? ""]),
+          () => queryDirectoryStats(database, boundedDirectoryLimit, sessionFilterId),
         )
         return { statusCode: 200, body: directoryStats }
+      }
+      case "session-distribution": {
+        // v0.20.0 会话 tokens 总量分布：「全部会话」口径，不吃
+        // ?session=（该参数在本路由被忽略，不校验）。无查询参数 →
+        // 单一缓存键，走既有 60s TTL 惯例。
+        const distributionStats = cachedResult(
+          buildCacheKey("querySessionTokenDistribution", []),
+          () => querySessionTokenDistribution(database),
+        )
+        return { statusCode: 200, body: distributionStats }
       }
       case "sessionMessages": {
         const messageRecords = cachedResult(

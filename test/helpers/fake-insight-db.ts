@@ -99,6 +99,12 @@ function toSessionV2Row(sessionSummary: SessionSummary): Record<string, unknown>
     tokens_output: sessionSummary.tokensOutput,
     tokens_cache_read: sessionSummary.tokensCacheRead,
     cost: sessionSummary.cost,
+    // v0.20.0 载荷富化列：summary 的对应字段重新派生（活库
+    // session_v2 实有这三列，见 queries.ts / session-summary-
+    // enrichment.ts）。
+    tokens_reasoning: sessionSummary.tokensReasoning,
+    tokens_cache_write: sessionSummary.tokensCacheWrite,
+    parent_id: sessionSummary.parentSessionId,
   }
 }
 
@@ -134,12 +140,77 @@ export function createFakeInsightDatabase(
     }
     if (sql.includes("FROM session_v2")) {
       if (sql.includes("WHERE id = ?")) {
-        // Direct by-id lookup (P2-2).
+        // Direct by-id lookup (P2-2) — also serves the v0.20.0 ?session=
+        // existence probe (SELECT 1 … WHERE id = ?): the row object (or
+        // undefined) answers both.
         return {
           all: () => [],
           get: (...parameters: unknown[]) =>
             sessionRows.find((sessionRow) => sessionRow.id === String(parameters[0] ?? "")) ??
             undefined,
+        }
+      }
+      if (sql.includes("tokens_reasoning")) {
+        // v0.20.0 附加列点查（session-summary-enrichment）：按当页 id
+        // 集服务 tokens_reasoning / tokens_cache_write / parent_id。
+        return {
+          all: (...parameters: unknown[]) => {
+            const pageSessionIds = new Set(parameters.map((pageSessionId) => String(pageSessionId ?? "")))
+            return sessionRows
+              .filter((sessionRow) => pageSessionIds.has(String(sessionRow.id)))
+              .map((sessionRow) => ({
+                id: sessionRow.id,
+                tokens_reasoning: sessionRow.tokens_reasoning,
+                tokens_cache_write: sessionRow.tokens_cache_write,
+                parent_id: sessionRow.parent_id,
+              }))
+          },
+          get: () => undefined,
+        }
+      }
+      if (sql.includes("parent_id IN (")) {
+        // v0.20.0 直接子会话归总：COUNT + tokens 三列 COALESCE 合计，
+        // 镜像 SQL 的 GROUP BY parent_id（只做一层直接子代）。
+        return {
+          all: (...parameters: unknown[]) => {
+            const parentIds = new Set(parameters.map((parentId) => String(parentId ?? "")))
+            const childAggregates = new Map<string, { count: number; tokensTotal: number }>()
+            for (const sessionRow of sessionRows) {
+              const parentSessionId = sessionRow.parent_id
+              if (typeof parentSessionId !== "string" || !parentIds.has(parentSessionId)) continue
+              const aggregate =
+                childAggregates.get(parentSessionId) ?? { count: 0, tokensTotal: 0 }
+              aggregate.count += 1
+              aggregate.tokensTotal +=
+                Number(sessionRow.tokens_input ?? 0) +
+                Number(sessionRow.tokens_output ?? 0) +
+                Number(sessionRow.tokens_cache_read ?? 0)
+              childAggregates.set(parentSessionId, aggregate)
+            }
+            return [...childAggregates.entries()].map(([parentSessionId, aggregate]) => ({
+              parent_id: parentSessionId,
+              child_session_count: aggregate.count,
+              child_tokens_total: aggregate.tokensTotal,
+            }))
+          },
+          get: () => undefined,
+        }
+      }
+      if (sql.includes("AS tokens_total")) {
+        // v0.20.0 GET /api/session-distribution 的每会话 tokens 合计
+        // 扫描：镜像 SQL 的三列 COALESCE 相加 + > 0 过滤（全 0 会话
+        // 不进入分布）。
+        return {
+          all: () =>
+            sessionRows
+              .map((sessionRow) => ({
+                tokens_total:
+                  Number(sessionRow.tokens_input ?? 0) +
+                  Number(sessionRow.tokens_output ?? 0) +
+                  Number(sessionRow.tokens_cache_read ?? 0),
+              }))
+              .filter((sessionRow) => Number(sessionRow.tokens_total) > 0),
+          get: () => undefined,
         }
       }
       if (sql.includes("idle_outcome")) {
@@ -312,6 +383,29 @@ export function createFakeInsightDatabase(
       }
     }
     if (sql.includes("FROM session_message")) {
+      // v0.20.0 step 级轻计数（session-summary-enrichment 的 stepCount
+      // 来源）：纯行计数镜像——只统计 type='assistant'（无 json 谓词，
+      // 与真实轻查询同口径），IN 绑定参数即当页会话 id 集。
+      if (sql.includes("COUNT(*) AS step_count") && sql.includes("GROUP BY session_id")) {
+        return {
+          all: (...parameters: unknown[]) => {
+            const pageSessionIds = new Set(parameters.map((pageSessionId) => String(pageSessionId ?? "")))
+            const stepCountBySessionId = new Map<string, number>()
+            for (const [sessionId, messageFixtures] of Object.entries(scenario.messagesBySessionId)) {
+              if (!pageSessionIds.has(sessionId)) continue
+              const assistantCount = messageFixtures.filter(
+                (messageFixture) => messageFixture.type === "assistant",
+              ).length
+              if (assistantCount > 0) stepCountBySessionId.set(sessionId, assistantCount)
+            }
+            return [...stepCountBySessionId.entries()].map(([sessionId, assistantCount]) => ({
+              session_id: sessionId,
+              step_count: assistantCount,
+            }))
+          },
+          get: () => undefined,
+        }
+      }
       // v0.19.0 step 级模型聚合（querySessionList / querySessionSummaryById
       // 的 modelIds 来源）：镜像 SQL 的 (session_id, $.model.id) GROUP BY——
       // 只统计 assistant 且 data 为 JSON 对象的消息（与下方 assistant-step
@@ -446,6 +540,14 @@ export function buildFakeSessionSummary(
     tokensOutput: 20000,
     tokensCacheRead: 3456,
     cost: 0,
+    // v0.20.0 附加字段默认值：查询层的 enrichSessionSummaries 会按
+    // 夹具消息 / session_v2 附加列覆盖，这里只给「无富化」的缺省。
+    tokensReasoning: 0,
+    tokensCacheWrite: 0,
+    stepCount: 0,
+    parentSessionId: null,
+    childSessionCount: 0,
+    childTokensTotal: 0,
     ...overrides,
   }
 }

@@ -438,6 +438,9 @@
   margin-bottom: 22px;
 }
 @media (max-width: 1100px) { .insight-cards { grid-template-columns: 1fr; } }
+/* v0.20.0 会话 token 分布卡：直方图需要横向余量，与存活卡是姊妹维度，
+ * 在洞察卡片区独占一整行（.tables .span-both 的同款轨道语言）。 */
+.insight-cards .span-both { grid-column: 1 / -1; }
 
 .survival-grid {
   display: grid;
@@ -530,8 +533,31 @@
 .compaction-session-row a:hover code { text-decoration: underline; }
 .compaction-session-count { font-size: 11.5px; color: var(--text-dim); flex: none; }
 
-/* ---------- Todo 完成率卡片 ---------- */
-.todo-rate-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+/* ---------- 会话 token 分布卡（v0.20.0） ---------- */
+/* 卡头两行小字：语言取 .heatmap-meta 的 faint 小字系，改为纵向两行
+ * （样本一行、均值/最大一行）。 */
+.distribution-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.distribution-card-meta b { color: var(--text-dim); font-weight: 600; }
+/* 分位图例行：.legend-chip 本体是趋势图语言（swatch + 胶囊描边），
+ * 这里是静态形态，只补容器排布。 */
+.distribution-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.distribution-histogram-svg { width: 100%; display: block; }
+.distribution-histogram-bar { transition: opacity 0.15s; }
+.distribution-histogram-bar:hover { opacity: 0.82; }
+
+/* ---------- Todo 完成率卡片 ---------- */.todo-rate-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .todo-rate-value {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;

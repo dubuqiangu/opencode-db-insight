@@ -105,6 +105,41 @@ export interface SessionSummary {
    * 旧宿主 wire 缺字段时组件回退 modelId 精确匹配。
    */
   modelIds: string[]
+  /**
+   * session_v2.tokens_reasoning（v0.20.0 载荷富化）：旧库缺列时降级
+   * 为 0，旧前端忽略新字段——additive，不破坏既有消费者。
+   */
+  tokensReasoning: number
+  /** session_v2.tokens_cache_write（v0.20.0）；旧库缺列降级为 0。 */
+  tokensCacheWrite: number
+  /**
+   * 该会话的 assistant 消息数（v0.20.0）。计数走独立轻查询：仅
+   * type = 'assistant' 谓词 + IN 下推，不做任何 JSON 解析（无
+   * json 谓词，纯行计数），因此与 includeStepModelIds 开关无关——
+   * 开关只关 modelIds 的 JSON 富化，不关计数。无 step 行的会话
+   * 为 0。
+   *
+   * 口径注：这里数的是 type='assistant' 的原始行，不含共享
+   * ASSISTANT_OBJECT_DATA_PREDICATE 的 JSON 有效性判定——契约明示
+   * 用轻查询换性能；含畸形 data 行的库上与 overview 的 stepCount
+   * （step 口径 = assistant + JSON 对象）存在细微差异，真实库中
+   * 畸形行几乎不存在。
+   */
+  stepCount: number
+  /**
+   * session_v2.parent_id（v0.20.0）：无父会话或旧库缺列为 null。
+   */
+  parentSessionId: string | null
+  /**
+   * 直接子会话数（v0.20.0）：按 parent_id 自连接归总，只做一层
+   * 直接子代，不做递归树——递归展开留给前端按需处理或后续版本。
+   */
+  childSessionCount: number
+  /**
+   * 直接子会话的 tokens 三列合计（input+output+cache_read，与列表
+   * Tokens 列同口径）；无子会话为 0。
+   */
+  childTokensTotal: number
 }
 
 /**

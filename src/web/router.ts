@@ -20,6 +20,7 @@ export type InsightRoute =
   | { routeName: "session-survival" }
   | { routeName: "compaction" }
   | { routeName: "directories" }
+  | { routeName: "session-distribution" }
   | { routeName: "refresh" }
   | { routeName: "sessionMessages"; sessionId: string }
   | { routeName: "sessionSystemPrompt"; sessionId: string }
@@ -62,6 +63,9 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
     case "session-survival":
     case "compaction":
     case "directories":
+    // v0.20.0 会话 tokens 总量分布端点：「全部会话」口径，不吃
+    // ?session= 参数，与上面两个面板路由同一两段形状。
+    case "session-distribution":
     // "refresh" is the cache-control plane (v0.14.0), not a panel, but
     // it shares the same two-segment shape — and like the panel routes
     // it never carries path parameters.

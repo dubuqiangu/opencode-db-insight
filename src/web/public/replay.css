@@ -302,6 +302,30 @@
 }
 .replay-node.replay-hit-current .replay-icon { border-color: var(--accent); }
 
+/* ---------- Token 消耗曲线（v0.20.0） ---------- */
+/* 徽标行两行小字：峰值上下文一行 + 分位落点徽标一行（percentiles 为
+ * null 时后者整行由组件侧不渲染）。badge 本体是 components.css 的
+ * 通用描边小徽标，tier 配色对齐 .precision / badge.no-cache 语言。 */
+.replay-curve-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.replay-curve-stats p { margin: 0; }
+.replay-curve-stats b { color: var(--text); font-weight: 600; }
+.replay-quantile { cursor: help; }
+.replay-quantile.over-p99 { color: var(--red); border-color: var(--red); }
+.replay-quantile.over-p90 { color: var(--amber); border-color: var(--amber-soft); }
+.replay-quantile.over-p50 { color: var(--accent); border-color: var(--accent-soft); }
+.replay-quantile.under-p50 { color: var(--text-dim); }
+.replay-curve-svg { width: 100%; display: block; }
+/* 步级悬浮热区（透明圆）吃指针事件，曲线本体不吃。 */
+.replay-curve-line, .replay-curve-area { pointer-events: none; }
+.replay-curve-hit { cursor: default; }
+
 /* ---------- 窄屏 ---------- */
 @media (max-width: 640px) {
   .replay-node { gap: 10px; }

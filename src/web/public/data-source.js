@@ -41,6 +41,10 @@
  *   GET /api/directories?limit=10        → {totalDirectories, totalSessions,
  *                                          directories[{directory, name,
  *                                          sessions, steps, lastActiveMs}]}
+ *   GET /api/session-distribution       → {totalSessions, buckets[{start,
+ *                                          end, count}], percentiles{p50,
+ *                                          p90, p99}, mean, max}（v0.20.0，
+ *                                          「全部会话」口径，不吃 ?session=）
  *   GET /api/health              → { status, version, port, dbStatus, dbPath }
  *   GET /api/export/sessions.csv → CSV 附件下载（v0.8.0）：九列
  *                                  id,title,modelId,agent,directory,
@@ -50,6 +54,14 @@
  *                                  （精确匹配、缺省/空=全量、miss=仅表头）；
  *                                  v0.9.0 起 ?range= 与 /api/sessions 同
  *                                  契约（7d|30d|90d，timeUpdated 口径）
+ *
+ *   v0.20.0 ?session=<id>（可选会话作用域）：十类聚合端点（overview/
+ *   trend/models/tool-health/agents/todo/hour-heatmap/session-survival/
+ *   compaction/directories）都接受——对应 fetch 函数末位可选参
+ *   sessionScopeId 非空时 URL 追加该参数，统计只算该会话；未知 id 后端
+ *   统一 404 {error:"session not found"}，本模块翻译成
+ *   SessionScopeNotFoundError 交 app 层自动退出作用域。/api/sessions、
+ *   会话路径路由与导出路由不吃该参数（后端契约）。
  *
  * 真实/裸形状 → 组件所需形状的适配函数（normalizeTrendPayload 等）单独导出，
  * 供离线冒烟测试直接喂数验证。mock 分支保留用于离线演示。
@@ -115,6 +127,51 @@ function rangeQueryParam(range) {
 }
 
 /**
+ * ?session= 参数段（v0.20.0 会话作用域，不含 ?/& 前缀）；null / 空串 → ""
+ * （缺省 = 全部会话，与 directory / range 的两端归一一致）。与后端
+ * SESSION_FILTER_CONSUMING_ROUTE_NAMES 的十类聚合端点一一对应；这里是
+ * 该参数编码的唯一出处，fetch 侧不许再手拼 session=。
+ */
+function sessionScopeQueryParam(sessionScopeId) {
+  return sessionScopeId === null || sessionScopeId === ""
+    ? ""
+    : `session=${encodeURIComponent(sessionScopeId)}`;
+}
+
+/** 把参数段拼进请求路径：已有 query 用 & 接续，否则用 ? 开头。 */
+function appendQuerySegment(requestPath, querySegment) {
+  if (querySegment === "") return requestPath;
+  return requestPath.includes("?") ? `${requestPath}&${querySegment}` : `${requestPath}?${querySegment}`;
+}
+
+/**
+ * 作用域感知的 JSON 请求（v0.20.0）：scope 非空时 URL 追加 session 参数；
+ * 404 且 body 带 SESSION_FILTER_NOT_FOUND_MESSAGE 时抛
+ * SessionScopeNotFoundError（会话已删，app 层自动退出作用域），其余
+ * 非 2xx 维持既有通用错误语义。scope 为空时请求路径与旧版逐字节一致。
+ */
+async function fetchSessionScopedJson(requestPath, sessionScopeId = null) {
+  const scopeSegment = sessionScopeQueryParam(sessionScopeId);
+  const scopedPath = appendQuerySegment(requestPath, scopeSegment);
+  const response = await fetchWithTimeout(scopedPath);
+  if (!response.ok) {
+    // 只在「本请求确实带了 session 参数」时把 404 翻译成作用域错误：
+    // 无参数的 404 是路由层面的问题，不能冒充「会话已删」。
+    if (response.status === 404 && scopeSegment !== "") {
+      const errorBody = await response.json().catch(() => null);
+      if (
+        errorBody !== null && typeof errorBody === "object"
+        && errorBody.error === SESSION_FILTER_NOT_FOUND_MESSAGE
+      ) {
+        throw new SessionScopeNotFoundError();
+      }
+    }
+    throw new Error(`API ${scopedPath} 返回 ${response.status}`);
+  }
+  return response.json();
+}
+
+/**
  * ?directory= 参数段（不含 ?/& 前缀）；null / 空串 → ""。
  * 后端契约：缺省与空串同为「不过滤/全量」，两端归一。这是 directory
  * 参数编码的**唯一出处**——fetchSessions 与 CSV 导出地址共用，杜绝
@@ -156,6 +213,22 @@ export class SessionNotFoundError extends Error {
   constructor(message = "session not found in current tables") {
     super(message);
     this.name = "SessionNotFoundError";
+  }
+}
+
+/**
+ * ?session= 作用域指向的会话已不存在（v0.20.0）：后端所有消费该参数的
+ * 聚合端点统一答 404 { error: "session not found" }（常量
+ * SESSION_FILTER_NOT_FOUND_MESSAGE，src/web/api.ts）。与上面路径路由的
+ * SessionNotFoundError（旧表语义）刻意分开——这个错误的前端处置是
+ * 「自动退出作用域 + 轻提示」，不弹区块错误卡。
+ */
+export const SESSION_FILTER_NOT_FOUND_MESSAGE = "session not found";
+
+export class SessionScopeNotFoundError extends Error {
+  constructor(message = SESSION_FILTER_NOT_FOUND_MESSAGE) {
+    super(message);
+    this.name = "SessionScopeNotFoundError";
   }
 }
 
@@ -344,17 +417,21 @@ function clampTrendDays(days) {
 
 /* ---------------- 看板数据 ---------------- */
 
-/** GET /api/overview —— KPI 卡。 */
-export async function fetchOverview() {
+/** GET /api/overview —— KPI 卡。sessionScopeId 非空时 overview 与内部
+ * trend 请求都带 ?session=（两个都是消费该参数的端点）。 */
+export async function fetchOverview(sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(getMockOverview());
-  const overviewBody = await fetchJson("/overview");
+  const overviewBody = await fetchSessionScopedJson("/overview", sessionScopeId);
   if (overviewBody === null || typeof overviewBody !== "object") {
     throw new Error("/api/overview 返回空数据");
   }
   // v0.11.0 起 /trend 是裸数组 + 点级 byModel Record（旧版为无 byModel 的
   // 裸数组）——KPI 推导只吃 points，统一走 normalizeTrendPayload 拆包，
   // 两种 wire 都安全。
-  const trendBody = await fetchJson(`/trend?days=${OVERVIEW_TREND_WINDOW_DAYS}`).catch(() => null);
+  const trendBody = await fetchSessionScopedJson(
+    `/trend?days=${OVERVIEW_TREND_WINDOW_DAYS}`,
+    sessionScopeId,
+  ).catch(() => null);
   const trendPoints = trendBody === null ? null : normalizeTrendPayload(trendBody).points;
   return deriveOverviewExtension(overviewBody, trendPoints);
 }
@@ -364,9 +441,11 @@ export async function fetchOverview() {
  * mock 分支与真实分支共用 normalizeTrendPayload：mock 的职责是镜像
  * 真实 wire（裸数组 + 点级 Record），透视适配对两条路径同构。
  */
-export async function fetchTrend(days) {
+export async function fetchTrend(days, sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(normalizeTrendPayload(getMockTrend(days)));
-  return normalizeTrendPayload(await fetchJson(`/trend?days=${clampTrendDays(days)}`));
+  return normalizeTrendPayload(
+    await fetchSessionScopedJson(`/trend?days=${clampTrendDays(days)}`, sessionScopeId),
+  );
 }
 
 /**
@@ -374,17 +453,17 @@ export async function fetchTrend(days) {
  * null = 全部（不带参数，默认请求路径与旧版逐字节一致）。前端只发合法值，
  * 非法值由调用方归一为 null（后端对非法/缺省同样归一为全量）。
  */
-export async function fetchModels(days = null) {
+export async function fetchModels(days = null, sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(getMockModelMetrics());
   const requestPath = days === null ? "/models" : `/models?days=${days}`;
-  const modelMetrics = await fetchJson(requestPath);
+  const modelMetrics = await fetchSessionScopedJson(requestPath, sessionScopeId);
   return Array.isArray(modelMetrics) ? modelMetrics : [];
 }
 
-/** GET /api/agents —— agent 用量 + 工具指纹。 */
-export async function fetchAgents() {
+/** GET /api/agents —— agent 用量 + 工具指纹（v0.20.0 支持会话作用域）。 */
+export async function fetchAgents(sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(getMockAgentStats());
-  const agentStats = await fetchJson("/agents");
+  const agentStats = await fetchSessionScopedJson("/agents", sessionScopeId);
   return Array.isArray(agentStats) ? agentStats : [];
 }
 
@@ -394,9 +473,9 @@ export async function fetchAgents() {
  * ——条形图不渲染错误色带、摘要行留空，走区块自身的空态语义而不是把
  * 工具区块炸成错误占位（离线演示不受影响）。
  */
-export async function fetchToolHealth() {
+export async function fetchToolHealth(sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency([]);
-  const toolHealthStats = await fetchJson("/tool-health");
+  const toolHealthStats = await fetchSessionScopedJson("/tool-health", sessionScopeId);
   return Array.isArray(toolHealthStats) ? toolHealthStats : [];
 }
 
@@ -434,16 +513,19 @@ export async function fetchSessions(
 export const HOUR_HEATMAP_WINDOW_DAYS = 90;
 
 /** GET /api/hour-heatmap?days=90 —— 7×24 步骤分布（168 项零填充裸数组）。 */
-export async function fetchHourHeatmap(days = HOUR_HEATMAP_WINDOW_DAYS) {
+export async function fetchHourHeatmap(days = HOUR_HEATMAP_WINDOW_DAYS, sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(getMockHourHeatmap(days));
-  const heatmapCells = await fetchJson(`/hour-heatmap?days=${clampTrendDays(days)}`);
+  const heatmapCells = await fetchSessionScopedJson(
+    `/hour-heatmap?days=${clampTrendDays(days)}`,
+    sessionScopeId,
+  );
   return Array.isArray(heatmapCells) ? heatmapCells : [];
 }
 
 /** GET /api/session-survival —— 会话存活统计（形状不符按区块错误态降级）。 */
-export async function fetchSessionSurvival() {
+export async function fetchSessionSurvival(sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(getMockSessionSurvival());
-  const survivalStats = await fetchJson("/session-survival");
+  const survivalStats = await fetchSessionScopedJson("/session-survival", sessionScopeId);
   if (survivalStats === null || typeof survivalStats !== "object" || Array.isArray(survivalStats)) {
     throw new Error("/api/session-survival 返回空数据");
   }
@@ -451,9 +533,9 @@ export async function fetchSessionSurvival() {
 }
 
 /** GET /api/compaction —— 压缩事件统计（形状不符按区块错误态降级）。 */
-export async function fetchCompaction() {
+export async function fetchCompaction(sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(getMockCompaction());
-  const compactionStats = await fetchJson("/compaction");
+  const compactionStats = await fetchSessionScopedJson("/compaction", sessionScopeId);
   if (compactionStats === null || typeof compactionStats !== "object" || Array.isArray(compactionStats)) {
     throw new Error("/api/compaction 返回空数据");
   }
@@ -465,9 +547,9 @@ export async function fetchCompaction() {
  * db 不可用时与所有数据路由一样返回 503 → 走区块错误态（含重试），
  * 不存在 200 + null 的契约；total 为 0（todo 表为空）由卡片渲染空占位。
  */
-export async function fetchTodo() {
+export async function fetchTodo(sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(getMockTodoStats());
-  const todoStats = await fetchJson("/todo");
+  const todoStats = await fetchSessionScopedJson("/todo", sessionScopeId);
   if (todoStats === null || typeof todoStats !== "object" || Array.isArray(todoStats)) {
     throw new Error("/api/todo 返回空数据");
   }
@@ -478,13 +560,31 @@ export async function fetchTodo() {
  * GET /api/directories?limit=10 —— 项目目录用量聚合（长尾排行）。
  * db 不可用统一 503 → 错误态；非对象 body 视为契约破坏，同样走错误态。
  */
-export async function fetchDirectoryStats(limit = 10) {
+export async function fetchDirectoryStats(limit = 10, sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency(getMockDirectoryStats(limit));
-  const directoryStats = await fetchJson(`/directories?limit=${limit}`);
+  const directoryStats = await fetchSessionScopedJson(`/directories?limit=${limit}`, sessionScopeId);
   if (directoryStats === null || typeof directoryStats !== "object" || Array.isArray(directoryStats)) {
     throw new Error("/api/directories 返回空数据");
   }
   return directoryStats;
+}
+
+/**
+ * GET /api/session-distribution（v0.20.0）：每会话 tokens 总量的
+ * 「全部会话」分布（对数半档桶 + p50/p90/p99 分位 + mean/max，载荷形状
+ * 见 stats/session-distribution.ts TokenDistributionStats）。端点不吃
+ * ?session=——作用域激活时由 app 层直接隐藏整个面板、不发请求，因此
+ * 这里没有 scope 参数。
+ */
+export async function fetchSessionDistribution() {
+  if (USE_MOCK) {
+    return resolveWithLatency({ totalSessions: 0, buckets: [], percentiles: { p50: 0, p90: 0, p99: 0 }, mean: 0, max: 0 });
+  }
+  const distributionStats = await fetchJson("/session-distribution");
+  if (distributionStats === null || typeof distributionStats !== "object" || Array.isArray(distributionStats)) {
+    throw new Error("/api/session-distribution 返回空数据");
+  }
+  return distributionStats;
 }
 
 /* ---------------- 会话回放数据 ---------------- */

@@ -30,6 +30,7 @@ import {
 import {
   ASSISTANT_OBJECT_DATA_PREDICATE,
   buildScanFloorEpochMs,
+  buildSessionFilterSqlFragments,
   buildWindowStartEpochMs,
 } from "./scan-conventions.ts"
 import { hitRate } from "../stats/hit-rate.ts"
@@ -114,18 +115,28 @@ function extractToolNamesFromPartFields(rawPartFields: unknown): string[] {
  * multi-path json_extract array is coerced value-by-value in JS and the
  * local-midnight "today" boundary is a toLocalDateKey comparison,
  * exactly like the old JS aggregation (P1-1 parity fix).
+ *
+ * v0.20.0 ?session= 过滤：sessionFilterId 非空时 step 扫描前置
+ * session_id = ?（共享片段，见 scan-conventions），session_v2 的
+ * COUNT/SUM 追加 WHERE id = ?——单会话视图的 KPI 只统计该会话
+ * （sessionCount 退化为 1）。缺省不过滤，SQL 字节与现行全量口径
+ * 一致。
  */
-export function queryOverview(db: SqliteReadConnection | null): OverviewStats | null {
+export function queryOverview(
+  db: SqliteReadConnection | null,
+  sessionFilterId: string | null = null,
+): OverviewStats | null {
   if (db === null) return null
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   const rawRows = db
     .prepare(
       `SELECT time_created,
               json_extract(data, '$.tokens.input', '$.tokens.output', '$.tokens.cache.read') AS token_fields
        FROM session_message
-       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}`,
     )
-    .all()
+    .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 
   const todayDateKey = toLocalDateKey(Date.now())
   let stepCount = 0
@@ -151,8 +162,12 @@ export function queryOverview(db: SqliteReadConnection | null): OverviewStats | 
     }
   }
 
-  const sessionCountRow = db.prepare("SELECT COUNT(*) AS sessionCount FROM session_v2").get()
-  const totalCostRow = db.prepare("SELECT SUM(cost) AS totalCost FROM session_v2").get()
+  const sessionCountRow = db
+    .prepare(`SELECT COUNT(*) AS sessionCount FROM session_v2${sessionFilter.sessionRowWhereSql}`)
+    .get(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
+  const totalCostRow = db
+    .prepare(`SELECT SUM(cost) AS totalCost FROM session_v2${sessionFilter.sessionRowWhereSql}`)
+    .get(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 
   return {
     todayTokens,
@@ -184,15 +199,21 @@ export function queryOverview(db: SqliteReadConnection | null): OverviewStats | 
  * parseAssistantStepRow (rows.ts), so the SQL-side pipeline stays
  * field-for-field parity with the full-row JS pipeline (locked by
  * test/sql-aggregation-parity.test.ts).
+ *
+ * v0.20.0 ?session= 过滤：sessionFilterId 非空时 step 扫描前置
+ * session_id = ?（共享片段）。单会话下序列自然退化为单点/少数点，
+ * 后端不特判（面板显隐由前端管）。
  */
 export function queryDailyTrend(
   db: SqliteReadConnection | null,
   days: number = 30,
+  sessionFilterId: string | null = null,
 ): DailyTrendPoint[] | null {
   if (db === null) return null
   if (!Number.isFinite(days) || days <= 0) return []
   const boundedDays = Math.min(Math.floor(days), MAX_TREND_DAYS)
   const scanFloorMs = buildScanFloorEpochMs(boundedDays)
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   const rawRows = db
     .prepare(
@@ -200,9 +221,12 @@ export function queryDailyTrend(
               json_extract(data, '$.model.id',
                                  '$.tokens.input', '$.tokens.output', '$.tokens.cache.read') AS trend_fields
        FROM session_message
-       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE} AND time_created >= ?`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE} AND time_created >= ?`,
     )
-    .all(scanFloorMs)
+    .all(
+      ...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]),
+      scanFloorMs,
+    )
 
   const trendSamples: DailyTrendSample[] = []
   for (const rawRow of rawRows) {
@@ -240,10 +264,14 @@ export function queryDailyTrend(
  * to 1..MAX_TREND_DAYS like the trend/heatmap windows; undefined (or a
  * non-positive/non-finite value, which the route layer never passes)
  * keeps the historical full-history scan.
+ *
+ * v0.20.0 ?session= 过滤：sessionFilterId 非空时 step 扫描前置
+ * session_id = ?（共享片段），排行的行只来自目标会话。缺省不过滤。
  */
 export function queryModelMetrics(
   db: SqliteReadConnection | null,
   days?: number,
+  sessionFilterId: string | null = null,
 ): ModelMetric[] | null {
   if (db === null) return null
 
@@ -253,6 +281,7 @@ export function queryModelMetrics(
       : undefined
   const scanFloorMs = boundedDays === undefined ? null : buildScanFloorEpochMs(boundedDays)
   const windowStartEpochMs = boundedDays === undefined ? null : buildWindowStartEpochMs(boundedDays)
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   const rawRows = db
     .prepare(
@@ -261,9 +290,12 @@ export function queryModelMetrics(
                                 '$.tokens.input', '$.tokens.output', '$.tokens.reasoning',
                                 '$.tokens.cache.read', '$.tokens.cache.write') AS usage_fields
        FROM session_message
-       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}${scanFloorMs === null ? "" : " AND time_created >= ?"}`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}${scanFloorMs === null ? "" : " AND time_created >= ?"}`,
     )
-    .all(...(scanFloorMs === null ? [] : [scanFloorMs]))
+    .all(
+      ...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]),
+      ...(scanFloorMs === null ? [] : [scanFloorMs]),
+    )
 
   const modelSamples: ModelUsageSample[] = []
   for (const rawRow of rawRows) {
@@ -314,11 +346,21 @@ export function queryModelMetrics(
  *   TOOL_NAME_FAST_PATH_PART_LIMIT below): direct path lookups for the
  *   short content arrays that dominate real data, json_each only for the
  *   rare long arrays.
+ *
+ * v0.20.0 ?session= 过滤：membership 扫描（session_v2）追加 WHERE id = ?，
+ * step 扫描（session_message）前置 session_id = ?（共享片段）——榜上
+ * 只剩目标会话归属的 agent，单会话下通常一个 agent，自然退化不特判。
  */
-export function queryAgentStats(db: SqliteReadConnection | null): AgentStat[] | null {
+export function queryAgentStats(
+  db: SqliteReadConnection | null,
+  sessionFilterId: string | null = null,
+): AgentStat[] | null {
   if (db === null) return null
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
-  const rawSessionRows = db.prepare("SELECT id, agent FROM session_v2").all()
+  const rawSessionRows = db
+    .prepare(`SELECT id, agent FROM session_v2${sessionFilter.sessionRowWhereSql}`)
+    .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
   const memberships: AgentSessionMembershipSample[] = rawSessionRows.flatMap((rawRow): AgentSessionMembershipSample[] => {
     const rowRecord = asRecord(rawRow)
     if (rowRecord === null) return []
@@ -335,9 +377,9 @@ export function queryAgentStats(db: SqliteReadConnection | null): AgentStat[] | 
                          FROM json_each(m.data, '$.content') c)
               END AS tool_part_fields
        FROM session_message m
-       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}`,
     )
-    .all()
+    .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 
   const stepUsageSamples: AgentStepUsageSample[] = []
   for (const rawRow of rawMessageRows) {

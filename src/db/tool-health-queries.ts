@@ -14,7 +14,10 @@
 
 import type { SqliteReadConnection } from "./types.ts"
 import { asRecord, coerceText, parseExtractedFieldList } from "./rows.ts"
-import { ASSISTANT_OBJECT_DATA_PREDICATE } from "./scan-conventions.ts"
+import {
+  ASSISTANT_OBJECT_DATA_PREDICATE,
+  buildSessionFilterSqlFragments,
+} from "./scan-conventions.ts"
 import {
   computeToolHealth,
   type ToolHealthSample,
@@ -88,9 +91,17 @@ function extractToolHealthSamples(rawPartFields: unknown): ToolHealthSample[] {
  * from one assistant scan that never materializes message bodies or
  * tool outputs. Returns null when the db connection is missing (the
  * API layer surfaces that as the shared 503).
+ *
+ * v0.20.0 ?session= 过滤：sessionFilterId 非空时扫描前置
+ * session_id = ?（共享片段）——只统计目标会话的工具调用。缺省
+ * 不过滤，SQL 字节与现行全量口径一致。
  */
-export function queryToolHealth(db: SqliteReadConnection | null): ToolHealthStat[] | null {
+export function queryToolHealth(
+  db: SqliteReadConnection | null,
+  sessionFilterId: string | null = null,
+): ToolHealthStat[] | null {
   if (db === null) return null
+  const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   const rawRows = db
     .prepare(
@@ -101,9 +112,9 @@ export function queryToolHealth(db: SqliteReadConnection | null): ToolHealthStat
                       FROM json_each(m.data, '$.content') c)
               END AS tool_part_fields
        FROM session_message m
-       WHERE ${ASSISTANT_OBJECT_DATA_PREDICATE}`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}`,
     )
-    .all()
+    .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 
   const toolHealthSamples: ToolHealthSample[] = []
   for (const rawRow of rawRows) {

@@ -2,6 +2,11 @@
  * 应用装配：hash 路由 + 各区块数据获取与渲染 + 时间范围切换 + 后台定时刷新。
  * 每个区块独立加载/独立容错（API 挂了不白屏），数据统一走
  * data-source.js（当前 mock，M2 后切真实 API 只改那一处）。
+ *
+ * v0.20.0 会话作用域：state.sessionScopeId 非 null 时各聚合 fetch 追加
+ * ?session=（只统计该会话）；顶栏 chip（session-scope-chip.js）承载
+ * 进入/退出/404 自动退出轻提示；作用域期间口径错位的面板整体隐藏
+ * （session-scope-visibility.js 的映射），退出即恢复。
  */
 
 import {
@@ -17,7 +22,10 @@ import {
   fetchCompaction,
   fetchTodo,
   fetchDirectoryStats,
+  fetchSessionDistribution,
   fetchRefresh,
+  fetchSessionSummaryById,
+  SessionScopeNotFoundError,
   MAX_TREND_DAYS,
 } from "./data-source.js";
 import { formatTokens, formatPercent, formatCount, escapeHtml } from "./format.js";
@@ -34,6 +42,15 @@ import { renderToolBars } from "./components/tool-bars.js";
 import { renderAgentTable } from "./components/agent-table.js";
 import { renderTokenFunnel } from "./components/token-funnel.js";
 import { renderModelTable } from "./components/model-table.js";
+import { renderDistributionCard } from "./components/distribution-card.js";
+import {
+  renderSessionScopeChip,
+  flashSessionScopeVanishedNotice,
+} from "./components/session-scope-chip.js";
+import {
+  SESSION_SCOPE_HIDDEN_SECTION_IDS,
+  sessionScopeSectionHiddenById,
+} from "./components/session-scope-visibility.js";
 import { createSessionSortController } from "./components/session-sort-controller.js";
 import { renderSessionReplay } from "./components/session-replay.js";
 import { renderError } from "./components/state-views.js";
@@ -45,6 +62,12 @@ const state = {
   range: "30",
   modelFilter: null,
   directoryFilter: null,
+  // 会话作用域（v0.20.0）：null = 全部会话（缺省）。非空 = 看板各聚合
+  // 只统计该会话（?session= 透传），title 供顶栏 chip 展示。进入/退出
+  // 都走 enterSessionScope / exitSessionScope（缓存重置 + 全量重载在那
+  // 里统一发生），不许散落直改。
+  sessionScopeId: null,
+  sessionScopeTitle: null,
   // 模型排行榜窗口（data-model-range 值）：默认全部。缓存按窗口分桶，
   // state.cache.models 始终指向「当前窗口」的数据（主题切换/下钻重渲染用）。
   modelRange: "all",
@@ -75,9 +98,14 @@ const state = {
     compaction: undefined,
     todo: undefined,
     directories: undefined,
+    // 会话 token 分布（v0.20.0）：作用域激活时面板整体隐藏、不取数，
+    // 缓存保持 undefined（onSchemeChange 的重渲守卫天然跳过）。
+    distribution: undefined,
   },
   failedSections: new Set(),
   trendCleanup: () => {},
+  // 分布卡 cleanup（renderDistributionCard 返回的收起 tooltip 闭包）。
+  distributionCleanup: () => {},
 };
 
 /* ---------- DOM 锚点 ---------- */
@@ -104,6 +132,8 @@ const heatmapRangeSwitchElement = document.getElementById("heatmap-range-switch"
 const tocNavElement = document.getElementById("toc-nav");
 const sessionListElement = document.getElementById("session-list");
 const sessionFilterChipElement = document.getElementById("session-filter-chip");
+const sessionScopeChipElement = document.getElementById("session-scope-chip");
+const distributionCardElement = document.getElementById("session-distribution");
 const rangeSwitchElement = document.getElementById("range-switch");
 const statusDotElement = document.getElementById("status-dot");
 const statusTextElement = document.getElementById("status-text");
@@ -139,6 +169,142 @@ function markSection(sectionName, didSucceed) {
   updateStatus();
 }
 
+/* ---------- 会话作用域（v0.20.0 ?session= 贯通） ---------- */
+
+/**
+ * 作用域激活时不再取数的区块名（与 SESSION_SCOPE_HIDDEN_SECTION_IDS
+ * 对应面板的 loader 一一对应）。这些 loader 在 refreshAllSections /
+ * startInitialLoad 里被跳过，失败计数也在进入作用域时清掉——隐藏区块
+ * 的错误不该挂在顶栏吓人。
+ */
+const SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES = [
+  "calendar",
+  "hour-heatmap",
+  "agents",
+  "session-survival",
+  "directories",
+  "distribution",
+];
+
+function isSessionScopeActive() {
+  return state.sessionScopeId !== null;
+}
+
+/**
+ * 作用域切换的面板/TOC 显隐同步：显隐走 hidden 属性（section 与 TOC
+ * 按钮同 hidden 值，静态锚点 TOC 不另建状态）；隐藏区块的失败计数随
+ * 面板一起摘除。TOC 按钮与 section 的对应关系经 data-toc-target 逐个
+ * 查表（index.html 是视觉 lane 产物，不给按钮加 id）。
+ */
+function applySessionScopePanelVisibility() {
+  const sectionHiddenById = sessionScopeSectionHiddenById(isSessionScopeActive());
+  const tocButtonBySectionId = new Map();
+  for (const tocButton of tocNavElement.querySelectorAll("button[data-toc-target]")) {
+    tocButtonBySectionId.set(tocButton.dataset.tocTarget, tocButton);
+  }
+  for (const [sectionId, sectionHidden] of sectionHiddenById) {
+    const sectionElement = document.getElementById(sectionId);
+    if (sectionElement !== null) sectionElement.hidden = sectionHidden;
+    const tocButton = tocButtonBySectionId.get(sectionId);
+    if (tocButton !== undefined) tocButton.hidden = sectionHidden;
+  }
+  if (isSessionScopeActive()) {
+    for (const sectionMarkName of SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES) {
+      state.failedSections.delete(sectionMarkName);
+    }
+    updateStatus();
+  }
+}
+
+/**
+ * 作用域切换的缓存重置：state.cache 的各桶（按 range/days 分桶的 Map
+ * 与单值槽）都持有「取数那一刻的作用域口径」的载荷——切换作用域后
+ * 它们全部过期。单点重置（而非把 scope 编进每个桶键）：桶的数量与
+ * 维度会继续增长，键污染面不如一次性清空来得可核。
+ */
+function resetSectionCachesForScopeSwitch() {
+  state.cache.overview = undefined;
+  state.cache.calendarTrend = undefined;
+  state.cache.rangeTrend = {};
+  state.cache.models = undefined;
+  state.cache.modelsByRange = {};
+  state.cache.agents = undefined;
+  state.cache.hourHeatmap = undefined;
+  state.cache.hourHeatmapByDays = {};
+  state.cache.toolHealth = undefined;
+  state.cache.sessionSurvival = undefined;
+  state.cache.compaction = undefined;
+  state.cache.todo = undefined;
+  state.cache.directories = undefined;
+  state.cache.distribution = undefined;
+}
+
+/**
+ * 顶栏 chip 同步：激活写 innerHTML + 摘 hidden（组件内走属性），退出
+ * 清空 + 落回 hidden。轻提示闪现期间被真实 chip 覆盖是预期行为。
+ */
+function renderTopbarSessionScopeChip() {
+  renderSessionScopeChip(
+    sessionScopeChipElement,
+    isSessionScopeActive()
+      ? { sessionId: state.sessionScopeId, sessionTitle: state.sessionScopeTitle ?? "" }
+      : null,
+    exitSessionScope,
+  );
+}
+
+/** 进入会话作用域：行内「只看此会话」按钮的唯一入口。 */
+function enterSessionScope(sessionId, sessionTitle) {
+  if (sessionId === "" || sessionId === state.sessionScopeId) return;
+  state.sessionScopeId = sessionId;
+  state.sessionScopeTitle = sessionTitle === "" ? sessionId : sessionTitle;
+  // 模型/目录下钻与作用域正交但口径错位（下钻过滤会把锁定行滤没），
+  // 进入即清零——模型表高亮、目录面板选中态、面板 chip 一并复位。
+  state.modelFilter = null;
+  state.directoryFilter = null;
+  renderModelTable(modelTableElement, state.cache.models ?? [], null, onModelSelected);
+  renderDirectoryPanel(directoryPanelElement, state.cache.directories ?? null, null, onDirectorySelected);
+  renderSessionFilterChip();
+  applySessionScopePanelVisibility();
+  renderTopbarSessionScopeChip();
+  resetSectionCachesForScopeSwitch();
+  sessionSortController.changeSessionScope(sessionId);
+  void refreshAllSections();
+}
+
+/** 退出会话作用域：chip ✕ 与 404 自动退出的共用入口。 */
+function exitSessionScope() {
+  if (state.sessionScopeId === null) return;
+  state.sessionScopeId = null;
+  state.sessionScopeTitle = null;
+  applySessionScopePanelVisibility();
+  renderTopbarSessionScopeChip();
+  resetSectionCachesForScopeSwitch();
+  sessionSortController.changeSessionScope(null);
+  void refreshAllSections();
+}
+
+/**
+ * 会话已删时的自动退出 + 轻提示（不弹错误卡）：chip 位置闪一条小字。
+ * 守卫保证并发多路 404 只退一次（已退出 → 直接吞掉）。
+ */
+function exitSessionScopeAfterVanish() {
+  if (state.sessionScopeId === null) return;
+  exitSessionScope();
+  flashSessionScopeVanishedNotice(sessionScopeChipElement);
+}
+
+/**
+ * 404 自动退出的统一哨兵：任一区块请求撞上 SessionScopeNotFoundError
+ * 时由各 loader 的 catch 调用。返回 true = 该错误已被作用域退出消化，
+ * loader 不再走错误态。
+ */
+function handleSessionScopeVanished(error) {
+  if (!(error instanceof SessionScopeNotFoundError)) return false;
+  exitSessionScopeAfterVanish();
+  return true;
+}
+
 /* ---------- 各区块：加载 + 渲染 + 容错 ---------- */
 
 /**
@@ -157,6 +323,9 @@ function createSimpleSectionLoader(sectionName, container, fetchSectionData, ren
       renderSectionData(await fetchSectionData());
       markSection(sectionName, true);
     } catch (error) {
+      // 作用域会话已删：自动退出 + 轻提示（见 handleSessionScopeVanished），
+      // 不落区块错误卡——退出后的全量重载会按「全部会话」口径重取本区块。
+      if (handleSessionScopeVanished(error)) return;
       renderError(container, error, loadSection);
       markSection(sectionName, false);
     }
@@ -167,7 +336,7 @@ function createSimpleSectionLoader(sectionName, container, fetchSectionData, ren
 const loadOverviewSection = createSimpleSectionLoader(
   "overview",
   kpiRowElement,
-  async () => (state.cache.overview = await fetchOverview()),
+  async () => (state.cache.overview = await fetchOverview(state.sessionScopeId)),
   (overviewStats) => renderKpiRow(kpiRowElement, overviewStats),
 );
 
@@ -183,12 +352,13 @@ async function loadTrendSection() {
   const requestRange = state.range;
   try {
     state.trendCleanup();
-    const rangeTrend = await fetchTrend(rangeToDays(requestRange));
+    const rangeTrend = await fetchTrend(rangeToDays(requestRange), state.sessionScopeId);
     state.cache.rangeTrend[requestRange] = rangeTrend;
     if (requestToken !== trendLoadSequence || requestRange !== state.range) return;
     renderTrendSectionFromCache();
     markSection("trend", true);
   } catch (error) {
+    if (handleSessionScopeVanished(error)) return;
     // 与成功路径对称：晚到的错误同样不得覆盖当前范围（例如挂起请求失败前
     // 用户已切到缓存命中的其他范围——此时它仍是最新 token，但范围已过期）
     if (requestToken !== trendLoadSequence || requestRange !== state.range) return;
@@ -212,18 +382,19 @@ function renderTrendSectionFromCache() {
 const loadCalendarSection = createSimpleSectionLoader(
   "calendar",
   calendarHeatmapElement,
-  async () => (state.cache.calendarTrend = await fetchTrend(TREND_CALENDAR_WINDOW_DAYS)),
+  async () => (state.cache.calendarTrend = await fetchTrend(TREND_CALENDAR_WINDOW_DAYS, state.sessionScopeId)),
   (calendarTrend) => renderCalendarHeatmap(calendarHeatmapElement, calendarTrend),
 );
 
 async function loadToolsSection() {
   try {
-    state.cache.agents = await fetchAgents();
+    state.cache.agents = await fetchAgents(state.sessionScopeId);
     // toolHealth 可能先/后于 agents 到达：两侧各自到达后互刷（见下两节），
     // 任一侧缺失时条形图按无健康度渲染，不阻塞彼此。
     renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null);
     markSection("tools", true);
   } catch (error) {
+    if (handleSessionScopeVanished(error)) return;
     renderError(toolBarsElement, error, loadToolsSection);
     markSection("tools", false);
   }
@@ -234,7 +405,7 @@ async function loadToolsSection() {
 const loadAgentSection = createSimpleSectionLoader(
   "agents",
   agentTableElement,
-  async () => (state.cache.agents = await fetchAgents()),
+  async () => (state.cache.agents = await fetchAgents(state.sessionScopeId)),
   (agentStats) => renderAgentTable(agentTableElement, agentStats),
 );
 
@@ -260,13 +431,14 @@ function renderToolHealthCaption(toolHealthStats) {
  * ——条形图本体归 tools 区块管，保持既有渲染（无错误色带），不白屏。 */
 async function loadToolHealthSection() {
   try {
-    state.cache.toolHealth = await fetchToolHealth();
+    state.cache.toolHealth = await fetchToolHealth(state.sessionScopeId);
     renderToolHealthCaption(state.cache.toolHealth);
     if (state.cache.agents !== undefined) {
       renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth);
     }
     markSection("tool-health", true);
   } catch (error) {
+    if (handleSessionScopeVanished(error)) return;
     toolHealthCaptionElement.innerHTML = "";
     markSection("tool-health", false);
   }
@@ -289,13 +461,14 @@ async function loadModelsSection() {
   const requestToken = ++modelsLoadSequence;
   const requestRange = state.modelRange;
   try {
-    const modelMetrics = await fetchModels(modelRangeDays(requestRange));
+    const modelMetrics = await fetchModels(modelRangeDays(requestRange), state.sessionScopeId);
     state.cache.modelsByRange[requestRange] = modelMetrics;
     if (requestToken !== modelsLoadSequence || requestRange !== state.modelRange) return;
     state.cache.models = modelMetrics;
     renderModelTable(modelTableElement, modelMetrics, state.modelFilter, onModelSelected);
     markSection("models", true);
   } catch (error) {
+    if (handleSessionScopeVanished(error)) return;
     if (requestToken !== modelsLoadSequence || requestRange !== state.modelRange) return;
     renderError(modelTableElement, error, loadModelsSection);
     markSection("models", false);
@@ -343,15 +516,33 @@ const SESSION_LIST_PAGE_LIMIT = 15;
  * 只读访问器、顶栏失败计数回调。渲染时机（初始/列头/重置/过滤/范围/
  * 主题）全部转交控制器。v0.7.0：请求闭包透传 directory；v0.9.0：
  * 透传 range（两者空值在 fetchSessions 内归一为不携带参数）。
+ * v0.20.0：闭包增透传 sessionScopeId——作用域激活时不走 ?sort= 分页
+ * 请求，改为单会话载荷（fetchSessionSummaryById 的尽力而为查找，
+ * 找不到 = 空行，退出作用域另有 chip/404 兜底）；行内「只看此会话」
+ * 按钮与作用域消失上抛口也在此接线。
  */
 const sessionSortController = createSessionSortController({
   containerElement: sessionListElement,
-  fetchSessionsPage: (sortKey, sortOrder, directory, range) =>
-    fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder, directory, range),
+  fetchSessionsPage: (sortKey, sortOrder, directory, range, sessionScopeId) => {
+    if (sessionScopeId !== null) return fetchScopedSessionListPage(sessionScopeId);
+    return fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder, directory, range);
+  },
   getModelFilter: () => state.modelFilter,
+  onSessionScopeChange: enterSessionScope,
+  onSessionScopeVanished: exitSessionScopeAfterVanish,
   markSectionSucceeded: () => markSection("sessions", true),
   markSectionFailed: () => markSection("sessions", false),
 });
+
+/**
+ * 作用域锁定视图的单会话载荷：/api/sessions 不吃 ?session=（后端契约），
+ * 走 fetchSessionSummaryById 的尽力而为查找。排序/目录/范围参数对单行
+ * 列表没有意义，闭包侧直接忽略（锁定视图的交互件也不渲染）。
+ */
+async function fetchScopedSessionListPage(sessionScopeId) {
+  const scopedSessionSummary = await fetchSessionSummaryById(sessionScopeId);
+  return { total: null, sessions: scopedSessionSummary === null ? [] : [scopedSessionSummary] };
+}
 
 /**
  * 活动时段热力：窗口切换（7/30/90/All，默认 90）。All 用 days=366
@@ -376,13 +567,14 @@ async function loadHourHeatmapSection() {
   const requestToken = ++heatmapLoadSequence;
   const requestDays = state.heatmapDays;
   try {
-    const heatmapCells = await fetchHourHeatmap(requestDays);
+    const heatmapCells = await fetchHourHeatmap(requestDays, state.sessionScopeId);
     state.cache.hourHeatmapByDays[requestDays] = heatmapCells;
     if (requestToken !== heatmapLoadSequence || requestDays !== state.heatmapDays) return;
     state.cache.hourHeatmap = heatmapCells;
     renderHourHeatmap(hourHeatmapElement, heatmapCells);
     markSection("hour-heatmap", true);
   } catch (error) {
+    if (handleSessionScopeVanished(error)) return;
     if (requestToken !== heatmapLoadSequence || requestDays !== state.heatmapDays) return;
     renderError(hourHeatmapElement, error, loadHourHeatmapSection);
     markSection("hour-heatmap", false);
@@ -421,31 +613,53 @@ function bindHeatmapRangeSwitch() {
 const loadSessionSurvivalSection = createSimpleSectionLoader(
   "session-survival",
   sessionSurvivalElement,
-  async () => (state.cache.sessionSurvival = await fetchSessionSurvival()),
+  async () => (state.cache.sessionSurvival = await fetchSessionSurvival(state.sessionScopeId)),
   (survivalStats) => renderSessionSurvivalCard(sessionSurvivalElement, survivalStats),
 );
 
 const loadCompactionSection = createSimpleSectionLoader(
   "compaction",
   compactionPanelElement,
-  async () => (state.cache.compaction = await fetchCompaction()),
+  async () => (state.cache.compaction = await fetchCompaction(state.sessionScopeId)),
   (compactionStats) => renderCompactionPanel(compactionPanelElement, compactionStats),
 );
 
 const loadTodoSection = createSimpleSectionLoader(
   "todo",
   todoCardElement,
-  async () => (state.cache.todo = await fetchTodo()),
+  async () => (state.cache.todo = await fetchTodo(state.sessionScopeId)),
   (todoStats) => renderTodoCard(todoCardElement, todoStats),
 );
 
 const loadDirectorySection = createSimpleSectionLoader(
   "directories",
   directoryPanelElement,
-  async () => (state.cache.directories = await fetchDirectoryStats(10)),
+  async () => (state.cache.directories = await fetchDirectoryStats(10, state.sessionScopeId)),
   (directoryStats) =>
     renderDirectoryPanel(directoryPanelElement, directoryStats, state.directoryFilter, onDirectorySelected),
 );
+
+/**
+ * 会话 token 分布卡（v0.20.0）：初载与每轮自动刷新取数；null/失败走
+ * 组件自带的降级块（无重试按钮——自动刷新即兜底），不走 renderError。
+ * 作用域激活时该面板整体隐藏（applySessionScopePanelVisibility），
+ * refreshAllSections / startInitialLoad 会跳过本 loader。
+ */
+async function loadDistributionSection() {
+  if (isSessionScopeActive()) return;
+  try {
+    state.distributionCleanup();
+    state.cache.distribution = await fetchSessionDistribution();
+    state.distributionCleanup = renderDistributionCard(distributionCardElement, state.cache.distribution);
+    markSection("distribution", true);
+  } catch (error) {
+    // 分布端点不吃 ?session=，不会撞上作用域 404；失败只做可达性降级
+    //（组件自带「数据不可达」块，无重试按钮，自动刷新兜底）。
+    state.distributionCleanup = renderDistributionCard(distributionCardElement, null);
+    state.cache.distribution = null;
+    markSection("distribution", false);
+  }
+}
 
 /* ---------- 模型 / 目录下钻过滤 ---------- */
 function onModelSelected(modelId) {
@@ -618,28 +832,40 @@ function readStoredAutoRefreshMinutes() {
 async function refreshAllSections() {
   if (state.refreshInFlight) return;
   state.refreshInFlight = true;
+  const roundSessionScopeId = state.sessionScopeId;
   try {
     await Promise.allSettled([
       loadHealthStatus(),
       loadOverviewSection(),
       loadTrendSection(),
-      loadCalendarSection(),
-      loadHourHeatmapSection(),
       loadToolsSection(),
       loadToolHealthSection(),
-      loadAgentSection(),
       loadModelsSection(),
       sessionSortController.refreshCurrentView(),
       loadCompactionSection(),
-      loadSessionSurvivalSection(),
       loadTodoSection(),
-      loadDirectorySection(),
+      // 作用域激活时以下面板整体隐藏（applySessionScopePanelVisibility），
+      // 跳过取数——隐藏面板的请求是纯浪费，失败计数也会误导顶栏。
+      ...(roundSessionScopeId === null ? [
+        loadCalendarSection(),
+        loadHourHeatmapSection(),
+        loadAgentSection(),
+        loadDirectorySection(),
+        loadSessionSurvivalSection(),
+        loadDistributionSection(),
+      ] : []),
     ]);
   } finally {
     // allSettled 后必然到达：无论个别区块成败都收尾并记时间戳——
     // 补刷判定用它防「回前台瞬间连环重刷刚失败过的区块」。
     state.refreshInFlight = false;
     state.lastRefreshCompletedAt = Date.now();
+    // 轮内作用域被切换（进入/退出/404 自动退）：本轮各请求带的是旧口径，
+    // 立刻按新口径补一轮。enter/exitSessionScope 直接调本函数会被上面的
+    // refreshInFlight 守卫挡掉，靠这里追平。
+    if (roundSessionScopeId !== state.sessionScopeId) {
+      void refreshAllSections();
+    }
   }
 }
 
@@ -739,17 +965,23 @@ async function startInitialLoad() {
   loadHealthStatus();
   loadOverviewSection();
   loadTrendSection();
-  loadCalendarSection();
-  loadHourHeatmapSection();
   loadToolsSection();
   loadToolHealthSection();
-  loadAgentSection();
   loadModelsSection();
   sessionSortController.load();
   loadCompactionSection();
-  loadSessionSurvivalSection();
   loadTodoSection();
-  loadDirectorySection();
+  // 作用域缺省为 null，正常全量初载；若初载前用户已点行内按钮进入作用域
+  //（竞态窗口极小），isSessionScopeActive 的守卫与 refreshAllSections 的
+  // 补一轮机制会追平，这里不必重复判定。
+  if (!isSessionScopeActive()) {
+    loadCalendarSection();
+    loadHourHeatmapSection();
+    loadAgentSection();
+    loadDirectorySection();
+    loadSessionSurvivalSection();
+    loadDistributionSection();
+  }
 }
 
 function init() {
@@ -777,6 +1009,11 @@ function init() {
     if (state.cache.sessionSurvival !== undefined) renderSessionSurvivalCard(sessionSurvivalElement, state.cache.sessionSurvival);
     if (state.cache.todo !== undefined) renderTodoCard(todoCardElement, state.cache.todo);
     if (state.cache.directories !== undefined) renderDirectoryPanel(directoryPanelElement, state.cache.directories, state.directoryFilter, onDirectorySelected);
+    // 分布卡直方图配色经 cssVar 内联，主题切换后按缓存重读配色
+    if (state.cache.distribution !== undefined && !isSessionScopeActive()) {
+      state.distributionCleanup();
+      state.distributionCleanup = renderDistributionCard(distributionCardElement, state.cache.distribution);
+    }
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
     sessionSortController.renderCurrentIfLoaded();
