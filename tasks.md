@@ -491,7 +491,7 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
   - **P2-2 / P2-4 / P2-5（顺手封缝 → fix-37）**：子代理徽标文案「+N 子会话」→「+N 直接子会话」（真机证据：607 行会话既是子又是父、单父最多 148 直接子代 → 多级树真实存在，旧文案会被读成整棵子树）；显隐 map 补反向断言；补「徽标口径 == 分布口径」断言（封 P1 同类回归）
   - **P2-1 / P2-3 缓办记档**（实测成本可忽略，见下）；**R-1**（stepCount 原始行计数 vs overview JSON 口径差异，列头 tooltip 可注明）；**R-2**（scope 锁定行靠翻 /api/sessions 上限 2000 行，超 2000 会话的库会空行且不 404）；**R-3**（trend 不在跳过取数名单，隐藏面板失败仍计顶栏数）；**R-4**（mock 源忽略 scope）；**R-5**（旧库无 todo.session_id 列时 scope 下 500，真机已证列存在）；**R-6**（distribution-card.js:5 注释端点拼写 `/api/session-sistribution`，待顺手改）
   - **真机量化证据（入档）**：稳态 `/api/sessions?limit=15` **1ms**（冷启 504ms）、`/api/session-distribution` **0-3ms**、`/api/export/sessions.csv` **18-23ms**、`/api/overview?session=` 1ms（冷启 121ms）、`/api/trend?days=366` 4ms（冷启 841ms）→ 进入/退出 scope 的双份列表请求合计 ≈8ms、CSV 富化 18-23ms，均无感；**单轮自动刷新新增面不构成阻塞脉冲**（新增查询都在 IN(15) 或 ~800 行 session_v2 上）
-- [x] fix-37 落地（P1-1 + P2-2 + P2-4 + P2-5）
-- [ ] v0.20.0 发布门禁：合流回归 → 脱敏扫描 → tarball 探针 → commit/push/tag → plugin update → verify-install 7/7
+- [x] fix-37 落地（P1-1 + P2-2 + P2-4 + P2-5）：428/428（+2）+ check 0 + esbuild 过；无写域外触碰
+- [x] v0.20.0 发布门禁：终态回归 exit=0 + check 0 → 脱敏四类清零（119 tracked，12 新文件全为源/测试）→ tarball 探针过（68 包干净安装，474.7KB，新组件在包内）→ 61c8d51 → push + tag v0.20.0 远端核实（master == tag == 61c8d51）→ plugin update 全引用（首跑 exit=1 为已归因一过性，verify 内嵌同命令成功「Updated Server plugin」）→ verify-install 7/7 PASS（0.20.0 @ 61c8d51，src 77=77 / test 45=45）
 - [ ] 用户真机冒烟（v0.20.0）：会话行「只看此会话」→ 顶部 scope chip 出现、退化面板隐藏、保留面板只算该会话 → ✕ 退出恢复全部口径 → 新三列（命中率/Reasoning/步数）与子代理徽标 → 分布卡直方图与 p50/p90/p99 标线 → 回放页累计曲线/峰值上下文/分位徽章 → 会话删除后 scope 自动退出不弹错误卡
 - [ ] 交付合并「新增可视化指标」完整勾选清单（lib-4 同类工具 15 条 + lib-5 deepseek harness 8 条 + DB 探针 10 项，扣除已实现项）
