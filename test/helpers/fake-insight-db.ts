@@ -139,6 +139,113 @@ export function createFakeInsightDatabase(
       return { all: () => [], get: () => ({ probe: 1 }) }
     }
     if (sql.includes("FROM session_v2")) {
+      if (sql.includes("AS total_sessions")) {
+        // v0.21.0 GET /api/child-share 的整体归总：COUNT + 父子分桶 +
+        // tokens 三列合计。镜像 SQL 的 COALESCE(SUM(...)) 折叠与
+        // parent_id 是否 NULL 的分桶。
+        return {
+          all: () => [],
+          get: () => {
+            let totalSessions = 0
+            let childSessionCount = 0
+            let rootSessionCount = 0
+            let childTokens = 0
+            let totalTokens = 0
+            for (const sessionRow of sessionRows) {
+              totalSessions += 1
+              const rowTokens =
+                Number(sessionRow.tokens_input ?? 0) +
+                Number(sessionRow.tokens_output ?? 0) +
+                Number(sessionRow.tokens_cache_read ?? 0)
+              totalTokens += rowTokens
+              if (sessionRow.parent_id === null || sessionRow.parent_id === undefined) {
+                rootSessionCount += 1
+              } else {
+                childSessionCount += 1
+                childTokens += rowTokens
+              }
+            }
+            return {
+              total_sessions: totalSessions,
+              child_session_count: childSessionCount,
+              root_session_count: rootSessionCount,
+              child_tokens: childTokens,
+              total_tokens: totalTokens,
+            }
+          },
+        }
+      }
+      if (sql.includes("AS duration_ms")) {
+        // v0.21.0 GET /api/duration-distribution：每会话墙钟时长（毫秒），
+        // 只取 time_updated > time_created 的正值会话（镜像 SQL WHERE）。
+        return {
+          all: () =>
+            sessionRows
+              .filter(
+                (sessionRow) =>
+                  Number(sessionRow.time_updated) > Number(sessionRow.time_created),
+              )
+              .map((sessionRow) => ({
+                duration_ms:
+                  Number(sessionRow.time_updated) - Number(sessionRow.time_created),
+              })),
+          get: () => undefined,
+        }
+      }
+      if (sql.includes("ORDER BY child_tokens")) {
+        // v0.21.0 topChildTrees：按直接子代 tokens 合计降序 top5（只做
+        // 一层直接子代，与富化归总同口径）。ORDER 语义由 JS 排序镜像，
+        // 真实 SQL 排序权责留在 session-list-sorting 那类真 SQLite 测试。
+        const childAggregateByParentId = new Map<
+          string,
+          { childSessionCount: number; childTokens: number }
+        >()
+        for (const sessionRow of sessionRows) {
+          const parentSessionId = sessionRow.parent_id
+          if (typeof parentSessionId !== "string") continue
+          const aggregate =
+            childAggregateByParentId.get(parentSessionId) ??
+            { childSessionCount: 0, childTokens: 0 }
+          aggregate.childSessionCount += 1
+          aggregate.childTokens +=
+            Number(sessionRow.tokens_input ?? 0) +
+            Number(sessionRow.tokens_output ?? 0) +
+            Number(sessionRow.tokens_cache_read ?? 0)
+          childAggregateByParentId.set(parentSessionId, aggregate)
+        }
+        const rankedChildTrees = [...childAggregateByParentId.entries()]
+          .map(([parentSessionId, aggregate]) => ({
+            session_id: parentSessionId,
+            child_session_count: aggregate.childSessionCount,
+            child_tokens: aggregate.childTokens,
+          }))
+          .sort(
+            (leftRow, rightRow) =>
+              rightRow.child_tokens - leftRow.child_tokens ||
+              (leftRow.session_id < rightRow.session_id ? -1 : 1),
+          )
+          .slice(0, 5)
+        return { all: () => rankedChildTrees, get: () => undefined }
+      }
+      if (sql.includes("SELECT id, title, agent")) {
+        // v0.21.0 topChildTrees 的父会话 title / agent 点查（榜上每项补
+        // 父会话自身展示字段）。
+        return {
+          all: (...parameters: unknown[]) => {
+            const parentSessionIds = new Set(
+              parameters.map((sessionId) => String(sessionId ?? "")),
+            )
+            return sessionRows
+              .filter((sessionRow) => parentSessionIds.has(String(sessionRow.id)))
+              .map((sessionRow) => ({
+                id: sessionRow.id,
+                title: sessionRow.title,
+                agent: sessionRow.agent,
+              }))
+          },
+          get: () => undefined,
+        }
+      }
       if (sql.includes("WHERE id = ?")) {
         // Direct by-id lookup (P2-2) — also serves the v0.20.0 ?session=
         // existence probe (SELECT 1 … WHERE id = ?): the row object (or
@@ -383,6 +490,27 @@ export function createFakeInsightDatabase(
       }
     }
     if (sql.includes("FROM session_message")) {
+      // v0.21.0 GET /api/step-distribution：每会话 assistant 行数分布。
+      // 与下方 stepCount 富化同口径（type='assistant' 纯行计数），但全表
+      // 扫描、无 IN 下推——镜像 SQL 的 GROUP BY session_id 不按当页 id 过滤。
+      if (
+        sql.includes("COUNT(*) AS step_count") &&
+        sql.includes("GROUP BY session_id") &&
+        !sql.includes("session_id IN (")
+      ) {
+        return {
+          all: () =>
+            Object.entries(scenario.messagesBySessionId)
+              .map(([sessionId, messageFixtures]) => ({
+                session_id: sessionId,
+                step_count: messageFixtures.filter(
+                  (messageFixture) => messageFixture.type === "assistant",
+                ).length,
+              }))
+              .filter((row) => row.step_count > 0),
+          get: () => undefined,
+        }
+      }
       // v0.20.0 step 级轻计数（session-summary-enrichment 的 stepCount
       // 来源）：纯行计数镜像——只统计 type='assistant'（无 json 谓词，
       // 与真实轻查询同口径），IN 绑定参数即当页会话 id 集。
@@ -535,6 +663,8 @@ export function buildFakeSessionSummary(
     directory: "",
     timeCreated: new Date(2026, 9, 5, 15, 30).getTime(),
     timeUpdated: new Date(2026, 9, 5, 16, 15).getTime(),
+    // 默认 fixture 的 timeUpdated > timeCreated（差 45 分钟），duration 为正。
+    durationMilliseconds: new Date(2026, 9, 5, 16, 15).getTime() - new Date(2026, 9, 5, 15, 30).getTime(),
     tokens: 123456,
     tokensInput: 100000,
     tokensOutput: 20000,

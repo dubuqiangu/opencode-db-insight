@@ -8,6 +8,34 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.21.0] - 2026-10-18 · A 档指标：子代理开销占比 + 步数分布 + 墙钟时长
+
+> 用户勾选 A 档三项：① 子代理开销占比卡 ② 步数分布直方图 ③ 墙钟时长（列表列 + 时长分布卡）。均沿用既有「全部会话」口径与对数半档分布语言，不引入估算口径（`time_compacting` 全 0 / `time_suspended` 仅 5 → 「活跃时长」无从精确，故只做墙钟）。
+
+### Added
+
+- **子代理开销占比卡**：新端点 `/api/child-share`——整体归总（子会话数 / 根会话数 / 子代与根 tokens / `childShare`）+ 直接子代消耗 TOP5 父会话清单（`topChildTrees`，仅汇总各父会话的直接子代，不含孙代）；占比卡为双段条 + 大号百分比 + top5 明细（真库 45.6% 子代占比、单父最多 148 直接子代）。
+- **步数分布卡**：新端点 `/api/step-distribution`——每会话 assistant 消息数分布（对数半档桶 + p50/p90/p99 + 均值 / 最大值），复用 token 分布的对数桶语言；口径锚定 `session_v2`（排除孤儿消息，与 token / 时长分布同锚）。
+- **墙钟时长**：会话列表新列「墙钟」（`time_updated - time_created`，无正时长显示「—」）+ 时长分布卡（新端点 `/api/duration-distribution`，毫秒分桶，前端 `formatDurationMs` 呈现）。
+- **`formatDurationMs(ms)`**：紧凑时长格式化（`823ms` / `37s` / `3m 20s` / `2h 15m` / `3d 3h`）；与既有秒语义 `formatDuration` 并存不冲突。
+
+### Changed
+
+- 分布卡渲染器泛化为共享内部渲染器 `renderSharedDistributionCard(container, distribution, options)`（token / 步数 / 时长三卡共用一个对数桶渲染器，`formatAxis` / `formatMean` / `sampleUnit` / `exclusionLabel` 按卡配置）；`renderDistributionCard(container, distribution)` 仍为 token 卡公开签名。直方图横轴改为**按桶序等宽**呈现（原线性轴会把小值桶挤成一团），并加可横向滚动区 + 屏幕阅读器桶明细表。
+- `SessionSummary` 载荷增 `durationMilliseconds`（additive，基础形状，`includeStepModelIds=false` 仍带；旧 wire 缺失降级 undefined）。
+- 数值分布纯函数泛化为 `computeNumericDistribution(values)` + `NumericDistributionBucket/Stats`（token 端点保留 `computeSessionTokenDistribution` 薄封装，行为零变化）。
+
+### Fixed
+
+- **作用域切换在途请求竞态**（ora-13 审视 P2）：四个全局面板 loader（token / 步数 / 时长 / 子代理占比）在进入单会话作用域后，先前发出的请求若才返回 / 失败，仍会写回缓存并计入顶栏失败数；改为请求发出时记录作用域版本与请求序号，过期结果不再改写缓存 / DOM / 失败标记。
+- **步数分布口径对齐**（ora-13 审视）：步数分布原直接 `GROUP BY session_message.session_id`，未锚定 `session_v2`，理论上会计入「会话已删、消息残留」的孤儿行；改为 `session_id IN (SELECT id FROM session_v2)`，与 token / 时长分布、列表富化同锚（真库孤儿为 0，此约束不改变当前输出）。
+- **子代理榜口径文案**（ora-13 审视）：榜单原称「子树」，但数值仅含直接子代；改为「直接子代消耗 TOP5 · 按父会话汇总，不含孙代」，避免被读成整棵子树。
+- **分布卡文案与可读性**（des-25 审视）：步数 / 时长卡不再复用 token 卡的「零消耗」措辞（分别按「零步数 / 正时长」表述）；时长卡说明改为「墙钟跨度 = time_updated - time_created」；均值单独格式化到合适精度；窄屏直方图加最小呈现宽度 + 横向滚动。
+
+### Tests
+
+- 466/466 全绿 + check 0；新增三端点 SQL / 载荷正确性（含孤儿消息回归 / 空库零载荷 / 503）、作用域竞态（20 用例）、分布卡共用渲染 / 时长列等测试；orchestrator 另做真库端到端独立核对（三端点数字与裸 SQL 全等、topChildTrees[0] 命中、墙钟字段相符）。
+
 ## [0.20.0] - 2026-10-16 · 统计维度「会话」贯穿 + 单会话指标集
 
 > 用户需求两条：① 所有统计指标可增加统计维度 session，之前的全部 session 口径保留；② 可增加有价值、不重复、不啰嗦的新指标。默认仍为「全部会话」口径（逐字节不变），从会话列表可进入单会话模式。

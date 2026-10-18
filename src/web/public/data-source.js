@@ -587,6 +587,57 @@ export async function fetchSessionDistribution() {
   return distributionStats;
 }
 
+/**
+ * GET /api/step-distribution（v0.21.0）：每会话步数（assistant 消息数）的
+ * 「全部会话」分布，载荷形状同 session-distribution（buckets +
+ * p50/p90/p99 + mean + max）。端点不吃 ?session=——作用域激活时由 app
+ * 层直接隐藏整个面板、不发请求，因此这里没有 scope 参数。
+ */
+export async function fetchStepDistribution() {
+  if (USE_MOCK) {
+    return resolveWithLatency({ totalSessions: 0, buckets: [], percentiles: { p50: 0, p90: 0, p99: 0 }, mean: 0, max: 0 });
+  }
+  const distributionStats = await fetchJson("/step-distribution");
+  if (distributionStats === null || typeof distributionStats !== "object" || Array.isArray(distributionStats)) {
+    throw new Error("/api/step-distribution 返回空数据");
+  }
+  return distributionStats;
+}
+
+/**
+ * GET /api/duration-distribution（v0.21.0）：每会话墙钟时长（毫秒）的
+ * 「全部会话」分布，载荷形状同 session-distribution，值域毫秒（前端用
+ * formatDurationMs 显示）。端点不吃 ?session=——作用域激活时由 app 层
+ * 直接隐藏整个面板、不发请求。
+ */
+export async function fetchDurationDistribution() {
+  if (USE_MOCK) {
+    return resolveWithLatency({ totalSessions: 0, buckets: [], percentiles: { p50: 0, p90: 0, p99: 0 }, mean: 0, max: 0 });
+  }
+  const distributionStats = await fetchJson("/duration-distribution");
+  if (distributionStats === null || typeof distributionStats !== "object" || Array.isArray(distributionStats)) {
+    throw new Error("/api/duration-distribution 返回空数据");
+  }
+  return distributionStats;
+}
+
+/**
+ * GET /api/child-share（v0.21.0）：全部会话口径的子代理开销占比统计
+ * （child 会话占比 / 子代 token 占比 / top 子树）。载荷是对象契约而非
+ * 分布形状，故校验独立。端点不吃 ?session=——作用域激活时由 app 层
+ * 直接隐藏整个面板、不发请求。
+ */
+export async function fetchChildShare() {
+  if (USE_MOCK) {
+    return resolveWithLatency({ totalSessions: 0, childSessionCount: 0, rootSessionCount: 0, childTokens: 0, rootTokens: 0, totalTokens: 0, childShare: 0, topChildTrees: [] });
+  }
+  const childShare = await fetchJson("/child-share");
+  if (childShare === null || typeof childShare !== "object" || Array.isArray(childShare)) {
+    throw new Error("/api/child-share 返回空数据");
+  }
+  return childShare;
+}
+
 /* ---------------- 会话回放数据 ---------------- */
 
 /**

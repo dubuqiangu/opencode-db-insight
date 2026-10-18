@@ -27,6 +27,9 @@ export const SESSION_SCOPE_HIDDEN_SECTION_IDS = [
   "panel-hour-heatmap",
   "panel-survival",
   "panel-distribution",
+  "panel-step-distribution",
+  "panel-duration-distribution",
+  "panel-child-share",
   "panel-agents",
   "panel-directories",
 ];

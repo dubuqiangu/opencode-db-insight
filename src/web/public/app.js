@@ -23,6 +23,9 @@ import {
   fetchTodo,
   fetchDirectoryStats,
   fetchSessionDistribution,
+  fetchStepDistribution,
+  fetchDurationDistribution,
+  fetchChildShare,
   fetchRefresh,
   fetchSessionSummaryById,
   SessionScopeNotFoundError,
@@ -43,6 +46,9 @@ import { renderAgentTable } from "./components/agent-table.js";
 import { renderTokenFunnel } from "./components/token-funnel.js";
 import { renderModelTable } from "./components/model-table.js";
 import { renderDistributionCard } from "./components/distribution-card.js";
+import { renderStepDistributionCard } from "./components/step-distribution-card.js";
+import { renderDurationDistributionCard } from "./components/duration-distribution-card.js";
+import { renderChildShareCard } from "./components/child-share-card.js";
 import {
   renderSessionScopeChip,
   flashSessionScopeVanishedNotice,
@@ -101,11 +107,21 @@ const state = {
     // 会话 token 分布（v0.20.0）：作用域激活时面板整体隐藏、不取数，
     // 缓存保持 undefined（onSchemeChange 的重渲守卫天然跳过）。
     distribution: undefined,
+    // 步数 / 时长分布（v0.21.0）：同 distribution 口径（全部会话），作用域
+    // 激活时面板整体隐藏、不取数，缓存保持 undefined。
+    stepDistribution: undefined,
+    durationDistribution: undefined,
+    // 子代理开销占比（v0.21.0）：全部会话口径，作用域激活时同样整体隐藏。
+    childShare: undefined,
   },
   failedSections: new Set(),
   trendCleanup: () => {},
   // 分布卡 cleanup（renderDistributionCard 返回的收起 tooltip 闭包）。
   distributionCleanup: () => {},
+  // 步数 / 时长 / 子代占比卡 cleanup（v0.21.0），同 distributionCleanup。
+  stepDistributionCleanup: () => {},
+  durationDistributionCleanup: () => {},
+  childShareCleanup: () => {},
 };
 
 /* ---------- DOM 锚点 ---------- */
@@ -134,6 +150,9 @@ const sessionListElement = document.getElementById("session-list");
 const sessionFilterChipElement = document.getElementById("session-filter-chip");
 const sessionScopeChipElement = document.getElementById("session-scope-chip");
 const distributionCardElement = document.getElementById("session-distribution");
+const stepDistributionCardElement = document.getElementById("session-step-distribution");
+const durationDistributionCardElement = document.getElementById("session-duration-distribution");
+const childShareCardElement = document.getElementById("child-share");
 const rangeSwitchElement = document.getElementById("range-switch");
 const statusDotElement = document.getElementById("status-dot");
 const statusTextElement = document.getElementById("status-text");
@@ -184,11 +203,17 @@ const SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES = [
   "session-survival",
   "directories",
   "distribution",
+  "step-distribution",
+  "duration-distribution",
+  "child-share",
 ];
 
 function isSessionScopeActive() {
   return state.sessionScopeId !== null;
 }
+
+// 即使先进入再退出回到 null，旧请求也不能落入已重置的全局缓存。
+let sessionScopeVersion = 0;
 
 /**
  * 作用域切换的面板/TOC 显隐同步：显隐走 hidden 属性（section 与 TOC
@@ -237,6 +262,9 @@ function resetSectionCachesForScopeSwitch() {
   state.cache.todo = undefined;
   state.cache.directories = undefined;
   state.cache.distribution = undefined;
+  state.cache.stepDistribution = undefined;
+  state.cache.durationDistribution = undefined;
+  state.cache.childShare = undefined;
 }
 
 /**
@@ -256,6 +284,7 @@ function renderTopbarSessionScopeChip() {
 /** 进入会话作用域：行内「只看此会话」按钮的唯一入口。 */
 function enterSessionScope(sessionId, sessionTitle) {
   if (sessionId === "" || sessionId === state.sessionScopeId) return;
+  sessionScopeVersion += 1;
   state.sessionScopeId = sessionId;
   state.sessionScopeTitle = sessionTitle === "" ? sessionId : sessionTitle;
   // 模型/目录下钻与作用域正交但口径错位（下钻过滤会把锁定行滤没），
@@ -275,6 +304,7 @@ function enterSessionScope(sessionId, sessionTitle) {
 /** 退出会话作用域：chip ✕ 与 404 自动退出的共用入口。 */
 function exitSessionScope() {
   if (state.sessionScopeId === null) return;
+  sessionScopeVersion += 1;
   state.sessionScopeId = null;
   state.sessionScopeTitle = null;
   applySessionScopePanelVisibility();
@@ -645,19 +675,110 @@ const loadDirectorySection = createSimpleSectionLoader(
  * 作用域激活时该面板整体隐藏（applySessionScopePanelVisibility），
  * refreshAllSections / startInitialLoad 会跳过本 loader。
  */
+let distributionLoadSequence = 0;
+
 async function loadDistributionSection() {
   if (isSessionScopeActive()) return;
+  const requestScopeVersion = sessionScopeVersion;
+  const requestSequence = ++distributionLoadSequence;
   try {
+    const distribution = await fetchSessionDistribution();
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== distributionLoadSequence) return;
     state.distributionCleanup();
-    state.cache.distribution = await fetchSessionDistribution();
+    state.cache.distribution = distribution;
     state.distributionCleanup = renderDistributionCard(distributionCardElement, state.cache.distribution);
     markSection("distribution", true);
   } catch (error) {
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== distributionLoadSequence) return;
     // 分布端点不吃 ?session=，不会撞上作用域 404；失败只做可达性降级
     //（组件自带「数据不可达」块，无重试按钮，自动刷新兜底）。
+    state.distributionCleanup();
     state.distributionCleanup = renderDistributionCard(distributionCardElement, null);
     state.cache.distribution = null;
     markSection("distribution", false);
+  }
+}
+
+/**
+ * 会话步数分布卡（v0.21.0）：初载与每轮自动刷新取数；null/失败走组件
+ * 自带的降级块，不走 renderError。作用域激活时该面板整体隐藏
+ * （applySessionScopePanelVisibility），refreshAllSections /
+ * startInitialLoad 会跳过本 loader。markSection 命名与分布卡同款
+ * （step-distribution，进 SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES）。
+ */
+let stepDistributionLoadSequence = 0;
+
+async function loadStepDistributionSection() {
+  if (isSessionScopeActive()) return;
+  const requestScopeVersion = sessionScopeVersion;
+  const requestSequence = ++stepDistributionLoadSequence;
+  try {
+    const stepDistribution = await fetchStepDistribution();
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== stepDistributionLoadSequence) return;
+    state.stepDistributionCleanup();
+    state.cache.stepDistribution = stepDistribution;
+    state.stepDistributionCleanup = renderStepDistributionCard(stepDistributionCardElement, state.cache.stepDistribution);
+    markSection("step-distribution", true);
+  } catch (error) {
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== stepDistributionLoadSequence) return;
+    state.stepDistributionCleanup();
+    state.stepDistributionCleanup = renderStepDistributionCard(stepDistributionCardElement, null);
+    state.cache.stepDistribution = null;
+    markSection("step-distribution", false);
+  }
+}
+
+/**
+ * 会话时长分布卡（v0.21.0）：每会话墙钟时长（毫秒）分布，初载与自动刷新
+ * 取数；失败走组件降级块。作用域激活时整体隐藏、不取数。markSection 命名
+ * duration-distribution（进 SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES）。
+ */
+let durationDistributionLoadSequence = 0;
+
+async function loadDurationDistributionSection() {
+  if (isSessionScopeActive()) return;
+  const requestScopeVersion = sessionScopeVersion;
+  const requestSequence = ++durationDistributionLoadSequence;
+  try {
+    const durationDistribution = await fetchDurationDistribution();
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== durationDistributionLoadSequence) return;
+    state.durationDistributionCleanup();
+    state.cache.durationDistribution = durationDistribution;
+    state.durationDistributionCleanup = renderDurationDistributionCard(durationDistributionCardElement, state.cache.durationDistribution);
+    markSection("duration-distribution", true);
+  } catch (error) {
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== durationDistributionLoadSequence) return;
+    state.durationDistributionCleanup();
+    state.durationDistributionCleanup = renderDurationDistributionCard(durationDistributionCardElement, null);
+    state.cache.durationDistribution = null;
+    markSection("duration-distribution", false);
+  }
+}
+
+/**
+ * 子代理开销占比卡（v0.21.0）：全部会话口径，初载与自动刷新取数；失败走
+ * 组件降级块。作用域激活时整体隐藏、不取数。markSection 命名 child-share
+ * （进 SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES）。
+ */
+let childShareLoadSequence = 0;
+
+async function loadChildShareSection() {
+  if (isSessionScopeActive()) return;
+  const requestScopeVersion = sessionScopeVersion;
+  const requestSequence = ++childShareLoadSequence;
+  try {
+    const childShare = await fetchChildShare();
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== childShareLoadSequence) return;
+    state.childShareCleanup();
+    state.cache.childShare = childShare;
+    state.childShareCleanup = renderChildShareCard(childShareCardElement, state.cache.childShare);
+    markSection("child-share", true);
+  } catch (error) {
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== childShareLoadSequence) return;
+    state.childShareCleanup();
+    state.childShareCleanup = renderChildShareCard(childShareCardElement, null);
+    state.cache.childShare = null;
+    markSection("child-share", false);
   }
 }
 
@@ -853,6 +974,9 @@ async function refreshAllSections() {
         loadDirectorySection(),
         loadSessionSurvivalSection(),
         loadDistributionSection(),
+        loadStepDistributionSection(),
+        loadDurationDistributionSection(),
+        loadChildShareSection(),
       ] : []),
     ]);
   } finally {
@@ -981,6 +1105,9 @@ async function startInitialLoad() {
     loadDirectorySection();
     loadSessionSurvivalSection();
     loadDistributionSection();
+    loadStepDistributionSection();
+    loadDurationDistributionSection();
+    loadChildShareSection();
   }
 }
 
@@ -1013,6 +1140,16 @@ function init() {
     if (state.cache.distribution !== undefined && !isSessionScopeActive()) {
       state.distributionCleanup();
       state.distributionCleanup = renderDistributionCard(distributionCardElement, state.cache.distribution);
+    }
+    // 步数 / 时长分布卡共用同一共享直方图渲染器（cssVar 内联配色），
+    // 主题切换后同样按缓存重读配色。
+    if (state.cache.stepDistribution !== undefined && !isSessionScopeActive()) {
+      state.stepDistributionCleanup();
+      state.stepDistributionCleanup = renderStepDistributionCard(stepDistributionCardElement, state.cache.stepDistribution);
+    }
+    if (state.cache.durationDistribution !== undefined && !isSessionScopeActive()) {
+      state.durationDistributionCleanup();
+      state.durationDistributionCleanup = renderDurationDistributionCard(durationDistributionCardElement, state.cache.durationDistribution);
     }
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);

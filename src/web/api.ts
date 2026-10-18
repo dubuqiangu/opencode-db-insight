@@ -48,7 +48,12 @@ import {
   MAX_DIRECTORY_LIMIT,
   queryDirectoryStats,
 } from "../db/directory-queries.ts"
-import { querySessionTokenDistribution } from "../db/session-distribution-queries.ts"
+import {
+  queryChildShare,
+  queryDurationDistribution,
+  querySessionTokenDistribution,
+  queryStepDistribution,
+} from "../db/session-distribution-queries.ts"
 import { renderSessionMarkdown } from "../export/markdown.ts"
 import {
   renderSessionSummaryCsv,
@@ -64,7 +69,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.20.0"
+export const INSIGHT_VERSION = "0.21.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -505,6 +510,33 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
           () => querySessionTokenDistribution(database),
         )
         return { statusCode: 200, body: distributionStats }
+      }
+      case "step-distribution": {
+        // v0.21.0 会话步数分布：与 token 分布同一「全部会话」口径与
+        // 缓存惯例（无参数单一键，60s TTL）。
+        const stepDistributionStats = cachedResult(
+          buildCacheKey("queryStepDistribution", []),
+          () => queryStepDistribution(database),
+        )
+        return { statusCode: 200, body: stepDistributionStats }
+      }
+      case "duration-distribution": {
+        // v0.21.0 会话墙钟时长分布（毫秒）：同一「全部会话」口径与
+        // 无参缓存惯例。
+        const durationDistributionStats = cachedResult(
+          buildCacheKey("queryDurationDistribution", []),
+          () => queryDurationDistribution(database),
+        )
+        return { statusCode: 200, body: durationDistributionStats }
+      }
+      case "child-share": {
+        // v0.21.0 子会话占比：同一「全部会话」口径、不吃 ?session=、
+        // 无参单一缓存键。
+        const childShareStats = cachedResult(
+          buildCacheKey("queryChildShare", []),
+          () => queryChildShare(database),
+        )
+        return { statusCode: 200, body: childShareStats }
       }
       case "sessionMessages": {
         const messageRecords = cachedResult(

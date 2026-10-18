@@ -103,6 +103,37 @@ export function formatDuration(seconds) {
 }
 
 /**
+ * 毫秒 → 紧凑时长（时长分布卡 x 轴刻度用）：与 formatDuration 的长中文
+ * 粒度不同，这里偏紧凑（直方图刻度只放得下短标签）——
+ *   <1s  "823ms"；<1m "37s"；<1h "3m 20s"；<1d "2h 15m"；更长 "3d 2h"。
+ * 余数单位为 0 时省略（"2h" 不写成 "2h 0m"）。非有限数/负数 → "—"。
+ */
+export function formatDurationMs(milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "—";
+  if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
+  const totalSeconds = milliseconds / 1000;
+  if (totalSeconds < 60) return `${Math.round(totalSeconds)}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const remainderSeconds = Math.round(totalSeconds % 60);
+  if (totalMinutes < 60) {
+    return remainderSeconds === 0 ? `${totalMinutes}m` : `${totalMinutes}m ${remainderSeconds}s`;
+  }
+  const totalHours = Math.floor(totalMinutes / 60);
+  const remainderMinutes = totalMinutes % 60;
+  if (totalHours < 24) {
+    return remainderHoursMessage(totalHours, remainderMinutes);
+  }
+  const totalDays = Math.floor(totalHours / 24);
+  const remainderHours = totalHours % 24;
+  return remainderHours === 0 ? `${totalDays}d` : `${totalDays}d ${remainderHours}h`;
+}
+
+/** <1d 的 hours/分钟 消息：余数分钟为 0 时省略。 */
+function remainderHoursMessage(totalHours, remainderMinutes) {
+  return remainderMinutes === 0 ? `${totalHours}h` : `${totalHours}h ${remainderMinutes}m`;
+}
+
+/**
  * 路径最后一段（目录展示名）：兼容 / 与 \ 分隔、末尾分隔符、
  * 重复分隔符。全部段落皆空时原样返回。后端契约已切好 name 字段，
  * 此函数供 mock 生成 name 与前端 name 缺失时兜底。

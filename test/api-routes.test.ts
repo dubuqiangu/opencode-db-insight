@@ -30,6 +30,7 @@ import {
   buildFakeSessionSummary,
   createFakeInsightDatabase,
 } from "./helpers/fake-insight-db.ts"
+import { querySessionList } from "../src/db/queries.ts"
 
 function requestContextFor(pathname: string): ApiRequestContext | null {
   const route = matchApiRoute(pathname)
@@ -639,6 +640,90 @@ test("/api/sessions rows carry the v0.20.0 enrichment fields (stepCount / addon 
     assert.equal(childSessionRow.parentSessionId, "ses_parent_origin")
     assert.equal(childSessionRow.childSessionCount, 0)
     assert.equal(childSessionRow.childTokensTotal, 0)
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("/api/sessions rows carry the wall-clock duration (v0.21.0) and degrade to null on non-positive times", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_duration_ok",
+          timeCreated: 1000,
+          timeUpdated: 61000, // 60 秒
+        }),
+        buildFakeSessionSummary({
+          id: "ses_duration_backwards",
+          timeCreated: 61000,
+          timeUpdated: 1000, // 时钟回拨 → null
+        }),
+        buildFakeSessionSummary({
+          id: "ses_duration_zero",
+          timeCreated: 0,
+          timeUpdated: 0, // 0 / 缺列 → null
+        }),
+      ],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+
+    const apiResponse = handleApiRequest(apiContextFor("/api/sessions", fakeDatabase))
+    assert.equal(apiResponse.statusCode, 200)
+    const sessionRows = apiResponse.body as SessionSummary[]
+    const rowById = (sessionId: string) =>
+      sessionRows.find((sessionRow) => sessionRow.id === sessionId)!
+    // 单位：毫秒（与 time_created / time_updated 一致存原始毫秒值）。
+    assert.equal(rowById("ses_duration_ok").durationMilliseconds, 60000)
+    assert.equal(rowById("ses_duration_backwards").durationMilliseconds, null)
+    assert.equal(rowById("ses_duration_zero").durationMilliseconds, null)
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("wall-clock duration is part of the basic shape: present even with step enrichment off; old wire degrades to undefined", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({
+          id: "ses_duration_basic",
+          timeCreated: 1000,
+          timeUpdated: 3001,
+        }),
+      ],
+      messagesBySessionId: {},
+      systemPromptBySessionId: {},
+    })
+
+    // includeStepModelIds=false（CSV / TUI 直调）：跳过 modelIds 的 JSON
+    // 富化，但 durationMilliseconds 由 parseSessionSummaryRow 直接派生，
+    // 属于「基础形状」，仍带。
+    const basicRows = querySessionList(
+      fakeDatabase,
+      50,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+    )!
+    assert.equal(basicRows.length, 1)
+    assert.equal(basicRows[0].durationMilliseconds, 2001)
+
+    // old wire 降级：旧宿主载荷缺该字段 → undefined，前端兜底渲染 "—"，
+    // 不影响既有消费者（additive 字段）。
+    const oldWireSummary = { ...buildFakeSessionSummary() } as Partial<SessionSummary>
+    delete oldWireSummary.durationMilliseconds
+    assert.equal(
+      (oldWireSummary as Partial<SessionSummary>).durationMilliseconds,
+      undefined,
+      "缺字段的旧载荷读出 undefined 而非崩坏",
+    )
   } finally {
     clearResultCache()
   }

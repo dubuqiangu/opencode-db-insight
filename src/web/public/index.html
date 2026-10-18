@@ -56,6 +56,9 @@
           <button type="button" data-toc-target="panel-compaction">Compaction</button>
           <button type="button" data-toc-target="panel-survival">Session survival</button>
           <button type="button" data-toc-target="panel-distribution">Session distribution</button>
+          <button type="button" data-toc-target="panel-step-distribution">Step distribution</button>
+          <button type="button" data-toc-target="panel-duration-distribution">Duration distribution</button>
+          <button type="button" data-toc-target="panel-child-share">Child share</button>
           <button type="button" data-toc-target="panel-todo">Todo</button>
           <button type="button" data-toc-target="panel-models">Model leaderboard</button>
           <button type="button" data-toc-target="panel-agents">Agent leaderboard</button>
@@ -173,15 +176,51 @@
             </div>
           </article>
 
+          <article id="panel-step-distribution" class="panel">
+            <header class="panel-head">
+              <div>
+                <h2>会话步数分布</h2>
+                <p class="panel-sub">单会话 assistant 消息数分布 · 不含零步会话 · 全部会话</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="session-step-distribution" aria-label="会话步数分布直方图"></div>
+            </div>
+          </article>
+
+          <article id="panel-duration-distribution" class="panel">
+            <header class="panel-head">
+              <div>
+                <h2>会话时长分布</h2>
+                <p class="panel-sub">墙钟跨度 = time_updated - time_created · 仅正值 · 全部会话</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="session-duration-distribution" aria-label="会话时长分布直方图"></div>
+            </div>
+          </article>
+
           <article id="panel-distribution" class="panel span-both">
             <header class="panel-head">
               <div>
                 <h2>会话 token 分布</h2>
-                <p class="panel-sub">tokens 总量分布 · 排除零消耗会话</p>
+                <p class="panel-sub">tokens 总量分布 · 不含零 tokens 会话 · 全部会话</p>
               </div>
             </header>
             <div class="panel-body">
               <div id="session-distribution" aria-label="会话 token 总量分布直方图"></div>
+            </div>
+          </article>
+
+          <article id="panel-child-share" class="panel span-both">
+            <header class="panel-head">
+              <div>
+                <h2>子代理开销占比</h2>
+                <p class="panel-sub">全部会话的子代理 token 占比 · 父会话榜仅统计直接子代</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="child-share" aria-label="子代理开销占比统计"></div>
             </div>
           </article>
         </section>

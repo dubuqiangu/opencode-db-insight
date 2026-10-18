@@ -53,7 +53,7 @@
  * 只显示该会话自身一行，排序/范围/导出全部锁定。
  */
 
-import { formatTokens, formatCount, formatPercent, formatDateTime, formatRelative, escapeHtml } from "../format.js";
+import { formatTokens, formatCount, formatPercent, formatDateTime, formatRelative, formatDurationMs, escapeHtml } from "../format.js";
 import { modelPalette } from "../theme.js";
 import { buildEmptyHtml, buildLoadingHtml } from "./state-views.js";
 import { sessionsCsvExportEntryHtml } from "./session-csv-export.js";
@@ -86,6 +86,7 @@ const COLUMNS = [
   { label: "命中率", sortKey: null, numeric: true, title: "严格口径 = cache.read / (input + cache.read + cache.write) · 分母为 0 或旧数据缺字段时无值（—）" },
   { label: "Reasoning", sortKey: null, numeric: true, title: "本会话 tokens.reasoning 累计（v0.20.0 富化字段，旧数据缺列时显示 —）" },
   { label: "步数", sortKey: null, numeric: true, title: "本会话的 assistant 消息数（v0.20.0 富化字段）" },
+  { label: "墙钟", sortKey: null, numeric: true, extraClass: "col-duration", title: "time_updated - time_created（毫秒→formatDurationMs；无正时长显示 —）" },
   { label: "Cost", sortKey: "cost", numeric: true },
 ];
 
@@ -154,6 +155,14 @@ function stepCountCell(session) {
     return `<span title="旧数据没有步数记录">—</span>`;
   }
   return formatCount(session.stepCount);
+}
+
+/** 墙钟时长仅展示正值；旧 wire 缺字段时不冒充零时长。 */
+function wallClockCell(session) {
+  const durationMilliseconds = session.durationMilliseconds;
+  return Number.isFinite(durationMilliseconds) && durationMilliseconds > 0
+    ? formatDurationMs(durationMilliseconds)
+    : "—";
 }
 
 /**
@@ -344,6 +353,7 @@ export function renderSessionList(
     const classTokens = [
       isInteractive ? "sortable" : "",
       column.numeric ? "num" : "",
+      column.extraClass ?? "",
       isSorted ? "sorted" : "",
     ].filter((classToken) => classToken !== "").join(" ");
     const arrow = isSorted ? `<span class="sort-arrow">${sortOrder === "asc" ? "▲" : "▼"}</span>` : "";
@@ -378,6 +388,7 @@ export function renderSessionList(
       <td class="num">${strictHitRateCell(session)}</td>
       <td class="num">${reasoningTokensCell(session)}</td>
       <td class="num">${stepCountCell(session)}</td>
+      <td class="num col-duration">${wallClockCell(session)}</td>
       <td class="num">${costCell(session.cost)}</td>
     </tr>`;
   }).join("");

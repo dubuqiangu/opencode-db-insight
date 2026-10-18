@@ -456,6 +456,11 @@ function parseSessionSummaryRow(
   stepModelIdSet: Set<string> | undefined,
 ): SessionSummary {
   const { modelId } = parseSessionModelColumn(rowRecord["model"])
+  // 墙钟时长（v0.21.0）先取 coerce 后的两个时间戳再相减：coerceNumber 对
+  // 缺列 / 非数值归 0，此时 time_updated > time_created 必为假 → null，
+  // 天然兜住「列缺失 / 0 / 时钟回拨」三种降级，无需额外判 0。
+  const timeCreatedValue = coerceNumber(rowRecord["time_created"])
+  const timeUpdatedValue = coerceNumber(rowRecord["time_updated"])
   return {
     id: coerceText(rowRecord["id"]),
     title: coerceText(rowRecord["title"]),
@@ -463,8 +468,11 @@ function parseSessionSummaryRow(
     modelIds: buildSessionModelIds(modelId, stepModelIdSet),
     agent: readAgentName(rowRecord["agent"]),
     directory: coerceText(rowRecord["directory"]),
-    timeCreated: coerceNumber(rowRecord["time_created"]),
-    timeUpdated: coerceNumber(rowRecord["time_updated"]),
+    timeCreated: timeCreatedValue,
+    timeUpdated: timeUpdatedValue,
+    // time_updated <= time_created（回拨 / 0）→ null，前端渲染 "—"。
+    durationMilliseconds:
+      timeUpdatedValue > timeCreatedValue ? timeUpdatedValue - timeCreatedValue : null,
     tokens:
       coerceNumber(rowRecord["tokens_input"]) +
       coerceNumber(rowRecord["tokens_output"]) +

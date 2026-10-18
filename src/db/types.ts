@@ -75,6 +75,14 @@ export interface SessionSummary {
   timeCreated: number
   timeUpdated: number
   /**
+   * 会话墙钟时长（毫秒，v0.21.0）= time_updated - time_created。单位与
+   * timeCreated / timeUpdated 一致（都是 epoch 毫秒），前端用 formatDuration
+   * 转人类可读。time_updated <= time_created（时钟回拨 / 0 / 缺列）→ null，
+   * 前端渲染 "—"。属于「基础形状」字段：由 parseSessionSummaryRow 直接
+   * 派生，不随 includeStepModelIds 富化开关关闭（CSV / TUI 直调也带）。
+   */
+  durationMilliseconds: number | null
+  /**
    * Σ tokens_input+tokens_output+tokens_cache_read from the session_v2
    * summary columns (the list is the only place they are used,
    * DESIGN §2.2). session_v2 KEEPS the message-level history that
@@ -155,6 +163,36 @@ export interface SessionMessageRecord {
   timeCreated: number
   timeUpdated: number
   data: unknown
+}
+
+/** 子会话占比 / 顶层子代树的载荷（v0.21.0 GET /api/child-share）。 */
+export interface ChildShareStats {
+  /** session_v2 全部会话数。 */
+  totalSessions: number
+  /** parent_id IS NOT NULL 的会话数。 */
+  childSessionCount: number
+  /** parent_id IS NULL 的会话数。 */
+  rootSessionCount: number
+  /** 子会话的 tokens 三列合计（input+output+cache_read，COALESCE 兜底）。 */
+  childTokens: number
+  /** 根会话的 tokens 三列合计 = totalTokens - childTokens。 */
+  rootTokens: number
+  /** 全部会话的 tokens 三列合计。 */
+  totalTokens: number
+  /** childTokens / totalTokens；totalTokens 为 0 时为 0。 */
+  childShare: number
+  /**
+   * 按「某会话直接子代 tokens 合计」降序的 top5 会话：tokens /
+   * childSessionCount 都是该父会话的直接子代归总，title / agent 取父会话
+   * 自身。凡有直接子代的会话均可入榜（不限定 root）。
+   */
+  topChildTrees: Array<{
+    sessionId: string
+    title: string
+    agent: string
+    tokens: number
+    childSessionCount: number
+  }>
 }
 
 /** Todo counters for GET /api/overview style widgets (DESIGN §5). */

@@ -495,3 +495,18 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] v0.20.0 发布门禁：终态回归 exit=0 + check 0 → 脱敏四类清零（119 tracked，12 新文件全为源/测试）→ tarball 探针过（68 包干净安装，474.7KB，新组件在包内）→ 61c8d51 → push + tag v0.20.0 远端核实（master == tag == 61c8d51）→ plugin update 全引用（首跑 exit=1 为已归因一过性，verify 内嵌同命令成功「Updated Server plugin」）→ verify-install 7/7 PASS（0.20.0 @ 61c8d51，src 77=77 / test 45=45）
 - [ ] 用户真机冒烟（v0.20.0）：会话行「只看此会话」→ 顶部 scope chip 出现、退化面板隐藏、保留面板只算该会话 → ✕ 退出恢复全部口径 → 新三列（命中率/Reasoning/步数）与子代理徽标 → 分布卡直方图与 p50/p90/p99 标线 → 回放页累计曲线/峰值上下文/分位徽章 → 会话删除后 scope 自动退出不弹错误卡
 - [ ] 交付合并「新增可视化指标」完整勾选清单（lib-4 同类工具 15 条 + lib-5 deepseek harness 8 条 + DB 探针 10 项，扣除已实现项）
+
+## v0.21.0 A 档指标（子代理占比 + 步数分布 + 墙钟时长，2026-10-16，fix-38 阵亡 / fix-38b 续做 + des-24 视觉并行）
+
+- [x] 用户勾选「先 A」：A 档三项 = ① 子代理开销占比卡 ② 步数分布直方图 ③ 墙钟时长（列 + 时长分布卡）；B 档（工具错误率时序 / 失败中断识别）下一轮；C 档（cache write 趋势 / 步均耗时）已淘汰
+- [x] **orchestrator 真库数据面探针（入档）**：子代理占比——964 会话中 612 子会话（63.5%）、子代 tokens 23.7 亿/51.9 亿 = **45.6%**；352 父会话仅 47 个（13.4%）有直接子代、单父最多 148 直接子代 → topChildTrees 看清 45.6% 被几棵大树吃掉。步数分布——754 会话、max 6969、对数半档 8 桶分布良好（179/114/200/185/66/6/3/1）、p50=17/p90=101/p99=394、129 单步会话。墙钟时长——950/964 有正时长、avg 263min/max 366h；`time_compacting` 全 0、`time_suspended` 仅 5 → 「活跃时长」无从精确，本轮只做墙钟列 + 时长分布，不引入估算口径
+- [~] **fix-38（A 档后端）**：死于 Telegram 群校验错误（「Verify your Telegram account」= 新基础设施故障，非代码），**死于半途**——纯函数泛化已落盘（`computeNumericDistribution` + `NumericDistributionBucket/Stats` 类型新增，保留 `computeSessionTokenDistribution` 兼容封装，行为零变化），但三端点/墙钟富化/测试全未做。**errored 会话不可复活** → 改派 fix-38b 只续做剩余（不重做已落盘泛化）
+- [x] fix-38b/fix-39（后端续做）：三端点 + 墙钟富化 + 15 测试落地；443 用例，唯一 fail 是 des-24 视觉半途产物（index.html 锚点已加、scope-visibility 未注册）
+- [x] des-24（A 档视觉）：分布卡泛化复用（`renderSharedDistributionCard` + `formatAxis`/`formatMean`/`sampleUnit`/`exclusionLabel`）+ 子代理占比卡（childShare 双段条 + topChildTrees top5）+ 三卡 section 布局 + 墙钟列 `.col-duration` + `formatDurationMs` 新增；末尾死于 Telegram 校验（基础设施），产物完整
+- [x] fix-40（接线 lane）：三新卡挂载（import/cleanup/锚点/loader/refreshAllSections/scope 守卫/重渲）+ data-source 三 fetch + 墙钟列表列——**但半途退出**，`wallClockCell` 与其 `<td>` 未落、scope-visibility 清单未纳三面板、两处测试断言未同步
+- [x] orchestrator 补缝：`wallClockCell` + 墙钟 `<td>`（修 12↔13 列错位）、`session-scope-visibility.js` HIDDEN 清单纳三面板、`web-session-scope.test.ts` L700 精确清单 + `web-components.test.ts` 13 列/列序断言
+- [x] **orchestrator 独立真库端到端核对**：三端点数字与裸 SQL 全等（step totalSessions/桶和/max、duration totalSessions/max、child-share 964/612/childShare/topChildTrees[0] 命中、sessions 墙钟字段相符）——先 19/19，步数锚定后复测 13/13 全绿
+- [x] **ora-13 审视裁决**：P2×4——①作用域在途请求竞态→fix-41 修（app.js 四 loader 过期守卫 + 20 用例）；②对数桶线性轴→des-25 改按桶序等宽 + 可滚动区 + sr-only 桶表；③时长卡文案与口径不符→des-25 改「墙钟跨度 = time_updated - time_created · 仅正值」；④TOP 榜称「子树」但只含直接子代→des-25 改「直接子代消耗 TOP5 · 按父会话汇总，不含孙代」。**另：步数分布未锚 session_v2（孤儿行）→ orchestrator 加 `session_id IN (SELECT id FROM session_v2)`（真库孤儿 0，行为不变，补夹具回归）**
+- [x] des-25 视觉审视裁决：P2×6 全部落地（等宽桶/窄屏滚动/child-share 两栏 DOM 与榜单容器/均值格式/按卡口径文案/可访问桶明细）；零新增硬编码色值
+- [x] 合流回归：**466/466（+23）** + check 0 + `git diff --check` 0（修 queries.ts / tasks.md CRLF 漂移 + types.ts 尾空格）
+- [ ] v0.21.0 发布门禁：脱敏扫描 → tarball 探针 → commit/push/tag → plugin update → verify-install 7/7 → 提示重启 TUI

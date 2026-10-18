@@ -227,6 +227,85 @@ function freshContainer(): StubElement {
   return new StubElement("div")
 }
 
+/* --------------------- session distribution cards --------------------- */
+
+test("distribution charts use equal-width logarithmic buckets and place percentiles within their real bucket", async () => {
+  const { renderDistributionCard } = await import("../src/web/public/components/distribution-card.js")
+  const container = freshContainer()
+  const cleanup = renderDistributionCard(container as unknown as HTMLElement, {
+    totalSessions: 3,
+    buckets: [
+      { start: 0, end: 1, count: 1 },
+      { start: 1, end: 10, count: 1 },
+      { start: 10, end: 1000000, count: 1 },
+    ],
+    percentiles: { p50: 5, p90: 500000, p99: 500000 },
+    mean: 166668.3,
+    max: 500000,
+  })
+  const histogramBars = container.querySelectorAll("rect.distribution-histogram-bar")
+  assert.equal(histogramBars.length, 3)
+  const barPositions = histogramBars.map((bar) => Number(bar.attributes.get("x")))
+  const barWidths = histogramBars.map((bar) => Number(bar.attributes.get("width")))
+  assert.ok(Math.abs(barPositions[1] - barPositions[0] - (barPositions[2] - barPositions[1])) < 0.2)
+  assert.ok(barWidths.every((width) => width === barWidths[0]))
+  // The thin DOM shim's attribute parser omits digits in attribute names (x1).
+  const p50LineMarkup = container.innerHTML.match(/<line class="distribution-quantile-line" x1="([\d.]+)"/)
+  assert.notEqual(p50LineMarkup, null)
+  const p50Position = Number(p50LineMarkup![1])
+  assert.ok(p50Position > barPositions[1] && p50Position < barPositions[2])
+  assert.match(container.innerHTML, /<details class="distribution-data-details">/)
+  assert.match(container.innerHTML, /<th scope="row" title="原始边界：1 – 10 tokens"><span aria-hidden="true">1 – 10<\/span><span class="distribution-sr-only">1 至 10 tokens<\/span><\/th>/)
+  assert.equal(typeof cleanup, "function")
+  cleanup()
+})
+
+test("step and duration cards use their own mean, sample and empty-state wording", async () => {
+  const { renderStepDistributionCard } = await import("../src/web/public/components/step-distribution-card.js")
+  const { renderDurationDistributionCard } = await import("../src/web/public/components/duration-distribution-card.js")
+  const stepContainer = freshContainer()
+  const durationContainer = freshContainer()
+  const stepCleanup = renderStepDistributionCard(stepContainer as unknown as HTMLElement, {
+    totalSessions: 3,
+    buckets: [{ start: 1, end: 10, count: 3 }],
+    percentiles: { p50: 2, p90: 3, p99: 3 },
+    mean: 2 / 3,
+    max: 3,
+  })
+  assert.match(stepContainer.innerHTML, /均值 <b class="num">0\.7<\/b> 步/)
+  assert.match(stepContainer.innerHTML, /已排除零 assistant 消息会话/)
+  const durationCleanup = renderDurationDistributionCard(durationContainer as unknown as HTMLElement, {
+    totalSessions: 1,
+    buckets: [{ start: 1000, end: 10000, count: 1 }],
+    percentiles: { p50: 2000, p90: 2000, p99: 2000 },
+    mean: 2000,
+    max: 2000,
+  })
+  assert.match(durationContainer.innerHTML, /已排除非正墙钟时长会话/)
+  assert.doesNotMatch(durationContainer.innerHTML, /零消耗|窗口内|首条|末条/)
+  renderDurationDistributionCard(durationContainer as unknown as HTMLElement, {
+    totalSessions: 0, buckets: [], percentiles: {}, mean: 0, max: 0,
+  })
+  assert.match(durationContainer.innerHTML, /time_updated - time_created/)
+  assert.equal(typeof stepCleanup, "function")
+  assert.equal(typeof durationCleanup, "function")
+})
+
+test("child share overview and direct-child ranking occupy distinct grid columns", async () => {
+  const { renderChildShareCard } = await import("../src/web/public/components/child-share-card.js")
+  const container = freshContainer()
+  const cleanup = renderChildShareCard(container as unknown as HTMLElement, {
+    totalSessions: 10, childSessionCount: 4, childTokens: 456, childShare: 0.456,
+    topChildTrees: [{ sessionId: "session/parent", title: "A & B", agent: "worker", tokens: 400, childSessionCount: 2 }],
+  })
+  assert.match(container.innerHTML, /child-share-overview[\s\S]*child-share-hero[\s\S]*child-share-dual-bar[\s\S]*child-share-meta[\s\S]*child-share-ranking/)
+  assert.match(container.innerHTML, /45\.6%/)
+  assert.match(container.innerHTML, /直接子代消耗 TOP5 · 按父会话汇总，不含孙代/)
+  assert.match(container.innerHTML, /href="#\/session\/session%2Fparent"/)
+  assert.match(container.innerHTML, /A &amp; B/)
+  assert.equal(typeof cleanup, "function")
+})
+
 /* --------------------- hour-heatmap component --------------------- */
 
 /** 168-item zero-filled wire array with a few cells overridden. */
@@ -1023,10 +1102,10 @@ test("renderSessionList renders the v0.13.0 入/出 columns beside the folded To
 
   renderSessionList(container, breakdownPayload, null, "time_updated", "desc", noopSortChange)
 
-  // Twelve headers total; the sortable set is still exactly the five backend
+  // Thirteen headers total; the sortable set is still exactly the five backend
   // whitelist keys — the v0.13.0 入/出 pair and the v0.20.0
-  // 命中率/Reasoning/步数 trio all join the non-sortable display columns.
-  assert.equal(container.querySelectorAll("th").length, 12, "the v0.20.0 session table has twelve columns")
+  // 命中率/Reasoning/步数 and 墙钟 join the non-sortable display columns.
+  assert.equal(container.querySelectorAll("th").length, 13, "the v0.21.0 session table has thirteen columns")
   assert.deepEqual(
     container.querySelectorAll("th.sortable").map((headerCell) => headerCell.dataset.sortKey),
     ["title", "time_created", "time_updated", "tokens", "cost"],
@@ -1053,8 +1132,8 @@ test("renderSessionList renders the v0.13.0 入/出 columns beside the folded To
   }
   assert.match(
     container.innerHTML,
-    />\s*Tokens\s*<\/th>[\s\S]*?>\s*命中率\s*<\/th>[\s\S]*?>\s*Reasoning\s*<\/th>[\s\S]*?>\s*步数\s*<\/th>[\s\S]*?>\s*Cost\s*<\/th>/,
-    "命中率/Reasoning/步数 must render between the folded Tokens total and Cost",
+    />\s*Tokens\s*<\/th>[\s\S]*?>\s*命中率\s*<\/th>[\s\S]*?>\s*Reasoning\s*<\/th>[\s\S]*?>\s*步数\s*<\/th>[\s\S]*?>\s*墙钟\s*<\/th>[\s\S]*?>\s*Cost\s*<\/th>/,
+    "命中率/Reasoning/步数/墙钟 must render between the folded Tokens total and Cost",
   )
 
   // Column order: the 入/出 pair sits between 更新时间 and the folded Tokens

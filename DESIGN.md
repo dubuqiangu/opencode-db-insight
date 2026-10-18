@@ -148,6 +148,9 @@ opencode-db-insight/
 | 逐日趋势 | 按本地时区分桶：步骤、input、read、output、命中率 | 折线/面积图数据 |
 | 小时热力 | 历史步骤数按 小时×星期 分桶（窗口回收下界与 trend 同构） | 作息画像（v0.2 已接线） |
 | 会话存活 | time_created→time_updated 时长分布、idle_outcome 计数 | 短命会话占比（v0.2 已接线） |
+| 子代理开销占比 | Σ子代 tokens / Σ(子代+根) tokens；子代 = `session_v2.parent_id IS NOT NULL` | v0.21.0；tokens 口径 = input+output+cache.read；另出「直接子代消耗 TOP5」父会话（只含直接子代，不含孙代） |
+| 会话步数分布 | 每会话 assistant 消息数分布（对数半档桶 + p50/p90/p99） | v0.21.0；锚定 `session_v2`（排除孤儿消息，与 token / 时长分布同锚） |
+| 会话墙钟时长 | `session_v2.time_updated - time_created`（仅正值会话）分布 + 会话列表列 | v0.21.0；**非「活跃时长」**——`time_compacting` 全 0、`time_suspended` 仅 5，无从精确，故只做墙钟不引入估算 |
 | 压缩事件 | compaction 消息计数（按会话/按日/按 reason） | 马拉松会话信号（v0.2 已接线） |
 | 目录维度 | 会话数 / assistant 步数 / tokens 三分（tokensInput / tokensOutput / tokensCacheRead，读 session_v2 汇总列）/ 最近活跃（MAX time_updated）按 session_v2.directory 聚合 | 全量口径，NULL/空目录排除出列表与 totals（v0.3 已接线）；tokens 三分为预聚合方案——step 子查询先 GROUP BY session_id 消除行扇出，SUM 不被步数放大（v0.15.0） |
 | todo 完成率 | completed / total | `todo` 表 |
@@ -164,6 +167,10 @@ opencode-db-insight/
 | `/api/tool-health` | 工具健康榜（v0.18.0）：session_message 工具段 `$.state.status` 两段式抽取聚合 `{tool, completed, error, running, total, errorRate}`，total 降序 |
 | `/api/hour-heatmap?days=90` | 7×24 时段热力网格（168 格零填充，weekday=0 周日为外层；v0.18.0 起前端可选 7/30/90/全部窗口，副文案随选择动态化） |
 | `/api/session-survival` | 会话存活统计（中位时长 / 短命占比 / idle 结局分布） |
+| `/api/session-distribution` | 会话 token 总量分布（对数半档桶 + p50/p90/p99），排除零消耗会话（v0.20.0） |
+| `/api/step-distribution` | 会话步数分布（每会话 assistant 消息数，锚定 session_v2 排除孤儿消息）（v0.21.0） |
+| `/api/duration-distribution` | 会话墙钟时长分布（毫秒，仅 `time_updated > time_created` 的正值会话）（v0.21.0） |
+| `/api/child-share` | 子代理开销占比（子/根会话数与 tokens、childShare）+ 直接子代消耗 TOP5 父会话（v0.21.0） |
 | `/api/compaction` | 压缩事件统计（总数 / 按 reason / 近 30 日逐日 / Top 10 会话） |
 | `/api/todo` | todo 完成率统计（供看板卡片） |
 | `/api/directories?limit=10` | 按项目目录统计（目录排行：会话数 / 步数 / 最近活跃；limit 钳位 1..50，全量口径无 days 窗口） |
@@ -189,6 +196,8 @@ opencode-db-insight/
 - **Agent 排行榜**（v0.18.0，`#agent-table` 全宽 span-both）：每 agent 会话数 / token 紧凑缩写 / 偏好工具 top-3 chip，tokens 降序；消费既有 `/api/agents`，零后端改动；表格复用 `.data-table` 语言。
 - **工具错误率**（v0.18.0）：工具 TOP10 条叠加错误色带（errorRate ≥10% 红 / <10% 琥珀）+ `err N%` 标注 + tooltip 增行；面板头 `#tool-health-caption` 摘要全局错误率（Σerror/Σtotal）；health 加载失败只清摘要行，条形图本体照常渲染（无色带）。
 - **范围选择器 ×2**（v0.18.0）：模型榜 7/30/90/全部（默认全部，`?days=` 下推后端）+ 限高 464px sticky 表头滚动容器；时段热力 7/30/90/全部（默认 90，副文案动态化——修「标 90 天视觉像一周」误读：实测 86% 步数集中近 30 天）。切换共用「序列守卫 + 分桶缓存 + 未命中保留旧表不闪骨架」模式。
+- **分布卡族**（v0.21.0）：token / 步数 / 时长三张对数半档直方图共用共享内部渲染器 `renderSharedDistributionCard(container, distribution, options)`（`formatAxis` / `formatMean` / `sampleUnit` / `exclusionLabel` 按卡配置；`renderDistributionCard` 仍为 token 卡公开签名）；横轴按**桶序等宽**（原线性轴会把小值桶挤成一团），配可横向滚动区（窄屏）与屏幕阅读器桶明细表；会话列表加「墙钟」列（`time_updated - time_created`，`formatDurationMs` 紧凑呈现，无正时长显示「—」）。
+- **子代理开销占比卡**（v0.21.0，`#panel-child-share` span-both）：双段占比条（子代 = `--accent` / 根 = `--blue`）+ 大号百分比 + 一句概括 + 直接子代消耗 TOP5 父会话清单（每行链到该会话回放）；左概览 / 右榜单两栏，窄屏折单栏。
 - **页首目录导航**（v0.18.0，`#toc-nav` 13 chip）：点击平滑滚动 + `.toc-flash` 短暂高亮（reduced-motion 降级）+ `scroll-margin` 防遮挡。
 
 ## 8. TUI 面
@@ -246,3 +255,11 @@ opencode-db-insight/
   - 是什么：会话级 cost 分布直方图，分位数刻度线用于识别成本异常会话。
   - 为何暂不采纳：本库 `cost` 字段常为 0（活库实测绝大多数行为 0），直方图退化为单柱零信息；tokens 换算金额属估算口径，做分位数刻线会把估算伪装成精确（与 §5 精度标签纪律相悖）。
   - 再触发条件：provider 侧开始落真实 cost，或引入公开定价表做系统化估算并带上精度标签之后。
+- **工具错误率时序 / 失败中断识别**（v0.21.0 B 档，**缓办**）
+  - 是什么：工具错误的逐日时序曲线；以及从 `session_message.data.error`（真库命中 1801 条）推断「失败中断」会话并计数。
+  - 为何暂缓：错误率时序需先改 `/api/tool-health` 口径（当前两段式 `$.state.status` 抽取未按时序落盘）；失败中断识别属推断型（无显式 status 列，`session_v2` 无 status/error），须带 🟡 精度标签且误报难界定。价值成立但优先级低于 A 档，且改动面跨聚合 + 前端，留待下一轮。
+  - 再触发条件：用户明确要「工具失败趋势 / 中断会话排查」时，连同口径修订一起做。
+- **cache write 趋势 / 步均耗时**（v0.21.0 C 档，**淘汰**）
+  - 是什么：cache write token 的逐日趋势；每步平均耗时指标。
+  - 为何淘汰：真库实测 cache write 仅 8/964 会话有值（`tokens_cache_write` 基本为 0），趋势线退化为零线；步均耗时与既有「墙钟时长」高度重叠，单列反而啰嗦（与 §5「不重复、不啰嗦」纪律相悖）。
+  - 再触发条件：cache write 覆盖率显著上升（如 provider 侧开始普遍落缓存写），或出现明确的步级性能排查诉求。

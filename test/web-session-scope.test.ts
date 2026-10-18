@@ -703,6 +703,9 @@ test("session-scope-visibility: the hidden/kept section lists are the expected d
     "panel-hour-heatmap",
     "panel-survival",
     "panel-distribution",
+    "panel-step-distribution",
+    "panel-duration-distribution",
+    "panel-child-share",
     "panel-agents",
     "panel-directories",
   ])
@@ -775,7 +778,7 @@ test("session-scope-visibility: the managed section set equals index.html's anch
     "utf8",
   )
 
-  // 反向断言（今天恰好 14↔14 全等）：index.html 里**每一个** section 锚点与
+  // 反向断言：index.html 里**每一个** section 锚点与
   // TOC 按钮都必须在受管清单（hidden ∪ kept）里，否则新增面板漏登记显隐映射
   // ——那条漏网的面板在作用域激活时不会被隐藏/保留，静默错位。
   const managedSectionIds = new Set([
