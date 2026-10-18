@@ -509,4 +509,5 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] **ora-13 审视裁决**：P2×4——①作用域在途请求竞态→fix-41 修（app.js 四 loader 过期守卫 + 20 用例）；②对数桶线性轴→des-25 改按桶序等宽 + 可滚动区 + sr-only 桶表；③时长卡文案与口径不符→des-25 改「墙钟跨度 = time_updated - time_created · 仅正值」；④TOP 榜称「子树」但只含直接子代→des-25 改「直接子代消耗 TOP5 · 按父会话汇总，不含孙代」。**另：步数分布未锚 session_v2（孤儿行）→ orchestrator 加 `session_id IN (SELECT id FROM session_v2)`（真库孤儿 0，行为不变，补夹具回归）**
 - [x] des-25 视觉审视裁决：P2×6 全部落地（等宽桶/窄屏滚动/child-share 两栏 DOM 与榜单容器/均值格式/按卡口径文案/可访问桶明细）；零新增硬编码色值
 - [x] 合流回归：**466/466（+23）** + check 0 + `git diff --check` 0（修 queries.ts / tasks.md CRLF 漂移 + types.ts 尾空格）
-- [ ] v0.21.0 发布门禁：脱敏扫描 → tarball 探针 → commit/push/tag → plugin update → verify-install 7/7 → 提示重启 TUI
+- [x] v0.21.0 发布门禁：脱敏扫描四类清零（131 tracked，新文件全为源/测试；`%USERPROFILE%` 命中为文档通用占位符）→ tarball 探针过（`opencode-db-insight-0.21.0.tgz`，497.2KB，三新组件在包内）→ commit `5b8b3da` → push + tag v0.21.0（master == tag == origin == `5b8b3da`）→ `plugin update`（`Updated Server plugin`）→ verify-install **7/7 PASS**（0.21.0 @ `5b8b3da`，src 80=80 / test 47=47）
+- [ ] 用户真机冒烟（v0.21.0）：重启 TUI 生效 → 步数分布卡（对数桶 p50/p90/p99 标线、窄屏可横向滚动）→ 时长分布卡（墙钟跨度文案、formatDurationMs）→ 子代理开销占比卡（45.6% 双段条 + 直接子代 TOP5 链到回放）→ 会话列表「墙钟」列与 13 列对齐 → 进入「只看此会话」三新卡随分布卡一起隐藏、顶栏无失败数（修竞态回归）
