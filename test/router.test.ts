@@ -26,6 +26,13 @@ test("matchApiRoute recognizes every static API route", () => {
   assert.deepEqual(matchApiRoute("/api/directories"), { routeName: "directories" })
   // v0.20.0 会话 tokens 总量分布端点：两段静态路由，无路径参数。
   assert.deepEqual(matchApiRoute("/api/session-distribution"), { routeName: "session-distribution" })
+  // v0.21.0 步数 / 时长分布与子会话占比端点：同款两段静态路由。
+  assert.deepEqual(matchApiRoute("/api/step-distribution"), { routeName: "step-distribution" })
+  assert.deepEqual(matchApiRoute("/api/duration-distribution"), { routeName: "duration-distribution" })
+  assert.deepEqual(matchApiRoute("/api/child-share"), { routeName: "child-share" })
+  // v0.22.0 B 档工具错误趋势 / 会话结局端点：同款两段静态路由。
+  assert.deepEqual(matchApiRoute("/api/tool-error-trend"), { routeName: "tool-error-trend" })
+  assert.deepEqual(matchApiRoute("/api/session-outcomes"), { routeName: "session-outcomes" })
   // v0.14.0 cache-control route: same two-segment shape, no parameters.
   assert.deepEqual(matchApiRoute("/api/refresh"), { routeName: "refresh" })
 })

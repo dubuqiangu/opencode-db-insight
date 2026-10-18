@@ -50,6 +50,7 @@
           <button type="button" data-toc-target="kpi-row">Overview</button>
           <button type="button" data-toc-target="panel-trend">Daily trend</button>
           <button type="button" data-toc-target="panel-tools">Tool calls</button>
+          <button type="button" data-toc-target="panel-tool-error-trend">Tool error trend</button>
           <button type="button" data-toc-target="panel-calendar">Calendar heatmap</button>
           <button type="button" data-toc-target="panel-hour-heatmap">Hourly heatmap</button>
           <button type="button" data-toc-target="panel-funnel">Token funnel</button>
@@ -59,6 +60,7 @@
           <button type="button" data-toc-target="panel-step-distribution">Step distribution</button>
           <button type="button" data-toc-target="panel-duration-distribution">Duration distribution</button>
           <button type="button" data-toc-target="panel-child-share">Child share</button>
+          <button type="button" data-toc-target="panel-session-outcomes">Session outcomes</button>
           <button type="button" data-toc-target="panel-todo">Todo</button>
           <button type="button" data-toc-target="panel-models">Model leaderboard</button>
           <button type="button" data-toc-target="panel-agents">Agent leaderboard</button>
@@ -92,6 +94,18 @@
             </header>
             <div class="panel-body">
               <div id="tool-bars" aria-label="工具调用次数排行"></div>
+            </div>
+          </article>
+
+          <article id="panel-tool-error-trend" class="panel span-12 reveal d3">
+            <header class="panel-head">
+              <div>
+                <h2>工具错误率趋势</h2>
+                <p class="panel-sub">按本地日 · 错误数 + 错误率 · 全部会话</p>
+              </div>
+            </header>
+            <div class="panel-body chart-body">
+              <div id="session-tool-error-trend" aria-label="工具错误数与错误率逐日趋势"></div>
             </div>
           </article>
 
@@ -223,6 +237,18 @@
               <div id="child-share" aria-label="子代理开销占比统计"></div>
             </div>
           </article>
+
+          <article id="panel-session-outcomes" class="panel span-both">
+            <header class="panel-head">
+              <div>
+                <h2>会话失败与中断</h2>
+                <p class="panel-sub">以错误收尾的会话 · 错误类型与最近记录 · 🟡 推断</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="session-outcomes" aria-label="会话错误收尾与错误类型统计"></div>
+            </div>
+          </article>
         </section>
 
         <section class="tables">
@@ -289,7 +315,7 @@
 
     <footer class="footnote reveal d6">
       <p>口径：今日总量 = Σ(input + output + cache.read)；缓存命中率 = cache.read / (cache.read + input)，会话严格口径另含 cache.write。</p>
-      <p>🟢 实值 = 直接来自数据库 · 🟡 估算 = 由 token 换算，仅作量级参考 · 历史遗留旧表（2026-09-23 前）不在统计范围内。</p>
+      <p>🟢 实值 = 直接来自数据库 · 🟡 推断/估算 = 由消息字段推断或由 token 换算，仅作参考 · 历史遗留旧表（2026-09-23 前）不在统计范围内。</p>
     </footer>
   </div>
 

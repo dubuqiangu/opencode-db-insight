@@ -37,6 +37,13 @@
  *                        totalSessions, directories[{directory, name, sessions,
  *                        steps, tokensInput, tokensOutput, tokensCacheRead,
  *                        lastActiveMs|null}]}，长尾形态、trend 三分守恒）
+ *   GET /api/tool-error-trend?days=N → getMockToolErrorTrend(days)
+ *                        （{days, points[{date, toolCalls, errors, errorRate}]}，
+ *                        本地日升序零填充，含空窗日与错误率尖峰日）
+ *   GET /api/session-outcomes → getMockSessionOutcomes()
+ *                        （{totalSessions, sessionsWithSteps, interruptedSessions,
+ *                        interruptedShare, byErrorType[], recentInterrupted[]}，
+ *                        Σ byErrorType.count === interruptedSessions）
  *   GET /api/session/:id/* → 回放 fixtures 见 mock-replay-data.js
  *
  * 全部数据由同一个确定性随机源在模块加载时生成一次，
@@ -681,6 +688,143 @@ function buildDirectoryStats() {
 }
 
 /* ------------------------------------------------------------
+ * GET /api/tool-error-trend?days=N —— v0.22.0 B 档
+ * 载荷 { days, points: [{ date, toolCalls, errors, errorRate }] }，与
+ * stats/tool-error-trend.ts 的 buildLocalDateKeys 同口径：本地日、升序、
+ * 连续、窗口内零填充（没有工具调用的日子 toolCalls = errors = errorRate
+ * = 0）。窗口 clamp [1, 366]（= CALENDAR_DAYS），与后端一致。
+ *
+ * 生成口径：toolCalls 由统一逐日序列的 steps 派生（每个 assistant 步骤
+ * 平均带若干次工具调用），再乘确定性抖动画出日常峰谷；另有随机抽出的
+ * 「空窗日」（toolCalls 恒为 0）与错误率尖峰日，让多日 / 峰谷 / 零值 /
+ * 高错误率这几条图表路径都能在离线预览里看到。errorRate 恒 = errors /
+ * toolCalls（toolCalls 为 0 时 0），与后端逐日重算口径一致。
+ * 与 trend 一样按需切片：窗口长度必须等于请求天数。
+ * ------------------------------------------------------------ */
+/** 请求天数的缺省值（与 data-source.js TOOL_ERROR_TREND_DEFAULT_DAYS 一致）。 */
+const TOOL_ERROR_TREND_DEFAULT_DAYS = 30;
+/** 每个 assistant 步骤平均携带的工具调用次数（派生工具调用量的比例）。 */
+const TOOL_CALLS_PER_STEP = 1.7;
+/** 空窗日概率（在确定性骨架上再随机撒一些零值日）。 */
+const IDLE_TOOL_DAY_PROBABILITY = 0.05;
+/**
+ * 确定性空窗骨架周期（天）：既保证任何 ≥13 天的窗口都含零值日（离线预览
+ * 必然暴露 0 值路径），又不落在整周上——13 mod 7 = 6，相邻空窗日错开星期，
+ * 图上不会假装出「每周固定一天归零」的伪规律。
+ */
+const IDLE_TOOL_DAY_PERIOD = 13;
+/** 错误率尖峰日概率与其错误率区间（峰谷同样体现在错误数上）。 */
+const ERROR_SPIKE_DAY_PROBABILITY = 0.08;
+const ERROR_RATE_BASELINE_RANGE = [0, 0.035];
+const ERROR_RATE_SPIKE_RANGE = [0.05, 0.11];
+
+function buildToolErrorTrendDailySeries() {
+  return simulated.points.map((dayPoint, dayIndex) => {
+    const isIdleDay = dayIndex % IDLE_TOOL_DAY_PERIOD === 0 || random() < IDLE_TOOL_DAY_PROBABILITY;
+    const toolCalls = isIdleDay
+      ? 0
+      : Math.round(dayPoint.steps * TOOL_CALLS_PER_STEP * randomInRange(0.75, 1.35));
+    const isSpikeDay = !isIdleDay && random() < ERROR_SPIKE_DAY_PROBABILITY;
+    const rawErrorRate = isSpikeDay
+      ? randomInRange(ERROR_RATE_SPIKE_RANGE[0], ERROR_RATE_SPIKE_RANGE[1])
+      : randomInRange(ERROR_RATE_BASELINE_RANGE[0], ERROR_RATE_BASELINE_RANGE[1]);
+    const errors = Math.round(toolCalls * rawErrorRate);
+    return {
+      date: dayPoint.date,
+      toolCalls,
+      errors,
+      errorRate: toolCalls > 0 ? errors / toolCalls : 0,
+    };
+  });
+}
+
+/* ------------------------------------------------------------
+ * GET /api/session-outcomes —— v0.22.0 B 档
+ * 载荷 { totalSessions, sessionsWithSteps, interruptedSessions,
+ *   interruptedShare, byErrorType: [{type, count}], recentInterrupted:
+ *   [{sessionId, title, errorType, errorMessage, timeUpdated}] }，自洽口径
+ * 对齐 stats/session-outcome.ts：
+ *  - interruptedShare = interruptedSessions / sessionsWithSteps（分母 0 → 0）；
+ *  - byErrorType 是**会话级**计数（每个收尾会话只按其终局错误类型贡献
+ *    一次），故 Σ count === interruptedSessions——用最大余数法按权重分摊，
+ *    天然守恒且全为非负整数；排序 count 降序 + type 升序（rankErrorTypes）；
+ *  - recentInterrupted 按 timeUpdated 降序（sessionId 升序决胜）取前 5
+ *    （= 后端 RECENT_INTERRUPTED_LIMIT = 卡片 MAX_RECENT_SESSIONS），
+ *    行的 id / 标题取自 mock 会话（离线预览点标题能进回放页），时间取
+ *    该会话的 timeUpdated，覆盖相对时间的多档文案。
+ *  - sessionsWithSteps / totalSessions 与 /api/sessions 同源
+ *    （sessionsPayload.total），三种「会话总数」视图在离线预览里仍恒等。
+ * 不消耗共享随机源：全部由权重与会话 mock 派生，基准载荷逐字节不受影响。
+ * ------------------------------------------------------------ */
+/** 有 assistant 步骤的会话占比（分母 = 至少一条 assistant 行的会话数）。 */
+const SESSIONS_WITH_STEPS_SHARE = 0.93;
+/** 有步骤会话里以错误收尾的占比（演示量级，🟡 推断口径）。 */
+const INTERRUPTED_SESSION_SHARE = 0.084;
+/** recentInterrupted 榜长（对齐后端 RECENT_INTERRUPTED_LIMIT = 5）。 */
+const RECENT_INTERRUPTED_LIMIT = 5;
+/** 终局错误类型桶：权重只用于最大余数法分摊，实际计数由占比推导。 */
+const SESSION_OUTCOME_ERROR_TYPE_WEIGHTS = [
+  { type: "provider.error", weight: 0.38 },
+  { type: "aborted", weight: 0.26 },
+  { type: "provider.quota", weight: 0.16 },
+  { type: "provider.timeout", weight: 0.12 },
+  { type: "unknown", weight: 0.08 },
+];
+/** 按类型对齐的终局错误文案（卡片 title 属性与回放跳转的悬浮说明）。 */
+const SESSION_OUTCOME_ERROR_MESSAGES = {
+  "provider.error": "Provider returned 500 internal server error",
+  "aborted": "Request aborted before the assistant reply completed",
+  "provider.quota": "Quota exceeded for the current billing period",
+  "provider.timeout": "Upstream request timed out after 60000ms",
+  "unknown": "Unknown failure while streaming the assistant message",
+};
+
+function buildSessionOutcomes() {
+  const totalSessions = sessionsPayload.total;
+  const sessionsWithSteps = Math.round(totalSessions * SESSIONS_WITH_STEPS_SHARE);
+  const interruptedSessions = Math.round(sessionsWithSteps * INTERRUPTED_SESSION_SHARE);
+
+  const errorTypeAllocations = distributeByLargestRemainder(
+    interruptedSessions,
+    SESSION_OUTCOME_ERROR_TYPE_WEIGHTS.map((errorTypeBucket) => errorTypeBucket.weight),
+  );
+  const byErrorType = SESSION_OUTCOME_ERROR_TYPE_WEIGHTS
+    .map((errorTypeBucket, bucketIndex) => ({ type: errorTypeBucket.type, count: errorTypeAllocations[bucketIndex] }))
+    .filter((errorTypeBucket) => errorTypeBucket.count > 0)
+    .sort((leftBucket, rightBucket) =>
+      rightBucket.count - leftBucket.count ||
+      (leftBucket.type < rightBucket.type ? -1 : leftBucket.type > rightBucket.type ? 1 : 0));
+
+  // 最近错误收尾：取 mock 会话里 timeUpdated 最新的若干条（排序键降序 +
+  // sessionId 升序决胜，与后端 ORDER BY 一致），终局错误类型按序轮转——保证
+  // 回放链接上的错误徽标覆盖多种类型，终局错误时间也覆盖多个相对档位。
+  const recentInterrupted = [...sessionsPayload.sessions]
+    .sort((leftSession, rightSession) =>
+      rightSession.timeUpdated - leftSession.timeUpdated ||
+      (leftSession.id < rightSession.id ? -1 : leftSession.id > rightSession.id ? 1 : 0))
+    .slice(0, RECENT_INTERRUPTED_LIMIT)
+    .map((session, recentIndex) => {
+      const errorType = SESSION_OUTCOME_ERROR_TYPE_WEIGHTS[recentIndex % SESSION_OUTCOME_ERROR_TYPE_WEIGHTS.length].type;
+      return {
+        sessionId: session.id,
+        title: session.title,
+        errorType,
+        errorMessage: SESSION_OUTCOME_ERROR_MESSAGES[errorType],
+        timeUpdated: session.timeUpdated,
+      };
+    });
+
+  return {
+    totalSessions,
+    sessionsWithSteps,
+    interruptedSessions,
+    interruptedShare: sessionsWithSteps > 0 ? interruptedSessions / sessionsWithSteps : 0,
+    byErrorType,
+    recentInterrupted,
+  };
+}
+
+/* ------------------------------------------------------------
  * 导出（data-source.js 以带延迟的 Promise 包装这些同步结果）
  * ------------------------------------------------------------ */
 const overviewPayload = buildOverview();
@@ -691,6 +835,10 @@ const sessionSurvivalPayload = buildSessionSurvival();
 const compactionPayload = buildCompaction();
 const todoStatsPayload = buildTodoStats();
 const directoryStatsPayload = buildDirectoryStats();
+// 工具错误趋势的逐日序列（全部窗口）在共享随机源的最后构建一次：
+// 放在既有载荷之后，基准载荷的随机序列逐字节不变。
+const toolErrorTrendDailySeries = buildToolErrorTrendDailySeries();
+const sessionOutcomesPayload = buildSessionOutcomes();
 
 export function getMockOverview() { return overviewPayload; }
 export function getMockTrend(days) { return buildTrend(days); }
@@ -773,6 +921,20 @@ export function getMockHourHeatmap(days) { return buildHourHeatmap(days); }
 export function getMockSessionSurvival() { return sessionSurvivalPayload; }
 export function getMockCompaction() { return compactionPayload; }
 export function getMockTodoStats() { return todoStatsPayload; }
+/**
+ * 按需切片（同 getMockTrend / getMockHourHeatmap）：窗口长度 === 请求天数
+ * （本地日、升序、连续、零填充），缺省 30 天、clamp [1, 366]；非有限数
+ * 回退缺省值，不把 NaN 散进契约。
+ */
+export function getMockToolErrorTrend(days = TOOL_ERROR_TREND_DEFAULT_DAYS) {
+  const requestedDays = Number(days);
+  const boundedDays = Number.isFinite(requestedDays)
+    ? Math.min(Math.max(Math.floor(requestedDays), 1), CALENDAR_DAYS)
+    : TOOL_ERROR_TREND_DEFAULT_DAYS;
+  return { days: boundedDays, points: toolErrorTrendDailySeries.slice(DAY_COUNT - boundedDays) };
+}
+/** 会话结局（全部会话口径）：由会话 mock 与权重派生，不消耗共享随机源。 */
+export function getMockSessionOutcomes() { return sessionOutcomesPayload; }
 /** limit 只截取 directories 列表，totalDirectories/totalSessions 仍是全量口径。 */
 export function getMockDirectoryStats(limit = 10) {
   const boundedLimit = Math.max(1, Math.floor(limit));

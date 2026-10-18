@@ -30,6 +30,10 @@ export const SESSION_SCOPE_HIDDEN_SECTION_IDS = [
   "panel-step-distribution",
   "panel-duration-distribution",
   "panel-child-share",
+  // v0.22.0：工具错误逐日趋势 / 会话结局同样是「全部会话」口径——单会话
+  // 视图里前者退化成单点、后者是跨会话的错误分布，故随分布卡一并隐藏。
+  "panel-tool-error-trend",
+  "panel-session-outcomes",
   "panel-agents",
   "panel-directories",
 ];

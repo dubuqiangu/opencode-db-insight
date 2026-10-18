@@ -54,6 +54,8 @@ import {
   querySessionTokenDistribution,
   queryStepDistribution,
 } from "../db/session-distribution-queries.ts"
+import { queryToolErrorTrend } from "../db/tool-error-trend-queries.ts"
+import { querySessionOutcome } from "../db/session-outcome-queries.ts"
 import { renderSessionMarkdown } from "../export/markdown.ts"
 import {
   renderSessionSummaryCsv,
@@ -69,7 +71,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.21.0"
+export const INSIGHT_VERSION = "0.22.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -279,6 +281,31 @@ function healthResponse(requestContext: ApiRequestContext): ApiResponsePayload {
 }
 
 /**
+ * Parse one bounded positive-integer window parameter and return both things
+ * its caller must keep in lockstep (P2-6 clamp-before-key discipline): the
+ * bounded value handed to the query, and the exact cache-key fragment that
+ * value must appear as. The four windowed routes (trend / hour-heatmap /
+ * directories / tool-error-trend) used to hand-copy that parse / clamp / key
+ * triple; one call site keeps a route's query window and its cache key from
+ * ever drifting apart (a drift silently changes which requests share an entry).
+ *
+ * cacheKeyParameters is a one-element array so a route either uses it as the
+ * whole key tail (queryToolErrorTrend, no trailing dimension) or spreads it
+ * ahead of a session filter dim (queryDailyTrend / queryHourHeatmap /
+ * directory-stats). Both shapes reproduce the historical key bytes exactly.
+ */
+export function boundedIntParamKey(
+  searchParams: URLSearchParams,
+  paramName: string,
+  defaultValue: number,
+  maxValue: number,
+): { boundedValue: number; cacheKeyParameters: number[] } {
+  const parsedValue = parsePositiveIntegerParam(searchParams, paramName, defaultValue)
+  const boundedValue = Math.min(parsedValue, maxValue)
+  return { boundedValue, cacheKeyParameters: [boundedValue] }
+}
+
+/**
  * Handle one matched API route. Pure bookkeeping around the cached queries;
  * unexpected database errors degrade to 500 {error} instead of crashing the
  * server process.
@@ -335,20 +362,29 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         return { statusCode: 200, body: overview }
       }
       case "trend": {
-        const trendDays = parsePositiveIntegerParam(requestContext.searchParams, "days", 30)
-        // Clamp before keying: both the cache key and the query see the
-        // same bounded window, so ?days=1000 and ?days=366 share one entry
-        // instead of spraying near-duplicates across the cache (P2-6).
-        const boundedTrendDays = Math.min(trendDays, MAX_TREND_DAYS)
+        // parse / clamp / key 三连收敛到 boundedIntParamKey（P2-6）：查询与
+        // 缓存键看到同一个收窄后的窗口，?days=1000 与 ?days=366 共享一条
+        // 条目，而不是各自喷一条近似重复项。
+        const trendWindow = boundedIntParamKey(
+          requestContext.searchParams,
+          "days",
+          30,
+          MAX_TREND_DAYS,
+        )
         const trendPoints = cachedResult(
-          buildCacheKey("queryDailyTrend", [boundedTrendDays, sessionFilterId ?? ""]),
-          () => queryDailyTrend(database, boundedTrendDays, sessionFilterId),
+          buildCacheKey("queryDailyTrend", [
+            ...trendWindow.cacheKeyParameters,
+            sessionFilterId ?? "",
+          ]),
+          () => queryDailyTrend(database, trendWindow.boundedValue, sessionFilterId),
         )
         return { statusCode: 200, body: trendPoints }
       }
       case "models": {
-        // Optional ?days= window: same parameter-handling trio as the
-        // trend route above (parse / clamp / key).
+        // Optional ?days= window PLUS a full-history sentinel: ?days=0 (the
+        // parse default) means "no window", so the trend route's plain
+        // parse / clamp / key helper cannot fold in here — the sentinel has
+        // to survive the clamp step.
         const modelWindowDays = parsePositiveIntegerParam(
           requestContext.searchParams,
           "days",
@@ -458,14 +494,19 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         return { statusCode: 200, body: todoStats }
       }
       case "hour-heatmap": {
-        const heatmapDays = parsePositiveIntegerParam(requestContext.searchParams, "days", 90)
-        // Same clamp-before-key discipline as the trend route (P2-6):
-        // the query clamps internally, so the key must clamp too or
-        // ?days=1000 and ?days=366 would cache the same result twice.
-        const boundedHeatmapDays = Math.min(heatmapDays, MAX_TREND_DAYS)
+        // 同 trend 的 clamped-key 纪律（P2-6），抽到 boundedIntParamKey。
+        const heatmapWindow = boundedIntParamKey(
+          requestContext.searchParams,
+          "days",
+          90,
+          MAX_TREND_DAYS,
+        )
         const heatmapCells = cachedResult(
-          buildCacheKey("queryHourHeatmap", [boundedHeatmapDays, sessionFilterId ?? ""]),
-          () => queryHourHeatmap(database, boundedHeatmapDays, sessionFilterId),
+          buildCacheKey("queryHourHeatmap", [
+            ...heatmapWindow.cacheKeyParameters,
+            sessionFilterId ?? "",
+          ]),
+          () => queryHourHeatmap(database, heatmapWindow.boundedValue, sessionFilterId),
         )
         return { statusCode: 200, body: heatmapCells }
       }
@@ -484,20 +525,21 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         return { statusCode: 200, body: compactionStats }
       }
       case "directories": {
-        const directoryLimit = parsePositiveIntegerParam(
+        // parse / clamp / key 三连收敛到 boundedIntParamKey（P2-6）；
+        // Key prefix "directory-stats" (not "queryDirectoryStats") is a
+        // deliberate, CHANGELOG-documented naming choice for this route.
+        const directoryWindow = boundedIntParamKey(
           requestContext.searchParams,
           "limit",
           DEFAULT_DIRECTORY_LIMIT,
+          MAX_DIRECTORY_LIMIT,
         )
-        // Clamp before keying (P2-6 discipline): the query clamps
-        // internally, so the cache key must carry the clamped value too
-        // or ?limit=999 and ?limit=50 would cache the same result twice.
-        // Key prefix "directory-stats" (not "queryDirectoryStats") is a
-        // deliberate, CHANGELOG-documented naming choice for this route.
-        const boundedDirectoryLimit = Math.min(directoryLimit, MAX_DIRECTORY_LIMIT)
         const directoryStats = cachedResult(
-          buildCacheKey("directory-stats", [boundedDirectoryLimit, sessionFilterId ?? ""]),
-          () => queryDirectoryStats(database, boundedDirectoryLimit, sessionFilterId),
+          buildCacheKey("directory-stats", [
+            ...directoryWindow.cacheKeyParameters,
+            sessionFilterId ?? "",
+          ]),
+          () => queryDirectoryStats(database, directoryWindow.boundedValue, sessionFilterId),
         )
         return { statusCode: 200, body: directoryStats }
       }
@@ -537,6 +579,32 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
           () => queryChildShare(database),
         )
         return { statusCode: 200, body: childShareStats }
+      }
+      case "tool-error-trend": {
+        // v0.22.0 B 档工具错误逐日趋势：「全部会话」口径，不吃 ?session=。
+        // 与 trend/heatmap 同一 parse/clamp/key 三连（P2-6），收敛到
+        // boundedIntParamKey：days 先按 MAX_TREND_DAYS 收窄再进缓存键，
+        // ?days=1000 与 ?days=366 共享一条，缺省 30。
+        const toolErrorTrendWindow = boundedIntParamKey(
+          requestContext.searchParams,
+          "days",
+          30,
+          MAX_TREND_DAYS,
+        )
+        const toolErrorTrend = cachedResult(
+          buildCacheKey("queryToolErrorTrend", toolErrorTrendWindow.cacheKeyParameters),
+          () => queryToolErrorTrend(database, toolErrorTrendWindow.boundedValue),
+        )
+        return { statusCode: 200, body: toolErrorTrend }
+      }
+      case "session-outcomes": {
+        // v0.22.0 B 档会话结局：「全部会话」口径、不吃 ?session=、无参
+        // 单一缓存键。
+        const sessionOutcome = cachedResult(
+          buildCacheKey("querySessionOutcome", []),
+          () => querySessionOutcome(database),
+        )
+        return { statusCode: 200, body: sessionOutcome }
       }
       case "sessionMessages": {
         const messageRecords = cachedResult(

@@ -706,6 +706,8 @@ test("session-scope-visibility: the hidden/kept section lists are the expected d
     "panel-step-distribution",
     "panel-duration-distribution",
     "panel-child-share",
+    "panel-tool-error-trend",
+    "panel-session-outcomes",
     "panel-agents",
     "panel-directories",
   ])

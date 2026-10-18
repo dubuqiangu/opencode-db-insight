@@ -9,6 +9,7 @@ import assert from "node:assert/strict"
 
 import {
   bucketDailyTrend,
+  buildLocalDateKeys,
   MAX_TREND_DAYS,
   toLocalDateKey,
 } from "../src/stats/daily-buckets.ts"
@@ -36,6 +37,22 @@ test("toLocalDateKey keeps local midnight and the day's last millisecond on the 
 
 test("toLocalDateKey returns an empty string for an invalid timestamp", () => {
   assert.equal(toLocalDateKey(Number.NaN), "")
+})
+
+test("buildLocalDateKeys yields one key per day, oldest first, ending today", () => {
+  const dateKeys = buildLocalDateKeys(3)
+  assert.equal(dateKeys.length, 3)
+  assert.equal(dateKeys[2], toLocalDateKey(Date.now()), "last key is today (local)")
+  assert.equal(dateKeys[0], toLocalDateKey(localNoonDaysAgo(2).getTime()))
+  assert.equal(new Set(dateKeys).size, 3, "consecutive distinct local days")
+})
+
+test("buildLocalDateKeys rejects non-positive/non-finite days and caps at MAX_TREND_DAYS", () => {
+  assert.deepEqual(buildLocalDateKeys(0), [])
+  assert.deepEqual(buildLocalDateKeys(-3), [])
+  assert.deepEqual(buildLocalDateKeys(Number.NaN), [])
+  assert.deepEqual(buildLocalDateKeys(Number.POSITIVE_INFINITY), [])
+  assert.equal(buildLocalDateKeys(1_000_000).length, MAX_TREND_DAYS)
 })
 
 test("bucketDailyTrend returns an empty series for zero or negative days", () => {

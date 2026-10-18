@@ -45,6 +45,15 @@
  *                                          end, count}], percentiles{p50,
  *                                          p90, p99}, mean, max}（v0.20.0，
  *                                          「全部会话」口径，不吃 ?session=）
+ *   GET /api/tool-error-trend?days=N    → {days, points[{date, toolCalls,
+ *                                          errors, errorRate}]}（v0.22.0，
+ *                                          缺省 30 / clamp [1,366]，
+ *                                          「全部会话」口径，不吃 ?session=）
+ *   GET /api/session-outcomes           → {totalSessions, sessionsWithSteps,
+ *                                          interruptedSessions,
+ *                                          interruptedShare, byErrorType[],
+ *                                          recentInterrupted[]}（v0.22.0，
+ *                                          「全部会话」口径，不吃 ?session=）
  *   GET /api/health              → { status, version, port, dbStatus, dbPath }
  *   GET /api/export/sessions.csv → CSV 附件下载（v0.8.0）：九列
  *                                  id,title,modelId,agent,directory,
@@ -78,6 +87,8 @@ import {
   getMockCompaction,
   getMockTodoStats,
   getMockDirectoryStats,
+  getMockToolErrorTrend,
+  getMockSessionOutcomes,
 } from "./mock-data.js";
 import { getMockSessionMessages, getMockSessionSystemPrompt } from "./mock-replay-data.js";
 
@@ -636,6 +647,47 @@ export async function fetchChildShare() {
     throw new Error("/api/child-share 返回空数据");
   }
   return childShare;
+}
+
+/** 工具错误逐日趋势的契约缺省窗口（天），与后端一致。 */
+export const TOOL_ERROR_TREND_DEFAULT_DAYS = 30;
+
+/**
+ * GET /api/tool-error-trend?days=N（v0.22.0）：按本地日的工具调用/错误数
+ * 与错误率的「全部会话」逐日趋势。days 缺省 30，前端与后端一样 clamp 到
+ * [1, 366]（复用 clampTrendDays）。载荷形状
+ * { days, points: [{ date, toolCalls, errors, errorRate }] }。端点不吃
+ * ?session=——作用域激活时由 app 层直接隐藏整个面板、不发请求，因此这里
+ * 没有 scope 参数。非对象 body 视为契约破坏（走区块错误态）。
+ * USE_MOCK 走 mock-data.js 的 getMockToolErrorTrend 缝（同 getMock* 纪律）：
+ * 离线预览能看到多日 / 峰谷 / 零值日的完整图表路径。
+ */
+export async function fetchToolErrorTrend(days = TOOL_ERROR_TREND_DEFAULT_DAYS) {
+  if (USE_MOCK) return resolveWithLatency(getMockToolErrorTrend(days));
+  const toolErrorTrend = await fetchJson(`/tool-error-trend?days=${clampTrendDays(days)}`);
+  if (toolErrorTrend === null || typeof toolErrorTrend !== "object" || Array.isArray(toolErrorTrend)) {
+    throw new Error("/api/tool-error-trend 返回空数据");
+  }
+  return toolErrorTrend;
+}
+
+/**
+ * GET /api/session-outcomes（v0.22.0）：会话结局（以错误收尾 / 干净收尾 /
+ * 错误类型分布 / 最近错误收尾会话）的「全部会话」统计。载荷形状见契约：
+ * { totalSessions, sessionsWithSteps, interruptedSessions,
+ *   interruptedShare, byErrorType: [{type,count}], recentInterrupted: [...] }。
+ * 端点不吃 ?session=——作用域激活时由 app 层直接隐藏整个面板、不发请求。
+ * 非对象 body 视为契约破坏（走区块错误态）。
+ * USE_MOCK 走 mock-data.js 的 getMockSessionOutcomes 缝（与其它列表 / 表格
+ * 卡同款）：离线预览能看到宽值域与 multi-type / 多行 DOM 路径，而不是恒空态。
+ */
+export async function fetchSessionOutcomes() {
+  if (USE_MOCK) return resolveWithLatency(getMockSessionOutcomes());
+  const sessionOutcomes = await fetchJson("/session-outcomes");
+  if (sessionOutcomes === null || typeof sessionOutcomes !== "object" || Array.isArray(sessionOutcomes)) {
+    throw new Error("/api/session-outcomes 返回空数据");
+  }
+  return sessionOutcomes;
 }
 
 /* ---------------- 会话回放数据 ---------------- */

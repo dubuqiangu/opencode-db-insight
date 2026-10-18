@@ -169,18 +169,31 @@ const skipReason: string | false =
     ? "node:sqlite unavailable — skipping tool-health query fixture tests"
     : false
 
+/** The one session_v2 row every anchored fixture message points at. */
+const TOOL_HEALTH_FIXTURE_SESSION_ID = "ses_tool_health_fixture"
+
+/**
+ * Session ids present in session_v2 for the fixture. The anchored scan
+ * (session_id IN (SELECT id FROM session_v2)) keeps only messages whose
+ * session_id is listed here — an unlisted id models an orphan message.
+ */
+const TOOL_HEALTH_FIXTURE_SESSION_IDS = [TOOL_HEALTH_FIXTURE_SESSION_ID]
+
 /** One fixture session_message row, before it is turned into a wire row. */
 interface ToolHealthMessageFixture {
   messageId: string
   type: string
   data: unknown
+  /** session_id of the message; defaults to the anchored fixture session. */
+  sessionId?: string
 }
 
 /**
  * Plant the fixture into a real :memory: SQLite with the wire
  * session_message shape (only the columns the tool-health scan reads:
  * type and data; the rest exist so future query changes fail loudly
- * instead of silently binding to a narrower table).
+ * instead of silently binding to a narrower table). session_v2 carries
+ * the anchored sessions so the scan's session_id sub-select matches.
  */
 function createToolHealthFixtureDatabase(
   messageFixtures: ToolHealthMessageFixture[],
@@ -197,13 +210,20 @@ function createToolHealthFixtureDatabase(
        data TEXT
      )`,
   )
+  // Only the anchoring column the scan sub-selects; extra columns are
+  // unwanted here (unlike session_message, this scan never reads them).
+  fixtureDatabase.exec("CREATE TABLE session_v2 (id TEXT PRIMARY KEY)")
+  const insertSessionStatement = fixtureDatabase.prepare("INSERT INTO session_v2 (id) VALUES (?)")
+  for (const sessionId of TOOL_HEALTH_FIXTURE_SESSION_IDS) {
+    insertSessionStatement.run(sessionId)
+  }
   const insertStatement = fixtureDatabase.prepare(
     "INSERT INTO session_message (id, session_id, type, data) VALUES (?, ?, ?, ?)",
   )
   for (const messageFixture of messageFixtures) {
     insertStatement.run(
       messageFixture.messageId,
-      "ses_tool_health_fixture",
+      messageFixture.sessionId ?? TOOL_HEALTH_FIXTURE_SESSION_ID,
       messageFixture.type,
       typeof messageFixture.data === "string"
         ? messageFixture.data
@@ -324,6 +344,38 @@ test("queryToolHealth drops tool parts whose name resolves to nothing", { skip: 
   ])
   try {
     const toolHealthStats = queryToolHealth(fixtureDatabase)
+    assert.deepEqual(toolHealthStats, [
+      { tool: "bash", completed: 1, error: 0, running: 0, total: 1, errorRate: 0 },
+    ])
+  } finally {
+    fixtureDatabase.close()
+  }
+})
+
+test("queryToolHealth excludes orphan messages whose session_id is absent from session_v2", { skip: skipReason }, () => {
+  // An assistant message carrying a tool part but whose session_id was
+  // never registered in session_v2 (会话已删、消息残留). The anchored scan
+  // must not count it; before the session_v2 anchor it did.
+  const fixtureDatabase = createToolHealthFixtureDatabase([
+    {
+      messageId: "msg_anchored_bash",
+      type: "assistant",
+      data: { content: [toolPart("bash", "completed")] },
+    },
+    {
+      messageId: "msg_orphan_edit",
+      type: "assistant",
+      sessionId: "ses_orphan_not_in_session_v2",
+      data: { content: [toolPart("edit", "error")] },
+    },
+  ])
+  try {
+    const toolHealthStats = queryToolHealth(fixtureDatabase)
+    assert.deepEqual(
+      toolHealthStats!.map((stat) => stat.tool),
+      ["bash"],
+      "the orphan session's edit call must not appear",
+    )
     assert.deepEqual(toolHealthStats, [
       { tool: "bash", completed: 1, error: 0, running: 0, total: 1, errorRate: 0 },
     ])

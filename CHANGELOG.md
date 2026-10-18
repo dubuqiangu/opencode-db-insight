@@ -8,6 +8,38 @@
 
 （暂无——下一批变更记录于此）
 
+## [0.22.0] - 2026-10-18 · B 档指标：工具错误率逐日趋势 + 失败中断识别
+
+> 用户勾选 B 档两项：① 工具错误率逐日时序 ② 失败中断会话识别（🟡 推断口径）。均沿用既有「全部会话」口径；错误率时序为**直读** wire（🟢），失败中断为**推断**（🟡），页脚图例与之自洽。
+
+### Added
+
+- **工具错误率趋势卡**：新端点 `GET /api/tool-error-trend?days=<n>`（缺省 30、clamp 1..366）——按本地日分桶的 `{date, toolCalls, errors, errorRate}`；抽取与 `/api/tool-health` 收敛到共享模块 `src/db/tool-part-extraction.ts`（路径列表 / `name` 胜 `tool` 回退 / 空名丢弃 / 非字符串 → `"unknown"` / fast-path 上限 8，单点定义），跨路由 Σ `toolCalls` / Σ `errors` **恒等**并由守恒测试锁定。真库实测 56277 calls / 5870 errors，与 tool-health 完全相等。
+- **会话失败与中断卡**：新端点 `GET /api/session-outcomes`（**复数**）——`{totalSessions, sessionsWithSteps, interruptedSessions, interruptedShare, byErrorType[], recentInterrupted[]}`；口径 = 会话**最后一条 assistant 对象消息**（`PARTITION BY session_id ORDER BY seq DESC` 取 rn=1）携带 `$.error` 即「以错误收尾」；`byErrorType` 为**会话级终局**错误类型（Σ count == `interruptedSessions`），`recentInterrupted` limit 5 按 `time_updated` 降序。真库实测 197/804 = 24.50%，byErrorType = aborted 84 / provider.error 49 / provider.auth 26 / unknown 15 / provider.transport 12 / provider.quota 8 / provider.internal 3。
+- **`buildLocalDateKeys(days)`**：从 `daily-buckets.ts` 导出本地日键生成器，`tool-error-trend` 与既有逐日 trend 共用（此前是两份逐字拷贝）。
+
+### Changed
+
+- **工具类端点会话锚定统一**：`/api/tool-health` 与 `/api/tool-error-trend` 的 `session_message` 扫描**无条件锚定 `session_v2`**（排除孤儿消息），与 v0.21.0 三个分布及 `session-outcomes` 同锚；真库孤儿为 0，锚定前后数字完全相等。
+- **`sessionsWithSteps` 口径统一**：`/api/session-outcomes` 的「有步骤的会话」改为与步数分布**同一集合**（`type='assistant'` 锚定 `session_v2` 去重计数），两张卡的「有步骤的会话」不再各说各话（parity 测试锁定）。
+- **api.ts 缓存键收敛**：trend / hour-heatmap / directories / tool-error-trend 四处「parse days + clamp + 入键」三连收敛为 `boundedIntParamKey(...)`，既有缓存键字节不变（测试逐字节锁定）。
+- **页脚精度图例扩档**：`🟡` 从「由 token 换算」扩为「推断/估算」；工具错误率趋势面板由误标的 🟡 改为不标记（实值），会话失败与中断面板保留 🟡 推断。
+
+### Removed
+
+- `SessionOutcomeStats.cleanSessions`：可由 `sessionsWithSteps - interruptedSessions` 派生且无 UI 消费，前端契约同步清理。
+- `RECENT_INTERRUPTED_LIMIT` 8 → 5（对齐卡片显示上限，不再白传丢弃）。
+
+### Fixed
+
+- 工具错误率趋势卡范围芯片：「请求在途时点回上一窗口」不再被渲染闭包守卫吞掉；缓存未命中时工具栏选中态即时重绘。
+- 错误率折线折叠开关改为模块级保活（原先每次重渲复位）。
+- `data-source` 的 `USE_MOCK` 分支补 `getMockToolErrorTrend` / `getMockSessionOutcomes` 缝（离线预览不再永远空态）。
+
+### Review
+
+- 双 oracle 只读审视（数据/后端层 + 前端/生命周期层）**无 P0**；P1/P2 已在收口轮全部落地。回归 **521/521** + `npm run check` 0 + `git diff --check` 0；真库端到端独立复核一致（守恒 56277/5870、步数会话 804/804、中断 197/197、byType Σ 197）。
+
 ## [0.21.0] - 2026-10-18 · A 档指标：子代理开销占比 + 步数分布 + 墙钟时长
 
 > 用户勾选 A 档三项：① 子代理开销占比卡 ② 步数分布直方图 ③ 墙钟时长（列表列 + 时长分布卡）。均沿用既有「全部会话」口径与对数半档分布语言，不引入估算口径（`time_compacting` 全 0 / `time_suspended` 仅 5 → 「活跃时长」无从精确，故只做墙钟）。

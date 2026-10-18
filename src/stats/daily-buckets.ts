@@ -49,6 +49,32 @@ export function toLocalDateKey(epochMilliseconds: number): string {
 }
 
 /**
+ * Consecutive local date keys, oldest first, ending with today: exactly
+ * `days` keys, or an empty list for a non-finite/non-positive `days`
+ * (days is floored and capped at MAX_TREND_DAYS first). Shared by every
+ * daily trend series so they all build the same axis — the tool-error
+ * trend (src/stats/tool-error-trend.ts) uses the identical window.
+ *
+ * The walk steps one local calendar day at a time from local midnight
+ * (`setDate`), not fixed 24h increments, so DST transitions neither
+ * duplicate nor skip a date key.
+ */
+export function buildLocalDateKeys(days: number): string[] {
+  if (!Number.isFinite(days) || days <= 0) return []
+  const boundedDays = Math.min(Math.floor(days), MAX_TREND_DAYS)
+
+  const localDateKeys: string[] = []
+  const todayLocalMidnight = new Date()
+  todayLocalMidnight.setHours(0, 0, 0, 0)
+  for (let daysBack = boundedDays - 1; daysBack >= 0; daysBack -= 1) {
+    const bucketDate = new Date(todayLocalMidnight.getTime())
+    bucketDate.setDate(bucketDate.getDate() - daysBack)
+    localDateKeys.push(toLocalDateKey(bucketDate.getTime()))
+  }
+  return localDateKeys
+}
+
+/**
  * Minimal per-step shape the daily bucketing needs. Deliberately structural:
  * the SQL-side lightweight trend rows satisfy it without carrying the full
  * AssistantStepRow, and full step rows keep satisfying it too.
@@ -81,18 +107,8 @@ export interface DailyTrendSample {
  * holds on every day by construction.
  */
 export function bucketDailyTrend(sampleRows: DailyTrendSample[], days: number): DailyTrendPoint[] {
-  if (!Number.isFinite(days) || days <= 0) return []
-  const boundedDays = Math.min(Math.floor(days), MAX_TREND_DAYS)
-
-  // Consecutive local date keys, oldest first, ending with today.
-  const dateKeys: string[] = []
-  const todayLocalMidnight = new Date()
-  todayLocalMidnight.setHours(0, 0, 0, 0)
-  for (let daysBack = boundedDays - 1; daysBack >= 0; daysBack -= 1) {
-    const bucketDate = new Date(todayLocalMidnight.getTime())
-    bucketDate.setDate(bucketDate.getDate() - daysBack)
-    dateKeys.push(toLocalDateKey(bucketDate.getTime()))
-  }
+  const dateKeys = buildLocalDateKeys(days)
+  if (dateKeys.length === 0) return [] // non-finite/non-positive window: empty series
 
   const bucketsByDate = new Map<string, DailyTrendPoint>()
   const modelTokensByDate = new Map<string, Map<string, number>>()

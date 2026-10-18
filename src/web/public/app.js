@@ -26,6 +26,8 @@ import {
   fetchStepDistribution,
   fetchDurationDistribution,
   fetchChildShare,
+  fetchToolErrorTrend,
+  fetchSessionOutcomes,
   fetchRefresh,
   fetchSessionSummaryById,
   SessionScopeNotFoundError,
@@ -49,6 +51,8 @@ import { renderDistributionCard } from "./components/distribution-card.js";
 import { renderStepDistributionCard } from "./components/step-distribution-card.js";
 import { renderDurationDistributionCard } from "./components/duration-distribution-card.js";
 import { renderChildShareCard } from "./components/child-share-card.js";
+import { renderToolErrorTrendCard } from "./components/tool-error-trend-card.js";
+import { renderSessionOutcomeCard } from "./components/session-outcome-card.js";
 import {
   renderSessionScopeChip,
   flashSessionScopeVanishedNotice,
@@ -79,6 +83,9 @@ const state = {
   modelRange: "all",
   // 活动时段热力窗口（?days= 值）：默认 90（契约缺省）。All 用 366。
   heatmapDays: 90,
+  // 工具错误逐日趋势窗口（?days= 值，v0.22.0）：默认 30（契约缺省）。
+  // 范围芯片（30/90/全部）切换即改这里，缓存按窗口分桶。
+  toolErrorDays: 30,
   healthStatus: "连接中…",
   // 后台定时刷新（v0.18.x）：间隔分钟数（0 = 关），持久化到 localStorage；
   // refreshInFlight 挡重入（上一轮没跑完时 tick 直接跳过）；
@@ -113,6 +120,13 @@ const state = {
     durationDistribution: undefined,
     // 子代理开销占比（v0.21.0）：全部会话口径，作用域激活时同样整体隐藏。
     childShare: undefined,
+    // 工具错误逐日趋势（v0.22.0）：全部会话口径，按窗口分桶缓存
+    // （toolErrorTrendByDays），toolErrorTrend 始终指向当前窗口（主题重渲用）；
+    // 作用域激活时面板整体隐藏、不取数，缓存保持 undefined。
+    toolErrorTrend: undefined,
+    toolErrorTrendByDays: {},
+    // 会话结局（v0.22.0）：全部会话口径，作用域激活时面板整体隐藏、不取数。
+    sessionOutcomes: undefined,
   },
   failedSections: new Set(),
   trendCleanup: () => {},
@@ -122,6 +136,9 @@ const state = {
   stepDistributionCleanup: () => {},
   durationDistributionCleanup: () => {},
   childShareCleanup: () => {},
+  // 工具错误趋势 / 会话结局卡 cleanup（v0.22.0）。
+  toolErrorTrendCleanup: () => {},
+  sessionOutcomesCleanup: () => {},
 };
 
 /* ---------- DOM 锚点 ---------- */
@@ -153,6 +170,8 @@ const distributionCardElement = document.getElementById("session-distribution");
 const stepDistributionCardElement = document.getElementById("session-step-distribution");
 const durationDistributionCardElement = document.getElementById("session-duration-distribution");
 const childShareCardElement = document.getElementById("child-share");
+const toolErrorTrendCardElement = document.getElementById("session-tool-error-trend");
+const sessionOutcomesCardElement = document.getElementById("session-outcomes");
 const rangeSwitchElement = document.getElementById("range-switch");
 const statusDotElement = document.getElementById("status-dot");
 const statusTextElement = document.getElementById("status-text");
@@ -206,6 +225,8 @@ const SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES = [
   "step-distribution",
   "duration-distribution",
   "child-share",
+  "tool-error-trend",
+  "session-outcomes",
 ];
 
 function isSessionScopeActive() {
@@ -265,6 +286,9 @@ function resetSectionCachesForScopeSwitch() {
   state.cache.stepDistribution = undefined;
   state.cache.durationDistribution = undefined;
   state.cache.childShare = undefined;
+  state.cache.toolErrorTrend = undefined;
+  state.cache.toolErrorTrendByDays = {};
+  state.cache.sessionOutcomes = undefined;
 }
 
 /**
@@ -782,6 +806,126 @@ async function loadChildShareSection() {
   }
 }
 
+/**
+ * 工具错误逐日趋势卡（v0.22.0）：全部会话口径（端点不吃 ?session=）。
+ * 初载 / 每轮自动刷新 / 卡内范围芯片（30/90/全部）都走本 loader。范围
+ * 切换与模型榜 / 热力同款纪律：按窗口分桶缓存（toolErrorTrendByDays），
+ * 未命中时保留旧图直到新数据到达（不闪骨架），晚到的过期响应由
+ * 「作用域版本 + 请求序号 + 请求窗口」三重守卫弹掉。作用域激活时该
+ * 面板整体隐藏（applySessionScopePanelVisibility），refreshAllSections /
+ * startInitialLoad 跳过本 loader；markSection 命名 tool-error-trend
+ * （进 SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES）。
+ */
+let toolErrorTrendLoadSequence = 0;
+
+async function loadToolErrorTrendSection() {
+  if (isSessionScopeActive()) return;
+  const requestScopeVersion = sessionScopeVersion;
+  const requestSequence = ++toolErrorTrendLoadSequence;
+  const requestDays = state.toolErrorDays;
+  try {
+    const toolErrorTrend = await fetchToolErrorTrend(requestDays);
+    if (requestScopeVersion !== sessionScopeVersion
+      || requestSequence !== toolErrorTrendLoadSequence
+      || requestDays !== state.toolErrorDays) return;
+    // 过期（作用域已切 / 已有更新请求 / 窗口已换）结果连缓存都不写：
+    // 作用域切换已把桶清空，晚到响应不得把它重新填上旧口径数据。
+    state.cache.toolErrorTrendByDays[requestDays] = toolErrorTrend;
+    state.toolErrorTrendCleanup();
+    state.cache.toolErrorTrend = toolErrorTrend;
+    state.toolErrorTrendCleanup = renderToolErrorTrendCard(
+      toolErrorTrendCardElement,
+      toolErrorTrend,
+      { onDaysChange: onToolErrorTrendDaysChange },
+    );
+    markSection("tool-error-trend", true);
+  } catch (error) {
+    if (requestScopeVersion !== sessionScopeVersion
+      || requestSequence !== toolErrorTrendLoadSequence
+      || requestDays !== state.toolErrorDays) return;
+    // 端点不吃 ?session=，不会撞上作用域 404；失败只做可达性降级
+    //（组件自带「数据不可达」块，无重试按钮，自动刷新兜底）。
+    state.toolErrorTrendCleanup();
+    state.toolErrorTrendCleanup = renderToolErrorTrendCard(
+      toolErrorTrendCardElement,
+      null,
+      { onDaysChange: onToolErrorTrendDaysChange },
+    );
+    state.cache.toolErrorTrend = null;
+    markSection("tool-error-trend", false);
+  }
+}
+
+/**
+ * 只重绘卡内范围工具栏：把 data-tool-error-days 命中 nextDays 的按钮置
+ * active + aria-pressed="true"，其余清掉。图表容器 / 图例 / 明细一律不动
+ * ——未命中缓存时旧图保留到新数据到达（与热力图 / 模型榜同款「不闪骨架」
+ * 纪律；差别只在热力图的切换器是 index.html 静态节点、本卡的由卡片组件
+ * 渲染，故按组件写下的 data-tool-error-days 契约属性选择按钮）。
+ */
+function applyToolErrorTrendDaysSelection(selectedDays) {
+  for (const rangeButton of toolErrorTrendCardElement.querySelectorAll("button[data-tool-error-days]")) {
+    const isSelected = Number(rangeButton.dataset.toolErrorDays) === selectedDays;
+    rangeButton.classList.toggle("active", isSelected);
+    rangeButton.setAttribute("aria-pressed", String(isSelected));
+  }
+}
+
+/**
+ * 卡内范围芯片回调：命中缓存即时整卡重渲；未命中时**先**把工具栏按
+ * nextDays 立即重绘（选中态 = 用户刚点的窗口，屏幕阅读器与视觉都不会
+ * 停在过期窗口），再由 loader 取数，响应到达后按既有纪律整体重渲。
+ * 命中判定前置：只有走 loader 的那条路需要先改工具栏。
+ */
+function onToolErrorTrendDaysChange(nextDays) {
+  state.toolErrorDays = nextDays;
+  const cachedTrend = state.cache.toolErrorTrendByDays[nextDays];
+  if (cachedTrend !== undefined) {
+    state.toolErrorTrendCleanup();
+    state.cache.toolErrorTrend = cachedTrend;
+    state.toolErrorTrendCleanup = renderToolErrorTrendCard(
+      toolErrorTrendCardElement,
+      cachedTrend,
+      { onDaysChange: onToolErrorTrendDaysChange },
+    );
+    // 缓存命中同样记成功（同 onModelRangeSelected 的理由：指针已指向
+    // 完好数据，先前的失败计数残留在顶栏会与数据面不一致）。
+    markSection("tool-error-trend", true);
+    return;
+  }
+  applyToolErrorTrendDaysSelection(nextDays);
+  loadToolErrorTrendSection();
+}
+
+/**
+ * 会话结局卡（v0.22.0）：全部会话口径，初载与每轮自动刷新取数；null/失败
+ * 走组件自带的降级块（无重试按钮——自动刷新即兜底），不走 renderError。
+ * 作用域激活时该面板整体隐藏，refreshAllSections / startInitialLoad 会
+ * 跳过本 loader；markSection 命名 session-outcomes（进
+ * SESSION_SCOPE_SKIPPED_SECTION_MARK_NAMES）。
+ */
+let sessionOutcomesLoadSequence = 0;
+
+async function loadSessionOutcomesSection() {
+  if (isSessionScopeActive()) return;
+  const requestScopeVersion = sessionScopeVersion;
+  const requestSequence = ++sessionOutcomesLoadSequence;
+  try {
+    const sessionOutcomes = await fetchSessionOutcomes();
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== sessionOutcomesLoadSequence) return;
+    state.sessionOutcomesCleanup();
+    state.cache.sessionOutcomes = sessionOutcomes;
+    state.sessionOutcomesCleanup = renderSessionOutcomeCard(sessionOutcomesCardElement, state.cache.sessionOutcomes);
+    markSection("session-outcomes", true);
+  } catch (error) {
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== sessionOutcomesLoadSequence) return;
+    state.sessionOutcomesCleanup();
+    state.sessionOutcomesCleanup = renderSessionOutcomeCard(sessionOutcomesCardElement, null);
+    state.cache.sessionOutcomes = null;
+    markSection("session-outcomes", false);
+  }
+}
+
 /* ---------- 模型 / 目录下钻过滤 ---------- */
 function onModelSelected(modelId) {
   state.modelFilter = modelId;
@@ -977,6 +1121,8 @@ async function refreshAllSections() {
         loadStepDistributionSection(),
         loadDurationDistributionSection(),
         loadChildShareSection(),
+        loadToolErrorTrendSection(),
+        loadSessionOutcomesSection(),
       ] : []),
     ]);
   } finally {
@@ -1108,6 +1254,8 @@ async function startInitialLoad() {
     loadStepDistributionSection();
     loadDurationDistributionSection();
     loadChildShareSection();
+    loadToolErrorTrendSection();
+    loadSessionOutcomesSection();
   }
 }
 
@@ -1150,6 +1298,20 @@ function init() {
     if (state.cache.durationDistribution !== undefined && !isSessionScopeActive()) {
       state.durationDistributionCleanup();
       state.durationDistributionCleanup = renderDurationDistributionCard(durationDistributionCardElement, state.cache.durationDistribution);
+    }
+    // 工具错误趋势卡（uPlot 内联配色）/ 会话结局卡（纯 DOM，无配色依赖），
+    // 主题切换后按缓存重渲；作用域激活时面板隐藏，跳过。
+    if (state.cache.toolErrorTrend !== undefined && !isSessionScopeActive()) {
+      state.toolErrorTrendCleanup();
+      state.toolErrorTrendCleanup = renderToolErrorTrendCard(
+        toolErrorTrendCardElement,
+        state.cache.toolErrorTrend,
+        { onDaysChange: onToolErrorTrendDaysChange },
+      );
+    }
+    if (state.cache.sessionOutcomes !== undefined && !isSessionScopeActive()) {
+      state.sessionOutcomesCleanup();
+      state.sessionOutcomesCleanup = renderSessionOutcomeCard(sessionOutcomesCardElement, state.cache.sessionOutcomes);
     }
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);

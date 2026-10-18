@@ -24,6 +24,9 @@ export type InsightRoute =
   | { routeName: "step-distribution" }
   | { routeName: "duration-distribution" }
   | { routeName: "child-share" }
+  // v0.22.0 B 档：工具错误逐日趋势与会话结局两个「全部会话」口径端点。
+  | { routeName: "tool-error-trend" }
+  | { routeName: "session-outcomes" }
   | { routeName: "refresh" }
   | { routeName: "sessionMessages"; sessionId: string }
   | { routeName: "sessionSystemPrompt"; sessionId: string }
@@ -74,6 +77,10 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
     case "step-distribution":
     case "duration-distribution":
     case "child-share":
+    // v0.22.0 B 档工具错误趋势 / 会话结局端点：同为「全部会话」口径、
+    // 不吃 ?session=，与 token 分布同一两段形状。
+    case "tool-error-trend":
+    case "session-outcomes":
     // "refresh" is the cache-control plane (v0.14.0), not a panel, but
     // it shares the same two-segment shape — and like the panel routes
     // it never carries path parameters.

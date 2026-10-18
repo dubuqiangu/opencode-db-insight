@@ -511,3 +511,21 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 合流回归：**466/466（+23）** + check 0 + `git diff --check` 0（修 queries.ts / tasks.md CRLF 漂移 + types.ts 尾空格）
 - [x] v0.21.0 发布门禁：脱敏扫描四类清零（131 tracked，新文件全为源/测试；`%USERPROFILE%` 命中为文档通用占位符）→ tarball 探针过（`opencode-db-insight-0.21.0.tgz`，497.2KB，三新组件在包内）→ commit `5b8b3da` → push + tag v0.21.0（master == tag == origin == `5b8b3da`）→ `plugin update`（`Updated Server plugin`）→ verify-install **7/7 PASS**（0.21.0 @ `5b8b3da`，src 80=80 / test 47=47）
 - [ ] 用户真机冒烟（v0.21.0）：重启 TUI 生效 → 步数分布卡（对数桶 p50/p90/p99 标线、窄屏可横向滚动）→ 时长分布卡（墙钟跨度文案、formatDurationMs）→ 子代理开销占比卡（45.6% 双段条 + 直接子代 TOP5 链到回放）→ 会话列表「墙钟」列与 13 列对齐 → 进入「只看此会话」三新卡随分布卡一起隐藏、顶栏无失败数（修竞态回归）
+
+## v0.22.0 B 档指标（工具错误率逐日趋势 + 失败中断识别）· 2026-10-18（fix-42 后端 / des-25 两卡 / fix-43 接线 + 收口轮 fix-44/fix-45/fix-46/fix-48/des-25）
+
+- [x] 用户选定 B 档两项：① 工具错误率**逐日时序**（🟢 直读 `$.state.status`）② **失败中断会话识别**（🟡 推断：会话最后一条 assistant 对象消息带 `$.error`）
+- [x] **契约钉死**：`GET /api/tool-error-trend?days=<n>`（缺省 30 / clamp 1..366 / **不吃 `?session=`** / 60s TTL）；`GET /api/session-outcomes`（**复数**路径，收口自后端原单数；不吃 `?session=`）；`byErrorType` 为**会话级终局**错误类型（Σ == `interruptedSessions`）；`recentInterrupted` 按 `time_updated` 降序；两端点锚定 `session_v2`
+- [x] **fix-42 后端**：两端点查询 + 纯函数（`bucketDailyToolErrors`、`rankErrorTypes`/`buildSessionOutcomeStats`）+ 路由（`router.ts` 联合类型/case、`api.ts` `cachedResult` 60s），25 用例
+- [x] **des-25 两卡**：`renderToolErrorTrendCard` / `renderSessionOutcomeCard` + CSS + `index.html` 两面板锚点与 TOC + 4 用例
+- [x] **fix-43 接线**：`data-source` 两 fetch + `app.js` loader/重渲 + scope 隐藏清单（`panel-tool-error-trend`/`panel-session-outcomes` 单会话口径隐藏）+ 16 用例
+- [x] **收口 1（fix-45）**：tool-part 抽取第三份拷贝收敛到 `src/db/tool-part-extraction.ts`（路径/回退/空名/`"unknown"`/fast-path 上限 8 单点）+ `buildLocalDateKeys` 从 `daily-buckets.ts` 导出共用 + **跨路由守恒测试**（Σ 29/9 手算锚定）
+- [x] **收口 2（fix-44）**：`sessionsWithSteps` 与步数分布**同集合**（parity 测试）+ 删 `cleanSessions` + `RECENT_INTERRUPTED_LIMIT` 8→5 + `boundedIntParamKey` 缓存键收敛（键逐字节锁定）+ 路由清单补齐
+- [x] **收口 3（fix-46 + des-25）**：芯片选中态缓存未命中即时重绘、契约清理、`USE_MOCK` 缝补齐（`getMockToolErrorTrend`/`getMockSessionOutcomes`）；错误率开关模块级保活、非法本地日剔除、「全部」复用 `MAX_TREND_DAYS`、条宽注解、hero 计数与占比互相兜底、芯片在途敞口闭合
+- [x] **收口 4（fix-48）**：`/api/tool-health` 与 `/api/tool-error-trend` **无条件锚定 `session_v2`**（与三分布/session-outcomes 同锚）+ 孤儿排除回归；真库探针证明锚定前后 56211/5870 **完全相等**（孤儿 0）
+- [x] **双 oracle 只读审视**：ora-16（数据/后端层）+ ora-15（前端/生命周期层）**无 P0**，P1/P2 已全部落地（含 🟡/🟢 图例扩档、孤儿锚定分叉、闭包守卫）
+- [x] **合流回归**：**521/521** + `npm run check` 0 + `git diff --check` 0 + 全改动文件纯 LF
+- [x] **orchestrator 独立真库端到端复核**：工具端点守恒 56277/5870 恒等；孤儿 assistant 0；`sessionsWithSteps` 804 == 步数分布 804 == 裸 SQL 804；`interruptedSessions` 197 == 裸 SQL 197，`byErrorType` Σ 197（缺 type 0 例）；`interruptedShare` 0.2450 == 197/804；榜单 len 5 且降序；`cleanSessions` 已不存在
+- [x] 版本回写：`package.json` / `INSIGHT_VERSION` → 0.22.0；DESIGN §3/§5/§6/§7/§13、CHANGELOG 0.22.0 段、本台账
+- [ ] v0.22.0 发布门禁：脱敏扫描（独立读输出）→ tarball 探针 → commit/push/tag → `opencode plugin update` → verify-install 7/7 → 用户完整重启 TUI
+- [ ] 用户真机冒烟（v0.21.0 + v0.22.0）：重启 TUI 生效 → 工具错误率趋势卡（范围芯片 7/30/90/全部、错误率折线折叠保活、🟢 实值副标题）→ 会话失败与中断卡（hero 197 中断 / 24.5%、终局错误类型条、最近中断清单链回放、🟡 推断副标题）→ 进入「只看此会话」两新卡隐藏 → 页脚图例 🟡 推断/估算

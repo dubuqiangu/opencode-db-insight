@@ -8,6 +8,7 @@ import assert from "node:assert/strict"
 import { mock } from "node:test"
 
 import {
+  boundedIntParamKey,
   DATABASE_UNAVAILABLE_MESSAGE,
   handleApiRequest,
   INSIGHT_VERSION,
@@ -20,7 +21,8 @@ import {
 import { INSIGHT_SERVICE_NAME } from "../src/insight-service-identity.ts"
 import type { SessionSummary, SqliteReadConnection } from "../src/db/types.ts"
 import { matchApiRoute } from "../src/web/router.ts"
-import { clearResultCache, resultCacheSize } from "../src/stats/cache.ts"
+import { buildCacheKey, clearResultCache, resultCacheSize } from "../src/stats/cache.ts"
+import { MAX_TREND_DAYS } from "../src/stats/daily-buckets.ts"
 import {
   SESSION_SUMMARY_CSV_CONTENT_TYPE,
   SESSION_SUMMARY_CSV_FILENAME,
@@ -56,6 +58,14 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/session-survival",
     "/api/compaction",
     "/api/directories",
+    // v0.20.0 / v0.21.0 distributions + share, then v0.22.0 B 档 endpoints:
+    // all「全部会话」两段路由，db 缺失时都走同一 503 短接。
+    "/api/session-distribution",
+    "/api/step-distribution",
+    "/api/duration-distribution",
+    "/api/child-share",
+    "/api/tool-error-trend",
+    "/api/session-outcomes",
     "/api/session/ses_example/messages",
     "/api/session/ses_example/system-prompt",
     "/api/export/sessions.csv",
@@ -330,6 +340,47 @@ test("trend and hour-heatmap cache keys clamp days to the 366-day bound (P2-6)",
   } finally {
     clearResultCache()
   }
+})
+
+test("boundedIntParamKey reproduces the exact trend / tool-error-trend cache keys byte-for-byte", () => {
+  // 缓存命中的契约就是键字符串的字节形状：param 顺序或类型一漂移就静默
+  // 改变命中（P2-6）。四个窗口路由收敛到 boundedIntParamKey 后，用这条锁死
+  // 「收窄值 = 查询窗口 = 键片段」三者一致——至少 trend 与 tool-error-trend。
+  const trendWindow = boundedIntParamKey(
+    new URLSearchParams("days=1000"),
+    "days",
+    30,
+    MAX_TREND_DAYS,
+  )
+  assert.deepEqual(trendWindow, { boundedValue: 366, cacheKeyParameters: [366] })
+  // days 在前、session 过滤维在后，session 缺省为 ""（历史键形状）。
+  assert.equal(
+    buildCacheKey("queryDailyTrend", [...trendWindow.cacheKeyParameters, ""]),
+    'queryDailyTrend:[366,""]',
+  )
+  assert.equal(
+    buildCacheKey("queryDailyTrend", [...trendWindow.cacheKeyParameters, "ses_x"]),
+    'queryDailyTrend:[366,"ses_x"]',
+  )
+
+  // Missing/garbage days keeps the 30-day default and still clamps.
+  const defaultTrendWindow = boundedIntParamKey(new URLSearchParams(), "days", 30, MAX_TREND_DAYS)
+  assert.equal(
+    buildCacheKey("queryDailyTrend", [...defaultTrendWindow.cacheKeyParameters, ""]),
+    'queryDailyTrend:[30,""]',
+  )
+
+  // tool-error-trend's key tail is the bare clamped number (no trailing dim).
+  const toolErrorTrendWindow = boundedIntParamKey(
+    new URLSearchParams("days=1000"),
+    "days",
+    30,
+    MAX_TREND_DAYS,
+  )
+  assert.equal(
+    buildCacheKey("queryToolErrorTrend", toolErrorTrendWindow.cacheKeyParameters),
+    "queryToolErrorTrend:[366]",
+  )
 })
 
 test("v0.3-A directories route is registered and answers 200 with the contract body", () => {
