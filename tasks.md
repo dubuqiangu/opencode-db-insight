@@ -527,5 +527,5 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] **合流回归**：**521/521** + `npm run check` 0 + `git diff --check` 0 + 全改动文件纯 LF
 - [x] **orchestrator 独立真库端到端复核**：工具端点守恒 56277/5870 恒等；孤儿 assistant 0；`sessionsWithSteps` 804 == 步数分布 804 == 裸 SQL 804；`interruptedSessions` 197 == 裸 SQL 197，`byErrorType` Σ 197（缺 type 0 例）；`interruptedShare` 0.2450 == 197/804；榜单 len 5 且降序；`cleanSessions` 已不存在
 - [x] 版本回写：`package.json` / `INSIGHT_VERSION` → 0.22.0；DESIGN §3/§5/§6/§7/§13、CHANGELOG 0.22.0 段、本台账
-- [ ] v0.22.0 发布门禁：脱敏扫描（独立读输出）→ tarball 探针 → commit/push/tag → `opencode plugin update` → verify-install 7/7 → 用户完整重启 TUI
+- [x] v0.22.0 发布门禁（2026-10-19）：脱敏扫描四类清零（136 tracked，新文件全为源/测试；`%USERPROFILE%` 为文档占位符、`provider.internal` 为 `\.internal\b` 误报）→ tarball 探针过（`opencode-db-insight-0.22.0.tgz`，536.3KB / 145 文件，两新卡 + 三新查询模块在包内）→ commit `4832d21` → push + tag v0.22.0（master == tag == origin == `4832d21`）→ `plugin update`（`Updated Server plugin "opencode-db-insight"`）→ verify-install **7/7 PASS**（0.22.0 @ `4832d21`，src 87=87 / test 51=51）
 - [ ] 用户真机冒烟（v0.21.0 + v0.22.0）：重启 TUI 生效 → 工具错误率趋势卡（范围芯片 7/30/90/全部、错误率折线折叠保活、🟢 实值副标题）→ 会话失败与中断卡（hero 197 中断 / 24.5%、终局错误类型条、最近中断清单链回放、🟡 推断副标题）→ 进入「只看此会话」两新卡隐藏 → 页脚图例 🟡 推断/估算
