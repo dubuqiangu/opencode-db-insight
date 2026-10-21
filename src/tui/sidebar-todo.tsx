@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 /**
- * Session todo block for the host TUI right sidebar (v0.23.0).
+ * Session todo block for the host TUI right sidebar (v0.24.0).
  *
  * Slot: `sidebar.content` (official channel, see the host's own
  * `packages/tui/src/feature-plugins/sidebar/mcp.tsx`).

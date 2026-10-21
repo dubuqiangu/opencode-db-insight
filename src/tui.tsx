@@ -3,7 +3,7 @@
  * Command registration lives in src/tui/command-registry.ts; this file
  * just wires it into the plugin lifecycle.
  *
- * v0.23.0: the sidebar todo block is loaded through a dynamic import on
+ * v0.24.0: the sidebar todo block is loaded through a dynamic import on
  * purpose. `src/tui/sidebar-todo.tsx` is the only module in this plugin that
  * needs the host-provided `@opentui/solid` / `solid-js` runtime, and that
  * runtime is resolved by the host at async-import time. Loading it lazily

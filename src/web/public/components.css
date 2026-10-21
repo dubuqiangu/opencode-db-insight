@@ -146,7 +146,7 @@
   border-collapse: collapse;
   font-size: 12.5px;
   white-space: nowrap;
-  /* v0.23.0: honour the <colgroup> widths each table now declares. With the
+  /* v0.24.0: honour the <colgroup> widths each table now declares. With the
      default auto layout those widths are only suggestions, so a long model id
      still stole space from the numeric columns. */
   table-layout: fixed;

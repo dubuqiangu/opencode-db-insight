@@ -213,7 +213,7 @@ opencode-db-insight/
 - `/insight-export [会话ID]`：无参数时弹出 `dialog.select` 列最近 20 个会话；导出到**当前工作目录** `./insight-exports/<YYYYMMDD-HHmmss>-<slug>.md`，角色分节（`## 🧑 用户` / `## 🤖 助手` / reasoning 引用块 / 工具调用代码块）。
 - `/insight-refresh`（v0.14.0）：清空 **server 进程**内 60s 统计结果缓存。TUI 与 server 是两个插件 flavor、两个进程——命令内直接 import `clearResultCache` 清的只会是 TUI 进程自己的空 Map（静默 no-op），故走**跨进程 fetch 回环**：探测看板端口（并发 `GET http://127.0.0.1:18789..18798/api/health`，仅认带本插件服务标识的响应，见 src/tui/discover-dashboard-port.ts）→ `GET http://127.0.0.1:{port}/api/refresh`（约 5s 超时防御）；成功 toast「已清除 N 条统计缓存（看板刷新页面后生效）」，无响应/超时/非 200/坏 JSON 全降级 error toast，永不抛。
 
-### 8.1 右侧栏「Todos」块（v0.23.0）
+### 8.1 右侧栏「Todos」块（v0.24.0）
 
 挂在宿主右侧栏的 `sidebar.content` 槽位（与官方内置 `packages/tui/src/feature-plugins/sidebar/mcp.tsx` 同一通道），落在宿主原生分区之下。
 
@@ -242,7 +242,7 @@ opencode-db-insight/
 
 ## 11. 验证方法
 
-- 语法：`npm run check` —— server 入口 `npx esbuild src/index.ts`；TUI 入口 `--bundle --platform=node --jsx-import-source=@opentui/solid`（`--external:solid-js` / `--external:@opentui/*`），并断言产物引用 `@opentui/solid/jsx-runtime`、不得出现 `react/jsx-runtime`（v0.23.0 起，防止 JSX 被解析到 React 运行时）；
+- 语法：`npm run check` —— server 入口 `npx esbuild src/index.ts`；TUI 入口 `--bundle --platform=node --jsx-import-source=@opentui/solid`（`--external:solid-js` / `--external:@opentui/*`），并断言产物引用 `@opentui/solid/jsx-runtime`、不得出现 `react/jsx-runtime`（v0.24.0 起，防止 JSX 被解析到 React 运行时）；
 - 单元：`node:test` 覆盖 stats 纯函数（命中率、分桶、模型指标、指纹）；
 - 集成：`curl http://127.0.0.1:<port>/api/overview` 等逐路由实测（用本机真实库）；
 - 端到端：`opencode plugin update` + 重启，实测斜杠命令、面板、导出、降级路径（db 缺失时 API 返回 503 文案）。

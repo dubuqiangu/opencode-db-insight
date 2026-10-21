@@ -1,5 +1,5 @@
 /**
- * Type-check gate for the modules this round added (v0.23.0).
+ * Type-check gate for the modules this round added (v0.24.0).
  *
  * The repo as a whole has never been type-checked: `npm test` runs node:test
  * directly and `npm run check` only proves the esbuild bundle resolves

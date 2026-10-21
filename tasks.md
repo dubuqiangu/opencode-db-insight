@@ -539,9 +539,10 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 侧栏块 `src/tui/sidebar-todo.tsx`：`sidebar.content` slot + `storage.store("session-todo.view")` 持久化折叠态 + 1s tick 驱动重读 + 全动态读取走函数子节点；多页 `‹ n/m ›` 翻页；切会话页码归零；连接 open→finally close
 - [x] `src/tui.tsx` fail-safe 接线：动态 import + catch，侧栏加载失败不牵连 `/insight` 命令
 - [x] 构建门：新增 `tsconfig.json`（`jsxImportSource: @opentui/solid`）；`npm run check` 改 `--bundle --platform=node --jsx-import-source=@opentui/solid` 并断言产物引用 `@opentui/solid/jsx-runtime`、禁 `react/jsx-runtime`
+- [x] 构建门**真正生效**（v0.24.0）：`tsconfig.json` 原先不被任何脚本调用，而 `tsc` 全仓有约 300 个既有错误。现拆出 `check:types` 并串进 `check`，`include` 收窄到本轮 4 个模块，补齐 `allowImportingTsExtensions` + `skipLibCheck`；`sidebar-todo.tsx` 经具名辅助 `live()` 进入 strict 门
 - [x] **决定性证据**：esbuild bundle 产物引用 `@opentui/solid/jsx-runtime`（非 react）→ 裸 TSX 路线本机可行；`npm run check` exit 0；`npm test` 530/530；改动文件全 LF 无 BOM
 - [ ] **真机冒烟（待用户完整重启）**：侧栏 Todos 块出现 → 标题行点击即时 ▼/▶ → 折叠态重启后保留 → 每页 4 条 + `‹ n/m ›` 可翻 → `in_progress` 在首位 → 全部 completed 时整块消失 → 新 todo 写入后 1s 内出现 → 切换会话页码归零 → `/insight` 命令仍正常（验证 fail-safe 未误伤）
-- [ ] 发布：脱敏扫描（独立一步、先读输出）→ commit + push + tag v0.23.0 → `plugin update` → `verify-install.ps1` 全绿
+- [ ] 发布：脱敏扫描（独立一步、先读输出）→ commit + push + tag v0.24.0 → `plugin update` → `verify-install.ps1` 全绿
 - [ ] 台账待补：DESIGN §11 的 check 命令描述、README 的侧栏说明
 ## v0.23.0 追加：参考项目归档 + 宽表列宽（2026-10-20）
 
