@@ -239,6 +239,15 @@ function createTodoFixtureDatabase(
   return fixtureDatabase
 }
 
+function createSessionV2Table(
+  fixtureDatabase: SqliteReadWriteConnection,
+  sessionIds: readonly string[],
+): void {
+  fixtureDatabase.exec("CREATE TABLE session_v2 (id TEXT PRIMARY KEY)")
+  const insertSession = fixtureDatabase.prepare("INSERT INTO session_v2 (id) VALUES (?)")
+  for (const sessionId of sessionIds) insertSession.run(sessionId)
+}
+
 test("querySessionTodos scopes by session_id, orders by position, maps columns", { skip: skipReason }, () => {
   const fixtureDatabase = createTodoFixtureDatabase({
     ses_target: [
@@ -274,6 +283,50 @@ test("querySessionTodos scopes by session_id, orders by position, maps columns",
 
     // A session with no rows yields an empty list, not null.
     assert.deepEqual(querySessionTodos(fixtureDatabase, "ses_absent"), [])
+  } finally {
+    fixtureDatabase.close()
+  }
+})
+
+test("querySessionTodos anchors on session_v2 so a session removed from it cannot keep a Todos block", { skip: skipReason }, () => {
+  const fixtureDatabase = createTodoFixtureDatabase({
+    ses_live: [
+      { content: "still here", status: "in_progress", priority: "high", position: 1, timeCreated: 100, timeUpdated: 130 },
+    ],
+    // Present in the legacy `session` table but gone from `session_v2`: the todo
+    // row survives because the foreign key points at `session`, not `session_v2`.
+    ses_stray: [
+      { content: "orphan work", status: "pending", priority: "high", position: 1, timeCreated: 200, timeUpdated: 230 },
+    ],
+  })
+  try {
+    createSessionV2Table(fixtureDatabase, ["ses_live"])
+
+    assert.deepEqual(
+      querySessionTodos(fixtureDatabase, "ses_live").map((item) => item.content),
+      ["still here"],
+    )
+    // Without the anchor this returned the orphan row, and the sidebar showed a
+    // Todos block for a session whose replay page reports "旧表会话".
+    assert.deepEqual(querySessionTodos(fixtureDatabase, "ses_stray"), [])
+  } finally {
+    fixtureDatabase.close()
+  }
+})
+
+test("querySessionTodos degrades to the unanchored query when the database has no session_v2 table", { skip: skipReason }, () => {
+  const fixtureDatabase = createTodoFixtureDatabase({
+    ses_legacy: [
+      { content: "legacy work", status: "pending", priority: "medium", position: 1, timeCreated: 100, timeUpdated: 130 },
+    ],
+  })
+  try {
+    // No createSessionV2Table call: this is the old-schema / fixture shape.
+    // Throwing here would take the whole sidebar block down with it.
+    assert.deepEqual(
+      querySessionTodos(fixtureDatabase, "ses_legacy").map((item) => item.content),
+      ["legacy work"],
+    )
   } finally {
     fixtureDatabase.close()
   }
