@@ -46,6 +46,8 @@ opencode plugin remove opencode-db-insight # 卸载
 - 看板地址：`http://127.0.0.1:18789/`，被占用时自动 +1 重试（至多 10 次）；`/insight` 的 toast 显示**实际**端口，也可看 `/api/health`。
 - 导出目录：`./insight-exports/`（相对 OpenCode 启动目录），文件名 `<时间戳>-<会话标题>.md`，中文标题保留。看板「导出 CSV」则是浏览器直接下载 `sessions.csv`（携带当前目录/时间范围过滤），不落该目录。
 - 数据源：只读打开 OpenCode 数据库（Unix：`~/.local/share/opencode/opencode.db`；Windows：`%USERPROFILE%\.local\share\opencode\opencode.db`），路径可在插件 storage 中用 `insight-db-path` 覆盖。
+- 右侧栏「Todos」块（v0.24.0）：跟随当前会话，每页 4 条；`in_progress` 恒排首位，已完成 ✓ / 进行中 〜 / 未做 ·。点标题行折叠（折叠态持久化），底部 `‹ n/m ›` 翻页，切会话页码归零；**没有未完成项时整块消失**，写入新 todo 后约 1 秒出现。
+- 回放页消息深链（v0.24.0）：`http://127.0.0.1:18789/#/session/<会话ID>?msg=<消息ID>` 直接滚到并高亮该条消息（2 秒后消隐），目标在 200 条分页区之外时自动加载到它。未知或空的 `msg` 静默忽略，不影响回放页。
 
 ## 排障
 

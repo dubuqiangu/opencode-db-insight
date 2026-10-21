@@ -242,10 +242,12 @@ opencode-db-insight/
 
 ## 11. 验证方法
 
-- 语法：`npm run check` —— server 入口 `npx esbuild src/index.ts`；TUI 入口 `--bundle --platform=node --jsx-import-source=@opentui/solid`（`--external:solid-js` / `--external:@opentui/*`），并断言产物引用 `@opentui/solid/jsx-runtime`、不得出现 `react/jsx-runtime`（v0.24.0 起，防止 JSX 被解析到 React 运行时）；
-- 单元：`node:test` 覆盖 stats 纯函数（命中率、分桶、模型指标、指纹）；
+- 语法：`npm run check` = `check:types` + 双入口 esbuild —— TUI 入口 `--bundle --platform=node --jsx-import-source=@opentui/solid`（`--external:solid-js` / `--external:@opentui/*`），并断言产物引用 `@opentui/solid/jsx-runtime`、不得出现 `react/jsx-runtime`（v0.24.0 起，防止 JSX 被解析到 React 运行时）；
+- 类型：`check:types` = `tsc --noEmit -p tsconfig.json`。`include` **有意只覆盖**侧栏 todo 链路 4 个模块（`clip-columns.ts` / `sidebar-todo.tsx` / `session-todo.ts` / `session-todo-queries.ts`）——全仓 `tsc` 有约 300 个既有错误，一次摊开只会让门禁长期红掉、随后被无视。新增模块要进这道门，就先把它修干净再加进 `include`，不要削弱 `strict` 去迁就；
+- 单元：`node:test` 覆盖 stats 纯函数（命中率、分桶、模型指标、指纹）、侧栏 todo 视图模型与深链下标换算；
 - 集成：`curl http://127.0.0.1:<port>/api/overview` 等逐路由实测（用本机真实库）；
-- 端到端：`opencode plugin update` + 重启，实测斜杠命令、面板、导出、降级路径（db 缺失时 API 返回 503 文案）。
+- 安装态：`scripts/verify-install.ps1` 7 项（HEAD 已推送 / plugin list 上的 commit / 磁盘版本号 / 源码树镜像 / 测试树镜像 / opencode.json 注册 / 宿主日志无 TUI 注册失败）；
+- 端到端：`opencode plugin update` + 重启，实测斜杠命令、面板、导出、侧栏 Todos 块、回放页深链、降级路径（db 缺失时 API 返回 503 文案）。
 
 ## 12. 里程碑
 
