@@ -20,6 +20,8 @@ import {
   readToolInput,
   readToolOutputForDisplay,
   TOOL_OUTPUT_DISPLAY_MAX_CHARS,
+  REASONING_DISPLAY_MAX_CHARS,
+  truncateForDisplay,
   isVisibleReplayMessageType,
 } from "./replay-message-text.js";
 
@@ -71,14 +73,29 @@ function buildUserNode(messageRecord) {
 function buildReasoningPartElement(reasoningText) {
   const detailsElement = document.createElement("details");
   detailsElement.className = "replay-reasoning";
+  // v0.24.x：reasoning **默认展开**，所以它的大块正文会立刻进入布局。
+  // 实测本机库最大 reasoning part 有 150,908 字符、18 个超 100k，而 text
+  // part 与 tool output 都没到 100k——真正需要截断的是这里。折叠不是保护：
+  // 用户一进来看到的就是展开态。
+  const reasoningDisplay = truncateForDisplay(reasoningText, REASONING_DISPLAY_MAX_CHARS);
   detailsElement.open = true; // 默认展开（spec），点标题可折叠
   const summaryElement = document.createElement("summary");
-  summaryElement.textContent = "💭 思考过程";
+  summaryElement.textContent = reasoningDisplay.truncated
+    ? `💭 思考过程 · ${reasoningDisplay.totalChars.toLocaleString("en-US")} 字符`
+    : "💭 思考过程";
   detailsElement.appendChild(summaryElement);
   const textElement = document.createElement("div");
   textElement.className = "replay-text muted";
-  textElement.textContent = reasoningText;
+  textElement.textContent = reasoningDisplay.text;
   detailsElement.appendChild(textElement);
+  if (reasoningDisplay.truncated) {
+    const truncationNote = document.createElement("div");
+    truncationNote.className = "replay-code-truncation";
+    truncationNote.textContent =
+      `仅显示前 ${REASONING_DISPLAY_MAX_CHARS.toLocaleString("en-US")} 字符，` +
+      `完整思考过程共 ${reasoningDisplay.totalChars.toLocaleString("en-US")} 字符`;
+    detailsElement.appendChild(truncationNote);
+  }
   return detailsElement;
 }
 

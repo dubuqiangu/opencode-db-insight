@@ -113,6 +113,22 @@ export function readToolOutputForDisplay(stateRecord) {
 }
 
 /**
+ * 回放页 thinking（reasoning）正文的展示上限（v0.24.x）。
+ *
+ * 比工具输出更紧，理由有三个：reasoning 默认**展开**（用户一进来就吃这份
+ * 布局成本）；它没有「点击展开」这个天然的折叠闸门；且实测本机库里 reasoning
+ * 是唯一真正超 100k 的渲染面（最大 150,908，18 个超 100k），而 text part
+ * 与 tool output 都远低于 200k。
+ *
+ * 搜索侧**仍扫全文**（buildSearchableMessageText 保持原样）：这里截的是
+ * 「铺在页面上的正文」，不是搜索面。这与工具输出的处理有意不同——工具输出的
+ * 截断是沉默丢内容（用户看不到被砍掉的部分），若搜索越过它就会「搜得到却
+ * 看不见」；reasoning 的截断则在页面上明确标注了总长度，且展开是默认态，
+ * 命中后用户第一眼就能看到所在段落。
+ */
+export const REASONING_DISPLAY_MAX_CHARS = 100_000;
+
+/**
  * 单条消息的**可搜索文本**（六类）：user 正文、assistant text part、
  * reasoning part、tool name、**tool input（入参，v0.10.0 收敛探针补齐）**、
  * tool output。收敛探针实证：工具入参在 UI 上渲染为参数 pre（与 tool

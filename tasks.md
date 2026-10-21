@@ -565,12 +565,10 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 
 ## v0.24.x 追加：回放页大内容截断保护（2026-10-21，orchestrator 直改）
 
-- [x] **发现的真 bug**：`replay-timeline.js` 把 `readToolOutput` 的**全量**结果写进 `<pre>` 的 `textContent`。导出侧有 `truncateToolOutput`（4000 字符），回放页**完全没有**。实测本机库 59093 条消息：单条 data 最大 **4.28 MB**、>100 KB 的 **354 条**、>1 MB 的 **2 条**。4 MB 单个文本节点会明显拖慢布局与滚动，而这段内容默认还是折叠不可见的
-- [x] 修复落在 `replay-message-text.js`（与其它提取函数同一出处）：`TOOL_OUTPUT_DISPLAY_MAX_CHARS = 200_000`、`truncateForDisplay`（码元边界截断，不留孤立高位代理）、`readToolOutputForDisplay`
-- [x] **关键不变量：搜索也走同一截断**。只截渲染 → 搜到「渲染不出来的文本」；只截搜索 → 反向。两侧共用 `readToolOutputForDisplay`，测试锁死「越界标记在 DOM 与搜索面**同时**不可见」
-- [x] 折叠阈值仍按**完整**长度判断（`totalChars`），被截断的大块依旧默认折叠；输出块下 `.replay-code-truncation` 琥珀小字说明截断与完整长度
-- [x] **自查纠错**：初版提示写「用 `/insight-export` 导出查看全文」，但导出上限只有 4000 字符、比回放页更短——会误导用户。文案与两处注释已订正（两处预算不同是有意的：交互宽、文档窄）
-- [x] 验证：`npm test` **543/543**（+2 例）、`npm run check` 0、四个改动文件 GLUE=0、LF 无 BOM
+- [x] **发现的真 bug（经实测修正归因）**：`replay-timeline.js` 的 reasoning 正文默认展开（`detailsElement.open = true`）且**无任何上限**。实测本机库 59143 条消息 / 61002 个 tool part：reasoning part 最大 **150,908 字符、18 个超 100k**，而 assistant text part 最大 39,288、tool output 最大 131,821（0 个超 200k）、user 正文最大 30,530。→ **真正需要截断的是 reasoning，不是工具输出**
+- [x] **归因纠错**：上一轮我用「单条消息 data 最大 4.28 MB」推断工具输出撑爆 DOM，那是整条消息 data 的大小（含全部 content/reasoning），不是单个 tool output。修复方向随之调整：reasoning 截到 100k（含标题字符数 + 块尾琥珀说明），工具输出 200k 保留为前瞻性护栏（当前未触发）
+- [x] **搜索策略按渲染形态区分**（有意不统一）：工具块默认折叠 → 搜索结果必须同受 200k 截断，否则「搜得到却看不见」；reasoning 默认展开 → 搜索仍扫全文，命中即可见。两个方向各有测试锁死
+- [x] 验证：`npm test` **544/544**（+3 例）、`npm run check` 0、改动文件 GLUE=0、LF 无 BOM
 
 - [ ] **后续评估（未做）**：token 曲线框选缩放（v0.25.0 立项，1–2 天，需设计定交互）；PNG 导出（暂缓，需新依赖）
 - [ ] 说明：本次改动只在源码；运行中的 18789-18792 服务加载的是安装态 0.22.0，需发布后才会体现

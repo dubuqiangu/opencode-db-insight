@@ -2471,6 +2471,58 @@ test("an oversized tool output is truncated in the DOM, and the same truncation 
   )
 })
 
+test("an oversized reasoning block is truncated for display and labeled, while the search haystack still covers the whole thought", async () => {
+  const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
+  const { buildReplaySearchIndex, REASONING_DISPLAY_MAX_CHARS } = await import(
+    "../src/web/public/components/replay-message-text.js"
+  )
+
+  const container = freshContainer()
+  // reasoning is the one render surface that really exceeds 100k in the local
+  // database (max 150,908 chars, 18 parts over 100k), and it renders expanded
+  // by default, so this is the block that actually costs layout time.
+  const oversizedReasoning = "think ".repeat(REASONING_DISPLAY_MAX_CHARS / 6) + " DEEP_TAIL_MARKER"
+  const searchRecords = [
+    replayMessageRecord(0, "assistant", {
+      model: { id: "glm-5.3" },
+      content: [
+        { type: "reasoning", text: oversizedReasoning },
+        { type: "text", text: "最终回答" },
+      ],
+    }),
+  ]
+
+  renderTimeline(container, searchRecords, 200)
+
+  const reasoningBlocks = container.querySelectorAll("div.replay-text.muted")
+  assert.equal(reasoningBlocks.length, 1, "the reasoning body still renders exactly one block")
+  assert.equal(
+    reasoningBlocks[0]!.textContent.length,
+    REASONING_DISPLAY_MAX_CHARS,
+    "the reasoning body stops at the display limit",
+  )
+  assert.ok(
+    !reasoningBlocks[0]!.textContent.includes("DEEP_TAIL_MARKER"),
+    "content past the limit is not laid out",
+  )
+
+  const reasoningNotes = container.querySelectorAll(".replay-code-truncation")
+  assert.equal(reasoningNotes.length, 1, "the truncation is disclosed, not silent")
+  assert.ok(
+    reasoningNotes[0]!.textContent.includes("完整思考过程共"),
+    "the note reports the untouched total length",
+  )
+
+  // Deliberate difference from tool output: the search haystack keeps the FULL
+  // reasoning text. The block renders expanded by default, so a hit here is
+  // still the first thing the user sees — unlike a collapsed tool block.
+  const searchIndex = buildReplaySearchIndex(searchRecords)
+  assert.ok(
+    searchIndex[0]!.haystack.includes("deep_tail_marker"),
+    "reasoning search stays full-text even though display is truncated",
+  )
+})
+
 test("buildReplaySearchBar renders the find bar, counts hits across all messages, navigates and clears state", async () => {
   const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
   const { buildReplaySearchBar, REPLAY_SEARCH_DEBOUNCE_MS } = await import(

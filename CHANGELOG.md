@@ -7,8 +7,9 @@
 ## [Unreleased]
 
 ### Added
-- **回放页大内容截断保护**（v0.24.x，`replay-message-text.js` 的 `readToolOutputForDisplay`）：回放页原先把工具输出**全量**写进 `<pre>` 的 `textContent`，实测本机库 59093 条消息中单条最大 **4.28 MB**、354 条超 100 KB、2 条超 1 MB——4 MB 的单个文本节点会让布局与滚动明显卡顿，而这段内容默认还是折叠不可见的。现上限 `TOOL_OUTPUT_DISPLAY_MAX_CHARS = 200_000`，按码元边界截断不留孤立高位代理（emoji 被切半会让 DOM 报错），并在输出块下用 `.replay-code-truncation` 一行琥珀小字说明「仅显示前 N 字符，完整输出共 M 字符」。
-  - **关键不变量：搜索也走同一截断**。只截渲染会让用户搜到「渲染不出来的文本」（点进命中、展开却找不到词）；只截搜索则反向。两侧共用 `readToolOutputForDisplay`，并由测试锁死「越界标记在 DOM 与搜索面**同时**不可见」。
+- **回放页大内容截断保护**（v0.24.x）：回放页的 reasoning 正文**默认展开**且原先没有上限，实测本机库最大 reasoning part **150,908 字符、18 个超 100k**——这是唯一真正超限的渲染面，一进页面就吃这份布局成本。现 `REASONING_DISPLAY_MAX_CHARS = 100_000`，截断在码元边界（不留孤立高位代理），标题行补字符总数、块尾一行琥珀小字说明「仅显示前 N 字符，完整思考过程共 M 字符」。
+  - **搜索侧仍扫全文**（与工具输出有意不同）：reasoning 默认展开，命中后第一眼就能看到所在段落；工具块默认折叠，若搜索越过截断就会「搜得到却看不见」。两个方向都由测试分别锁死。
+  - 工具输出同样加上 `TOOL_OUTPUT_DISPLAY_MAX_CHARS = 200_000` 的保护（实测最大 131,821，未触发，属前瞻性护栏而非当前痛点）。
   - 与导出 Markdown 的 `TOOL_OUTPUT_CHARACTER_LIMIT = 4000` 有意不同（交互浏览宽、文档窄），因此提示里**不**引导用户「导出看全文」——导出只会更短。
 
 - **回放页消息级深链**（`src/web/public/components/replay-deep-link.js`，新增）：`#/session/<id>?msg=<messageID>` 可直接定位到某一条消息。
