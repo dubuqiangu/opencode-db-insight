@@ -18,7 +18,8 @@ import {
   readMessageText,
   readToolName,
   readToolInput,
-  readToolOutput,
+  readToolOutputForDisplay,
+  TOOL_OUTPUT_DISPLAY_MAX_CHARS,
   isVisibleReplayMessageType,
 } from "./replay-message-text.js";
 
@@ -88,8 +89,10 @@ function buildToolPartElement(toolPartRecord) {
   // ora-5 P2 修复）：展示形态只有这一份代码，渲染与搜索文本视图必然
   // 同源——改形态两侧一起变，「看得见搜不到」不再靠注释纪律维持。
   const paramsJson = readToolInput(stateRecord);
-  const toolOutput = readToolOutput(stateRecord);
-  const blockLength = paramsJson.length + toolOutput.length;
+  const toolOutputDisplay = readToolOutputForDisplay(stateRecord);
+  const toolOutput = toolOutputDisplay.text;
+  // 折叠阈值按**完整**长度判断：被截断的大输出一定是超长块，仍应默认折叠。
+  const blockLength = paramsJson.length + toolOutputDisplay.totalChars;
 
   const detailsElement = document.createElement("details");
   detailsElement.className = "replay-tool";
@@ -116,6 +119,17 @@ function buildToolPartElement(toolPartRecord) {
     outputBlock.className = "replay-code lang-text";
     outputBlock.textContent = toolOutput;
     detailsElement.appendChild(outputBlock);
+    // 截断要**说出来**：静默丢内容会让用户以为工具没输出那么多。
+    // 注意导出 Markdown 的上限更低（4000 字符），所以提示里不引导用户
+    // 去导出看全文——那样只会看到更短的一段。
+    if (toolOutputDisplay.truncated) {
+      const truncationNote = document.createElement("div");
+      truncationNote.className = "replay-code-truncation";
+      truncationNote.textContent =
+        `仅显示前 ${TOOL_OUTPUT_DISPLAY_MAX_CHARS.toLocaleString("en-US")} 字符，` +
+        `完整输出共 ${toolOutputDisplay.totalChars.toLocaleString("en-US")} 字符`;
+      detailsElement.appendChild(truncationNote);
+    }
   }
   return detailsElement;
 }

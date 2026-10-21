@@ -2391,6 +2391,86 @@ test("the rendered tool-params block text is contained verbatim in the search ha
   )
 })
 
+/* ------------- oversized tool output truncation (v0.24.0) ------------- */
+
+test("truncateForDisplay cuts at the limit, reports the full length, and never leaves a lone surrogate", async () => {
+  const { truncateForDisplay } = await import(
+    "../src/web/public/components/replay-message-text.js"
+  )
+
+  const shortResult = truncateForDisplay("short text", 20)
+  assert.equal(shortResult.text, "short text")
+  assert.equal(shortResult.truncated, false)
+  assert.equal(shortResult.totalChars, 10, "full length is reported even when nothing was cut")
+
+  const longText = "a".repeat(50)
+  const longResult = truncateForDisplay(longText, 20)
+  assert.equal(longResult.text, "a".repeat(20))
+  assert.equal(longResult.truncated, true)
+  assert.equal(longResult.totalChars, 50, "the caller can still tell the user how much was dropped")
+
+  // An emoji straddling the cut must not leave a lone high surrogate: the DOM
+  // rejects such a text node, so the cut backs off by one code unit.
+  const emojiText = "b".repeat(19) + "😀" + "c".repeat(10)
+  const emojiResult = truncateForDisplay(emojiText, 20)
+  assert.equal(emojiResult.truncated, true)
+  assert.doesNotMatch(emojiResult.text, /[\ud800-\udbff]$/, "no dangling high surrogate at the boundary")
+
+  assert.equal(truncateForDisplay(null, 10).text, "", "non-strings degrade to empty, not a crash")
+})
+
+test("an oversized tool output is truncated in the DOM, and the same truncation bounds the search haystack", async () => {
+  const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
+  const {
+    buildReplaySearchIndex,
+    TOOL_OUTPUT_DISPLAY_MAX_CHARS,
+  } = await import("../src/web/public/components/replay-message-text.js")
+
+  const container = freshContainer()
+  // The tail marker sits beyond the display limit: it must be visible to
+  // neither the DOM nor the search index, or users get a hit they cannot see.
+  const oversizedOutput = "x".repeat(TOOL_OUTPUT_DISPLAY_MAX_CHARS) + " TAIL_MARKER_BEYOND_LIMIT"
+  const searchRecords = [
+    replayMessageRecord(0, "assistant", {
+      model: { id: "glm-5.3" },
+      content: [
+        { type: "tool", name: "bash", state: { status: "completed", input: { command: "cat huge" }, metadata: { output: oversizedOutput } } },
+      ],
+    }),
+  ]
+
+  renderTimeline(container, searchRecords, 200)
+
+  const outputBlocks = container.querySelectorAll("pre.replay-code.lang-text")
+  assert.equal(outputBlocks.length, 1, "the tool output still renders one block")
+  assert.equal(
+    outputBlocks[0]!.textContent.length,
+    TOOL_OUTPUT_DISPLAY_MAX_CHARS,
+    "the DOM text node stops at the display limit instead of pushing megabytes into layout",
+  )
+  assert.ok(
+    !outputBlocks[0]!.textContent.includes("TAIL_MARKER_BEYOND_LIMIT"),
+    "content past the limit is not rendered",
+  )
+
+  const truncationNotes = container.querySelectorAll(".replay-code-truncation")
+  assert.equal(truncationNotes.length, 1, "truncation is announced, not silent")
+  assert.ok(
+    truncationNotes[0]!.textContent.includes("完整输出共"),
+    "the note names the full length so the user knows content was dropped",
+  )
+
+  const searchIndex = buildReplaySearchIndex(searchRecords)
+  assert.ok(
+    !searchIndex[0]!.haystack.includes("tail_marker_beyond_limit"),
+    "the search haystack is bounded the same way — no hit for text that cannot be rendered",
+  )
+  assert.ok(
+    searchIndex[0]!.haystack.includes("xxx"),
+    "the visible portion of the output is still searchable",
+  )
+})
+
 test("buildReplaySearchBar renders the find bar, counts hits across all messages, navigates and clears state", async () => {
   const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
   const { buildReplaySearchBar, REPLAY_SEARCH_DEBOUNCE_MS } = await import(

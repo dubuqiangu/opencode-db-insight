@@ -7,6 +7,10 @@
 ## [Unreleased]
 
 ### Added
+- **回放页大内容截断保护**（v0.24.x，`replay-message-text.js` 的 `readToolOutputForDisplay`）：回放页原先把工具输出**全量**写进 `<pre>` 的 `textContent`，实测本机库 59093 条消息中单条最大 **4.28 MB**、354 条超 100 KB、2 条超 1 MB——4 MB 的单个文本节点会让布局与滚动明显卡顿，而这段内容默认还是折叠不可见的。现上限 `TOOL_OUTPUT_DISPLAY_MAX_CHARS = 200_000`，按码元边界截断不留孤立高位代理（emoji 被切半会让 DOM 报错），并在输出块下用 `.replay-code-truncation` 一行琥珀小字说明「仅显示前 N 字符，完整输出共 M 字符」。
+  - **关键不变量：搜索也走同一截断**。只截渲染会让用户搜到「渲染不出来的文本」（点进命中、展开却找不到词）；只截搜索则反向。两侧共用 `readToolOutputForDisplay`，并由测试锁死「越界标记在 DOM 与搜索面**同时**不可见」。
+  - 与导出 Markdown 的 `TOOL_OUTPUT_CHARACTER_LIMIT = 4000` 有意不同（交互浏览宽、文档窄），因此提示里**不**引导用户「导出看全文」——导出只会更短。
+
 - **回放页消息级深链**（`src/web/public/components/replay-deep-link.js`，新增）：`#/session/<id>?msg=<messageID>` 可直接定位到某一条消息。
   - `id → 可见下标` 复用 `isVisibleReplayMessageType` 过滤后的顺序，与 `renderTimeline` / `buildReplaySearchIndex` 同一口径（算错一档就会定位到隔壁消息）。
   - 目标在 200 条分页区之外时，连续 `appendNextChunk()` 直到渲染到它，再 `scrollIntoView`——与 `replay-search.js` 的导航路径同语义。

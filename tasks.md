@@ -555,11 +555,22 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 宽表固定列宽：`session-list.js`（13 列）、`model-table.js`（11 列）、`agent-table.js`（4 列）各补 `<colgroup>`；`components.css` `.data-table` 改 `table-layout: fixed` + 单元格 `overflow: hidden; text-overflow: ellipsis`
 - [x] 验证：`npm test` 535/535、`npm run check` 0（已含 `check:types`）、CHANGELOG 为 LF 无 BOM
 - [x] 侧栏 todo 逻辑复核与修复（2026-10-21，oracle 独立审查 + 自校）：折叠改 `onMouseUp`、删 `requestRender`、页码复位改 `createEffect`、分页箭头先判边界；新增 `src/tui/clip-columns.ts` 按显示列宽截断（CJK/emoji 计 2 列），`test/session-todo.test.ts` 增至 14 例
-- [x] **全部完成后整块隐藏（含标题行）**：`buildSessionTodoView` 返回 `null` 时标题行也一并消失，函数子节点内门控以保持响应式。原实现只隐藏列表，标题 `▼ TodosUnited` 常驻，与验收口径不符
+- [x] **全部完成后整块隐藏（含标题行）**：`buildSessionTodoView` 返回 `null` 时标题行也一并消失，函数子节点内门控以保持响应式。原实现只隐藏列表，标题 `▼ Todos` 常驻，与验收口径不符
 - [x] **窄侧栏换行**：内容 `<text>` 加 `wrapMode="none"`，避免侧栏窄于 44 列时把状态图标挤下去
 - [x] **类型门落地**：`tsconfig.json` 原先不被任何脚本调用（`npm run check` 只跑 esbuild，不做类型检查），而 `tsc` 全仓有约 300 个既有错误。改为拆出 `check:types` 并串进 `check`，`include` 收窄到本轮 4 个模块（`clip-columns.ts` / `sidebar-todo.tsx` / `session-todo.ts` / `session-todo-queries.ts`），补齐 `allowImportingTsExtensions` + `skipLibCheck`，门现真正通过
 - [x] **`<text>` 函数子节点类型缺口收敛**：`@opentui/solid` 运行时 `insert()` 特判函数子节点并包 `createRenderEffect`（`index.js:6523`），类型定义未描述。新增具名辅助 `live()` 集中该断言，`sidebar-todo.tsx` 进入 strict 门
 - [x] **注册期卸载竞态**：`registerSessionTodoSidebar` 加 `isDisposed`，dispose 后 `render` 返回 `null`，避免动态 import 与卸载竞态把块挂进已销毁上下文
 - [x] 参考项目二次复查已写入 `references/CAPABILITY-AUDIT.md` §7：模型表 11 列对齐（此前疑点系探针正则缺陷）；markdown/样式/i18n/diagnostics 均不值得搬；剩余 4 项目仅 oc-tps 生命周期与 Context-Analysis 的 telemetry 校准有参考价值
-- [ ] **后续评估（未做）**：回放页大内容截断保护；回放页消息锚点 hash 深链；token 曲线框选缩放；PNG 导出
+- [x] **回放页消息锚点 hash 深链**：v0.24.0 完成，`#/session/<id>?msg=<messageID>`，`replay-deep-link.js` 7 导出 + 6 例测试
+
+## v0.24.x 追加：回放页大内容截断保护（2026-10-21，orchestrator 直改）
+
+- [x] **发现的真 bug**：`replay-timeline.js` 把 `readToolOutput` 的**全量**结果写进 `<pre>` 的 `textContent`。导出侧有 `truncateToolOutput`（4000 字符），回放页**完全没有**。实测本机库 59093 条消息：单条 data 最大 **4.28 MB**、>100 KB 的 **354 条**、>1 MB 的 **2 条**。4 MB 单个文本节点会明显拖慢布局与滚动，而这段内容默认还是折叠不可见的
+- [x] 修复落在 `replay-message-text.js`（与其它提取函数同一出处）：`TOOL_OUTPUT_DISPLAY_MAX_CHARS = 200_000`、`truncateForDisplay`（码元边界截断，不留孤立高位代理）、`readToolOutputForDisplay`
+- [x] **关键不变量：搜索也走同一截断**。只截渲染 → 搜到「渲染不出来的文本」；只截搜索 → 反向。两侧共用 `readToolOutputForDisplay`，测试锁死「越界标记在 DOM 与搜索面**同时**不可见」
+- [x] 折叠阈值仍按**完整**长度判断（`totalChars`），被截断的大块依旧默认折叠；输出块下 `.replay-code-truncation` 琥珀小字说明截断与完整长度
+- [x] **自查纠错**：初版提示写「用 `/insight-export` 导出查看全文」，但导出上限只有 4000 字符、比回放页更短——会误导用户。文案与两处注释已订正（两处预算不同是有意的：交互宽、文档窄）
+- [x] 验证：`npm test` **543/543**（+2 例）、`npm run check` 0、四个改动文件 GLUE=0、LF 无 BOM
+
+- [ ] **后续评估（未做）**：token 曲线框选缩放（v0.25.0 立项，1–2 天，需设计定交互）；PNG 导出（暂缓，需新依赖）
 - [ ] 说明：本次改动只在源码；运行中的 18789-18792 服务加载的是安装态 0.22.0，需发布后才会体现

@@ -179,6 +179,14 @@
   color: var(--text-faint);
 }
 
+/* v0.24.0 大输出截断提示：紧贴输出块下沿的一行小字。用 amber 而非 faint，
+ * 因为它是一条「你看到的不是全文」的告警，不该和普通说明文字混淆。 */
+.replay-code-truncation {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--amber);
+}
+
 /* ---------- 通知行（system / model-switched / compaction） ---------- */
 .replay-notice {
   position: relative;

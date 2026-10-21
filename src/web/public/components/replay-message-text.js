@@ -80,6 +80,39 @@ export function readToolOutput(stateRecord) {
 }
 
 /**
+ * 回放页工具输出的**渲染/搜索共用上限**（v0.24.0）。
+ *
+ * 实测本机库 59093 条消息，单条 data 最大 4.28 MB，354 条超 100 KB。回放页
+ * 原来把 toolOutput 全量塞进 <pre> 的 textContent：4 MB 的单个文本节点会让
+ * 布局与滚动明显卡顿，而这段内容在折叠状态下根本看不见。
+ *
+ * 上限放在本模块而不是 replay-timeline.js 的理由与其它提取函数一致：
+ * 渲染与搜索必须**同源**。若只截渲染、搜索仍扫全文，就会出现「搜得到却
+ * 看不见」（点进去命中，展开却找不到词）；反过来只截搜索则相反。所以
+ * 两侧都调用 readToolOutputForDisplay —— 至少看到的那段必然搜得到。
+ *
+ * 导出 Markdown 不走这里（format-helpers.ts 的 truncateToolOutput 有自己的
+ * 4000 字符预算，且导出要的是「有标注的截断」而不是静默丢弃）。两处预算
+ * 不同是有意的：回放页是交互浏览，宽一些；导出是文档，窄一些。因此回放页
+ * 的提示**不能**让用户「导出看全文」——导出只会更短。
+ */
+export const TOOL_OUTPUT_DISPLAY_MAX_CHARS = 200_000;
+
+/** 按上限于码元边界截断，不留孤立高位代理（emoji 被切半会让 DOM 报错）。 */
+export function truncateForDisplay(text, characterLimit = TOOL_OUTPUT_DISPLAY_MAX_CHARS) {
+  const rawText = typeof text === "string" ? text : "";
+  if (rawText.length <= characterLimit) return { text: rawText, truncated: false, totalChars: rawText.length };
+  let cutText = rawText.slice(0, characterLimit);
+  if (/[\ud800-\udbff]$/.test(cutText)) cutText = cutText.slice(0, -1);
+  return { text: cutText, truncated: true, totalChars: rawText.length };
+}
+
+/** 渲染与搜索共用：工具输出的展示文本（超上限即截断）。 */
+export function readToolOutputForDisplay(stateRecord) {
+  return truncateForDisplay(readToolOutput(stateRecord));
+}
+
+/**
  * 单条消息的**可搜索文本**（六类）：user 正文、assistant text part、
  * reasoning part、tool name、**tool input（入参，v0.10.0 收敛探针补齐）**、
  * tool output。收敛探针实证：工具入参在 UI 上渲染为参数 pre（与 tool
@@ -109,7 +142,9 @@ function buildSearchableMessageText(messageRecord) {
       } else if (partType === "tool") {
         passages.push(readToolName(partRecord));
         passages.push(readToolInput(asRecord(partRecord.state)));
-        passages.push(readToolOutput(asRecord(partRecord.state)));
+        // 与渲染同源：搜索面只覆盖**看得见的那段**（超上限部分被截掉），
+        // 否则会搜到「渲染不出来的文本」，点进去展开也找不到。
+        passages.push(readToolOutputForDisplay(asRecord(partRecord.state)).text);
       }
     }
   }
