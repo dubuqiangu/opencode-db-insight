@@ -1,0 +1,32 @@
+/**
+ * Type-check gate for the modules this round added (v0.23.0).
+ *
+ * The repo as a whole has never been type-checked: `npm test` runs node:test
+ * directly and `npm run check` only proves the esbuild bundle resolves
+ * `@opentui/solid/jsx-runtime`. Turning `tsc` on for every file surfaces ~300
+ * pre-existing errors in the test suite, which would make the gate red forever
+ * and therefore ignored.
+ *
+ * So this file scopes the gate to what it can honestly assert today: the todo
+ * sidebar chain compiles under `strict`. Widen `include` as files are cleaned
+ * up; do not weaken the options to hide errors.
+ */
+{
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/tui/clip-columns.ts",
+    "src/tui/sidebar-todo.tsx",
+    "src/stats/session-todo.ts",
+    "src/db/session-todo-queries.ts"
+  ]
+}

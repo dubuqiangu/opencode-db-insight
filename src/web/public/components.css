@@ -146,6 +146,17 @@
   border-collapse: collapse;
   font-size: 12.5px;
   white-space: nowrap;
+  /* v0.23.0: honour the <colgroup> widths each table now declares. With the
+     default auto layout those widths are only suggestions, so a long model id
+     still stole space from the numeric columns. */
+  table-layout: fixed;
+}
+/* Fixed layout clips the overflowing cell box, not the glyphs — without
+   ellipsis a long id or title paints straight over its neighbour. */
+.data-table > thead > tr > th,
+.data-table > tbody > tr > td {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .data-table th {
   text-align: left;

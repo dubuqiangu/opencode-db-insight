@@ -6,6 +6,49 @@
 
 ## [Unreleased]
 
+### Added
+- **回放页消息级深链**（`src/web/public/components/replay-deep-link.js`，新增）：`#/session/<id>?msg=<messageID>` 可直接定位到某一条消息。
+  - `id → 可见下标` 复用 `isVisibleReplayMessageType` 过滤后的顺序，与 `renderTimeline` / `buildReplaySearchIndex` 同一口径（算错一档就会定位到隔壁消息）。
+  - 目标在 200 条分页区之外时，连续 `appendNextChunk()` 直到渲染到它，再 `scrollIntoView`——与 `replay-search.js` 的导航路径同语义。
+  - 落点高亮用独立的 `.replay-deep-link-target`（`replay.css`），与搜索的 `.replay-hit-current` 互不清除；2s 后自动消隐。
+  - 未知 id / 空 id 静默 `notFound`，不滚动、不抛错——深链坏了不该让整个回放页失败。
+  - 每个时间线节点（含 `system` / `model-switched` / `compaction` 通知行与空文本 user 占位）都带 `data-message-id` 与 `id="msg-<messageID>"`，给深链与外部锚点一个稳定落点。
+
+### Fixed
+- **会话路由正则吞掉查询串**：`app.js` 的 `routeByHash` 原用 `/^#\/session\/(.+)$/`，`ses_x?msg=msg_y` 会被整段当作会话 id 去查库，直接误报「旧表会话」。改为 `([^?]+)(\?.*)?`，会话段在 `?` 处截止。
+- **侧栏 Todos 块：整块隐藏未生效**（v0.23.0 引入，未发布即修）。`buildSessionTodoView` 返回 `null` 时只隐藏了列表，标题行 `▼ Todos` 仍常驻 —— 与「全部完成后整块消失」的验收口径不符。现在标题行也由 `todoPage() === null` 门控，在函数子节点内保持响应式。
+- **侧栏 Todos 块：侧栏窄于标签预算时仍会换行**。`<text>` 默认 `wrapMode: "word"`，44 列的标签在更窄的侧栏里会折成两行、把状态图标挤下去，正是截断要防的症状。内容单元格改为 `wrapMode="none"`，由 `clipToColumns` 负责宽度预算。
+- **侧栏 Todos 块的三个逻辑缺陷**（v0.23.0 引入，未发布即修）：
+  - 折叠点击改用 `onMouseUp`（与官方 `sidebar-metrics.tsx` 一致）；`onMouseDown` 在部分终端会先触发文本选区，导致折叠/展开时灵时不灵。
+  - 删掉手动 `renderer.requestRender()`：官方侧栏插件从不主动重绘，依赖 1s tick；在 handler 里戳渲染器会让折叠瞬间闪一下。
+  - 页码复位从「在 `createMemo` 里写 signal」改为 `createEffect` + 记录上一个 sessionId：原写法每次重跑都把页码打回 0，翻页实际翻不动。
+  - 分页箭头回调改为基于本次渲染的页码快照并先判边界，避免越界写入后再被 clamp。
+- **`npm run check` 的「构建门」是空头支票**：`tsconfig.json` 从未被任何脚本调用，而 `tsc` 对整个仓库有约 300 个既有类型错误（集中在 `test/web-components.test.ts` 等）。现拆分 `check:types`（`tsc --noEmit -p tsconfig.json`）并串进 `check`，同时把 `tsconfig.json` 的 `include` **收窄到本轮新增的 4 个模块**——让门真正通过，而不是红着等被忽略。补齐 `allowImportingTsExtensions`（`noEmit` 下合法）与 `skipLibCheck`。
+- **todo 标签按显示列宽截断**（`src/tui/clip-columns.ts`，新增）：侧栏宽度有限，模型写的待办很长时会把状态图标挤出可视区并撑高整块。CJK / emoji 按 2 列计，截断处补 `…`，截断后永不超出预算。5 个用例覆盖 ASCII 原样、CJK 双列、混排不超预算、零预算、常量范围。
+- **`<text>` 函数子节点的类型缺口收敛到一处**：`@opentui/solid` 运行时 `insert()` 确实特判函数子节点并包 `createRenderEffect`（`index.js:6523`），但其类型定义只写 `TextChildren | Element`。新增具名辅助 `live()` 集中该断言并注明机制，`sidebar-todo.tsx` 现可进入 `strict` 类型门。
+- **注册期的卸载竞态**：`registerSessionTodoSidebar` 增加 `isDisposed` 标志，卸载后 `render` 直接返回 `null`，避免 dispose 与动态 import 竞态下把块挂进已销毁的上下文。
+
+### Changed
+- **宽表固定列宽**：`session-list.js`（13 列）、`model-table.js`（11 列）、`agent-table.js`（4 列）的 `<table>` 各自补 `<colgroup>`；`components.css` 的 `.data-table` 改为 `table-layout: fixed`，单元格加 `overflow: hidden; text-overflow: ellipsis`。
+  原因：`white-space: nowrap` 配自动布局时，长模型 ID / 长会话标题会挤占数字列，列宽随内容漂移。参考 billion-context `src/web/page.ts` 的 `<colgroup>` 写法。
+  每张表的第一列保持无宽度以吃掉剩余空间，避免固定布局下表格不满宽。
+
+## [0.23.0] - 2026-10-19
+
+### Added
+- **TUI 右侧栏「Todos」块**：挂在宿主 `sidebar.content` 槽位，实时展示当前会话的 todo。已完成打 ✓、进行中打 ∼、未做打 ·；`in_progress` 恒在首位（多条并行按 `position`）；每页 4 条、底部 `‹ n/m ›` 可点翻页；**没有未完成项时整块消失**，有新 todo 自动出现。标题行整行点击折叠/展开，折叠态经 `context.storage.store` 持久化。
+- `src/db/session-todo-queries.ts`：按 `session_id` 只读 `todo` 表（`ORDER BY position ASC`）。
+- `src/stats/session-todo.ts`：纯函数视图模型（过滤 / 状态秩排序 / 隐藏规则 / clamp 分页），`SESSION_TODO_PAGE_SIZE = 4`。
+- `test/session-todo.test.ts`：9 个用例（排序、未知状态丢弃、隐藏规则、分页边界、字段映射）。
+
+### Changed
+- **投递形态按官方 in-repo spec 校正**：`exports["./tui"]` 保持裸 `src/tui.tsx`（官方 `packages/opencode/specs/tui-plugins.md`：TUI 入口取 `exports["./tui"]`、宿主直接 `await import`、无预编译要求）；新增 `tsconfig.json`（`jsxImportSource: "@opentui/solid"`），`src/tui/sidebar-todo.tsx` 首行固定 `/** @jsxImportSource @opentui/solid */`。
+- `npm run check` 升级为构建门：TUI 入口改为 `--bundle --platform=node --jsx-import-source=@opentui/solid`，并断言产物引用 `@opentui/solid/jsx-runtime`、不得出现 `react/jsx-runtime`。
+- `src/tui.tsx` 用**动态 import + catch** 加载侧栏模块：宿主缺 solid/opentui 运行时或 slot API 不匹配时只丢侧栏块，`/insight` 等命令不受影响。
+
+### Deferred
+- **侧栏「提问列表 + 跳转到提问位置」**：数据面可行（`session_message` `type='user'`，已有 `(session_id, type, seq)` 索引），但 V2 插件 API **未暴露消息级定位**（`ui.router.navigate` 仅到会话粒度，无 scroll/reveal/focus），故缓办。详见 DESIGN.md §13 与该条的再触发条件。
+
 （暂无——下一批变更记录于此）
 
 ## [0.22.0] - 2026-10-19 · B 档指标：工具错误率逐日趋势 + 失败中断识别

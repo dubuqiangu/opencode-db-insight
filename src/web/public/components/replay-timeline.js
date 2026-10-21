@@ -30,9 +30,16 @@ const ASSISTANT_MODEL_COLORS = ["var(--m1)", "var(--m2)", "var(--m6)", "var(--m4
 
 /* ---------------- 单条消息节点 ---------------- */
 
-function buildNodeShell(roleClass, iconGlyph, timeCreated) {
+function buildNodeShell(roleClass, iconGlyph, timeCreated, messageId) {
   const nodeElement = document.createElement("article");
   nodeElement.className = `replay-node ${roleClass}`;
+  // 深链定位与「复制链接」都靠这个属性：节点必须自带消息 id，否则一旦
+  // 时间线重排、分页追加，就没有任何稳定锚点可以把 URL 换算回节点。
+  // 与 messageRecords[i].id 同值（构建时直接取，不做二次编码）。
+  if (typeof messageId === "string" && messageId !== "") {
+    nodeElement.dataset.messageId = messageId;
+    nodeElement.id = `msg-${messageId}`;
+  }
   const iconElement = document.createElement("span");
   iconElement.className = "replay-icon";
   iconElement.textContent = iconGlyph;
@@ -52,7 +59,7 @@ function buildNodeShell(roleClass, iconGlyph, timeCreated) {
 function buildUserNode(messageRecord) {
   const userText = readMessageText(asRecord(messageRecord.data));
   if (userText.trim() === "") return null;
-  const { nodeElement, bodyElement } = buildNodeShell("role-user", "🧑", messageRecord.timeCreated);
+  const { nodeElement, bodyElement } = buildNodeShell("role-user", "🧑", messageRecord.timeCreated, messageRecord.id);
   const textElement = document.createElement("div");
   textElement.className = "replay-text";
   textElement.textContent = userText;
@@ -122,7 +129,7 @@ function buildAssistantNode(messageRecord, timelineState) {
   const modelChanged = modelId !== "" && timelineState.lastAssistantModelId !== null && modelId !== timelineState.lastAssistantModelId;
   if (modelId !== "") timelineState.lastAssistantModelId = modelId;
 
-  const { nodeElement, bodyElement } = buildNodeShell("role-assistant", "🤖", messageRecord.timeCreated);
+  const { nodeElement, bodyElement } = buildNodeShell("role-assistant", "🤖", messageRecord.timeCreated, messageRecord.id);
 
   const metaLine = document.createElement("div");
   metaLine.className = "replay-assistant-meta";
@@ -194,6 +201,12 @@ function buildNoticeNode(messageRecord) {
   const noticeText = buildNoticeLine(String(messageRecord.type ?? ""), dataRecord);
   const nodeElement = document.createElement("div");
   nodeElement.className = "replay-notice";
+  // 通知行也带 id：深链可能指向 system / model-switched / compaction，
+  // 它们同样是可定位的消息节点。
+  if (typeof messageRecord.id === "string" && messageRecord.id !== "") {
+    nodeElement.dataset.messageId = messageRecord.id;
+    nodeElement.id = `msg-${messageRecord.id}`;
+  }
   nodeElement.innerHTML = `🔔 <em>${escapeHtml(noticeText)}</em>`;
   if (Number.isFinite(messageRecord.timeCreated) && messageRecord.timeCreated > 0) {
     const timeElement = document.createElement("span");
@@ -257,15 +270,20 @@ export function renderTimeline(container, messageRecords, pageSize = DEFAULT_PAG
 
 function buildMessageNode(messageRecord, timelineState) {
   const messageType = String(messageRecord.type ?? "");
-  if (messageType === "user") return buildUserNode(messageRecord) ?? buildSkippedNode();
+  if (messageType === "user") return buildUserNode(messageRecord) ?? buildSkippedNode(messageRecord.id);
   if (messageType === "assistant") return buildAssistantNode(messageRecord, timelineState);
   return buildNoticeNode(messageRecord); // system / model-switched / compaction / 未知
 }
 
 /** 空文本 user 消息占位（保持时间线连贯，不隐藏空洞）。 */
-function buildSkippedNode() {
+function buildSkippedNode(messageId) {
   const nodeElement = document.createElement("div");
   nodeElement.className = "replay-notice";
+  // 占位节点在可见序列里占一格：id 必须跟着走，否则深链会错位到隔壁。
+  if (typeof messageId === "string" && messageId !== "") {
+    nodeElement.dataset.messageId = messageId;
+    nodeElement.id = `msg-${messageId}`;
+  }
   nodeElement.innerHTML = `🧑 <em>（用户消息无文本内容）</em>`;
   return nodeElement;
 }

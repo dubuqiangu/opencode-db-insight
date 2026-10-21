@@ -1036,8 +1036,11 @@ function decodeSessionIdFromHash(encodedSessionId) {
   }
 }
 
+/** `#/session/<id>?msg=<messageID>` 的会话段：查询串由 replay-deep-link.js 解析。 */
 function routeByHash() {
-  const sessionMatch = /^#\/session\/(.+)$/.exec(window.location.hash);
+  // v0.24.0：会话路由允许带 `?msg=` 深链参数。会话 id 段必须在 `?` 处截止，
+  // 否则 `ses_x?msg=msg_y` 会被当成整个 id 去查库（查不到，误报旧表会话）。
+  const sessionMatch = /^#\/session\/([^?]+)(\?.*)?$/.exec(window.location.hash);
   if (sessionMatch !== null) {
     dashboardElement.hidden = true;
     sessionViewElement.hidden = false;

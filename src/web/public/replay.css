@@ -302,6 +302,17 @@
 }
 .replay-node.replay-hit-current .replay-icon { border-color: var(--accent); }
 
+/* 深链落点高亮（v0.24.0）：与搜索高亮分开成一类，两者可同时存在
+ * （先按深链进来、再搜一个词），互不清除。用 accent 描边 + 柔底，
+ * 比搜索的「当前位」更轻——它只是一次性落点提示，2s 后由脚本移除。 */
+.replay-node.replay-deep-link-target,
+.replay-notice.replay-deep-link-target {
+  border-radius: var(--radius-sm);
+  padding-inline: 10px;
+  background: var(--accent-soft);
+  box-shadow: inset 2.5px 0 0 var(--accent);
+}
+
 /* ---------- Token 消耗曲线（v0.20.0） ---------- */
 /* 徽标行两行小字：峰值上下文一行 + 分位落点徽标一行（percentiles 为
  * null 时后者整行由组件侧不渲染）。badge 本体是 components.css 的

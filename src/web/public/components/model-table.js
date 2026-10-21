@@ -117,7 +117,13 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
   }).join("");
 
   container.innerHTML = `
-    <table class="data-table" aria-label="模型排行榜">
+    <table class="data-table model-table" aria-label="模型排行榜">
+      <colgroup>
+        <col><col style="width:120px">
+        <col style="width:64px"><col style="width:88px"><col style="width:76px">
+        <col style="width:88px"><col style="width:76px"><col style="width:84px">
+        <col style="width:84px"><col style="width:80px"><col style="width:120px">
+      </colgroup>
       <thead><tr>${headCells}</tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>`;

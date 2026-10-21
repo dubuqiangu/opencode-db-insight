@@ -64,6 +64,10 @@ export function renderAgentTable(container, agentStats) {
 
   container.innerHTML = `
     <table class="data-table agent-table" aria-label="Agent Leaderboard">
+      <colgroup>
+        <col style="width:160px"><col style="width:76px">
+        <col style="width:96px"><col>
+      </colgroup>
       <thead><tr>
         <th>Agent</th>
         <th class="num">Sessions</th>

@@ -213,6 +213,18 @@ opencode-db-insight/
 - `/insight-export [会话ID]`：无参数时弹出 `dialog.select` 列最近 20 个会话；导出到**当前工作目录** `./insight-exports/<YYYYMMDD-HHmmss>-<slug>.md`，角色分节（`## 🧑 用户` / `## 🤖 助手` / reasoning 引用块 / 工具调用代码块）。
 - `/insight-refresh`（v0.14.0）：清空 **server 进程**内 60s 统计结果缓存。TUI 与 server 是两个插件 flavor、两个进程——命令内直接 import `clearResultCache` 清的只会是 TUI 进程自己的空 Map（静默 no-op），故走**跨进程 fetch 回环**：探测看板端口（并发 `GET http://127.0.0.1:18789..18798/api/health`，仅认带本插件服务标识的响应，见 src/tui/discover-dashboard-port.ts）→ `GET http://127.0.0.1:{port}/api/refresh`（约 5s 超时防御）；成功 toast「已清除 N 条统计缓存（看板刷新页面后生效）」，无响应/超时/非 200/坏 JSON 全降级 error toast，永不抛。
 
+### 8.1 右侧栏「Todos」块（v0.23.0）
+
+挂在宿主右侧栏的 `sidebar.content` 槽位（与官方内置 `packages/tui/src/feature-plugins/sidebar/mcp.tsx` 同一通道），落在宿主原生分区之下。
+
+- **数据**：`src/db/session-todo-queries.ts` 按 `session_id` 直读 `todo` 表（`ORDER BY position ASC`）；TUI 与宿主同进程，**不走 HTTP**，因此不受 server 60s TTL 影响。
+- **视图**：`src/stats/session-todo.ts`（纯函数，零 IO）——丢弃 `cancelled` 与未知状态 → 状态秩排序（`in_progress=0 < pending=1 < completed=2`，同秩按 `position`）→ **无未完成项则整块返回 `null`**（"全部做完即消失"）→ 每页 `SESSION_TODO_PAGE_SIZE = 4` 条，页码 `Math.round` 后 clamp，并把实际页号回传。
+- **交互**：标题行整行 `onMouseDown` 切换折叠；折叠态持久化在 `context.storage.store("session-todo.view", { initial: { collapsed: false } })`（官方 `storage.store` 范式，**不用**本地 signal 镜像、不用时间窗、不依赖 `requestRender` 保证正确性）；多页时底部 `‹ n/m ›` 可点翻页；切换会话时页码归零。
+- **刷新**：1s `setInterval` 驱动本地 tick signal（`SIDEBAR_TODO_REFRESH_MS`），每次 tick 重读快照并关闭连接。
+- **响应式纪律**：所有动态读取必须是 JSX **函数子节点** `{() => ...}`。`--jsx=automatic` 下插值在组件调用时一次性求值，写成 `{value}` 会让整块从挂载起冻结，只在宿主重挂载（如切会话）时才更新。
+- **投递形态**：`exports["./tui"]` 保持指向裸 `src/tui.tsx`（官方 in-repo spec `packages/opencode/specs/tui-plugins.md` 明确：TUI 入口取 `exports["./tui"]`、宿主直接 `await import`、无预编译要求）。该文件首行必须保留 `/** @jsxImportSource @opentui/solid */`，否则编译产物会指向 `react/jsx-runtime`。`npm run check` 现已把「产物必须引用 `@opentui/solid/jsx-runtime`、不得出现 `react/jsx-runtime`」固化为构建门。
+- **降级**：`src/tui.tsx` 用**动态 import + catch** 加载该模块——宿主缺 solid/opentui 运行时（或 slot API 不匹配）时只丢侧栏块，`/insight` 等命令不受影响。
+
 ## 9. 生命周期与安全
 
 - server 插件 `setup()` 内启动 HTTP 服务，`teardown` 关闭；端口默认 `18789`，被占用（EADDRINUSE）或被系统保留段拒绝（EACCES，Windows WinNAT 排除范围跨重启漂移，v0.17.0 起按前进类处理）时自动 +1 重试（最多 10 次）；TUI 侧通过 18789..18798 的 `/api/health` 健康探测发现端口（src/tui/discover-dashboard-port.ts），server 侧将实际端口写入 storage 为**遗留保留——已无读者**（后续版本清理）；
@@ -230,7 +242,7 @@ opencode-db-insight/
 
 ## 11. 验证方法
 
-- 语法：`npx esbuild src/tui.tsx --loader:.tsx=tsx --jsx=automatic`（对 index.ts 同理）；
+- 语法：`npm run check` —— server 入口 `npx esbuild src/index.ts`；TUI 入口 `--bundle --platform=node --jsx-import-source=@opentui/solid`（`--external:solid-js` / `--external:@opentui/*`），并断言产物引用 `@opentui/solid/jsx-runtime`、不得出现 `react/jsx-runtime`（v0.23.0 起，防止 JSX 被解析到 React 运行时）；
 - 单元：`node:test` 覆盖 stats 纯函数（命中率、分桶、模型指标、指纹）；
 - 集成：`curl http://127.0.0.1:<port>/api/overview` 等逐路由实测（用本机真实库）；
 - 端到端：`opencode plugin update` + 重启，实测斜杠命令、面板、导出、降级路径（db 缺失时 API 返回 503 文案）。
@@ -263,6 +275,13 @@ opencode-db-insight/
   - 为何暂不采纳：本库 `cost` 字段常为 0（活库实测绝大多数行为 0），直方图退化为单柱零信息；tokens 换算金额属估算口径，做分位数刻线会把估算伪装成精确（与 §5 精度标签纪律相悖）。
   - 再触发条件：provider 侧开始落真实 cost，或引入公开定价表做系统化估算并带上精度标签之后。
 - **工具错误率时序 / 失败中断识别**（v0.21.0 B 档缓办 → **v0.22.0 已采纳**）：见 §5 / §6 / §7 的 v0.22.0 条目。缓办的自我条件已分别落实——错误率时序以「按时序的两段式 `$.state.status` 抽取 + 本地日分桶」实现（与 `/api/tool-health` 共享抽取模块，跨路由守恒）；失败中断识别以「最后一条 assistant 对象消息的 `$.error`」推断，带 **🟡 推断** 标签并以「会话级终局错误类型」界定，`session_v2` 无 status/error 列的空白用「🟡 仅作参考」的页脚图例兜底。
+- **侧栏「提问列表 + 跳转到提问位置」**（v0.23.0 评估后**有意缓办**，等宿主 API 演进）
+  - 是什么：右侧栏列出当前会话里用户提过的每个问题，点击把视图跳到该提问在对话流中的位置。
+  - 数据面：已确认可行且很轻——`session_message` 中 `type='user'`，正文在 `data.text`，且有现成索引 `session_message_session_type_seq_idx (session_id, type, seq)`（活库实测 3641 条 user 消息）。
+  - 为何缓办：**「跳到指定消息」在 OpenCode V2 插件 API 中没有暴露**（`@opencode/plugin@2.0.32` 全量 typings 核对）：`ui.router.navigate` 的 `Destination` 只有 `home | session | plugin` 三种，最细到「打开某个会话」，没有 messageID 目标；`data.session.message` 只有 `list / get / sync / invalidate`，没有 scroll / reveal / focus；宿主内部有 `jumpToMessage(id)`，但未导出给插件。
+  - 可用的替代（均不满足「点到第 k 条」）：① 点开 `session.panel` 显示该问题全文；② 列项点击复制文本；③ `keymap.dispatch("session.messages_last_user")` 只能跳最近一条；④ `session.message.user.next` / `.user.previous` 只能逐条步进。
+  - 再触发条件：宿主 typings 出现消息级定位 API（如 `router.navigate({type:"message", messageID})` 或 `scrollToMessage(id)`）。届时侧栏列表可直接复用 `src/stats/session-todo.ts` 的分页 + 函数子节点范式。
+  - 另注：`session_message` 正文含明文凭据（实测某次工具调用内嵌 `Bearer sk-...`），做展示前必须先脱敏或只显示截断摘要。
 - **cache write 趋势 / 步均耗时**（v0.21.0 C 档，**淘汰**）
   - 是什么：cache write token 的逐日趋势；每步平均耗时指标。
   - 为何淘汰：真库实测 cache write 仅 8/964 会话有值（`tokens_cache_write` 基本为 0），趋势线退化为零线；步均耗时与既有「墙钟时长」高度重叠，单列反而啰嗦（与 §5「不重复、不啰嗦」纪律相悖）。

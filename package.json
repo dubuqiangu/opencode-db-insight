@@ -1,6 +1,6 @@
 {
   "name": "opencode-db-insight",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "OpenCode V2 plugin: historical usage dashboard, session replay and markdown export from the local opencode database",
   "type": "module",
   "exports": {
@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "node --test --experimental-strip-types \"test/*.test.ts\"",
-    "check": "npx esbuild src/index.ts && npx esbuild src/tui.tsx --loader:.tsx=tsx --jsx=automatic"
+    "check": "npm run check:types && npx esbuild src/index.ts && npx esbuild src/tui.tsx --loader:.tsx=tsx --jsx=automatic --jsx-import-source=@opentui/solid --bundle --platform=node --format=esm --external:solid-js --external:@opentui/* --outfile=tmp-check.js && node -e \"const s=require('fs').readFileSync('tmp-check.js','utf8'); if(s.includes('react/jsx-runtime')) { console.error('check: TUI bundle resolved React JSX runtime instead of @opentui/solid'); process.exit(1) } if(!s.includes('@opentui/solid/jsx-runtime')) { console.error('check: TUI bundle is missing the @opentui/solid jsx-runtime reference'); process.exit(1) }\" && node -e \"require('fs').rmSync('tmp-check.js')\"",
+    "check:types": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@opencode/plugin": "2.0.23"

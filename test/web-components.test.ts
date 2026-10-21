@@ -217,6 +217,9 @@ function installDomShim(): void {
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
     innerWidth: 1920,
     innerHeight: 1080,
+    // v0.24.0: session-replay reads window.location.hash for the message
+    // deep link. Tests set `window.location.hash` to drive that path.
+    location: { hash: "" },
   } as unknown as Window & typeof globalThis
 }
 
@@ -2553,6 +2556,186 @@ test("renderSessionReplay mounts the search bar and a session switch leaves no s
     assert.equal(freshSearchInput.value, "", "the fresh session starts with an empty input")
   } finally {
     globalThis.fetch = savedFetch
+  }
+})
+
+/* ------------- replay message deep link (v0.24.0) ------------- */
+
+test("readDeepLinkMessageId reads ?msg= out of the session hash and treats blanks as no deep link", async () => {
+  const { readDeepLinkMessageId } = await import(
+    "../src/web/public/components/replay-deep-link.js"
+  )
+
+  assert.equal(readDeepLinkMessageId("#/session/ses_example_alpha?msg=msg_0007"), "msg_0007")
+  assert.equal(
+    readDeepLinkMessageId(`#/session/ses_example_alpha?msg=${encodeURIComponent("msg a/b")}`),
+    "msg a/b",
+    "percent-encoded ids are decoded",
+  )
+  assert.equal(readDeepLinkMessageId("#/session/ses_example_alpha?other=1&msg=msg_0007"), "msg_0007")
+  // No deep link in these: the block must not run the (failing) locate path.
+  assert.equal(readDeepLinkMessageId("#/session/ses_example_alpha"), null)
+  assert.equal(readDeepLinkMessageId("#/session/ses_example_alpha?msg="), null)
+  assert.equal(readDeepLinkMessageId("#/session/ses_example_alpha?msg=%20%20"), null)
+  assert.equal(readDeepLinkMessageId(""), null)
+  assert.equal(readDeepLinkMessageId(null), null)
+})
+
+test("buildDeepLinkedSessionHash round-trips through readDeepLinkMessageId", async () => {
+  const { buildDeepLinkedSessionHash, readDeepLinkMessageId } = await import(
+    "../src/web/public/components/replay-deep-link.js"
+  )
+
+  const linkedHash = buildDeepLinkedSessionHash("ses_example_alpha", "msg_example_alpha_0003")
+  assert.equal(linkedHash, "#/session/ses_example_alpha?msg=msg_example_alpha_0003")
+  assert.equal(readDeepLinkMessageId(linkedHash), "msg_example_alpha_0003", "writer and reader agree")
+
+  // No message id → plain session hash (the "copy link" button degrades
+  // gracefully rather than emitting `?msg=`).
+  assert.equal(buildDeepLinkedSessionHash("ses_example_alpha", null), "#/session/ses_example_alpha")
+  assert.equal(buildDeepLinkedSessionHash("ses_example_alpha", "  "), "#/session/ses_example_alpha")
+
+  // Ids with reserved characters must survive the encode/decode round trip.
+  assert.equal(
+    readDeepLinkMessageId(buildDeepLinkedSessionHash("ses_example_alpha", "msg?a&b=c")),
+    "msg?a&b=c",
+  )
+})
+
+test("findVisibleMessageIndex uses the same idle/synthetic filter as renderTimeline", async () => {
+  const { findVisibleMessageIndex } = await import(
+    "../src/web/public/components/replay-deep-link.js"
+  )
+
+  const records = [
+    replayMessageRecord(0, "user", { text: "第一" }),
+    replayMessageRecord(1, "idle", { duration: 1_000 }),
+    replayMessageRecord(2, "assistant", { model: { id: "glm-5.3" }, content: [{ type: "text", text: "第二" }] }),
+    replayMessageRecord(3, "synthetic", { text: "跳过" }),
+    replayMessageRecord(4, "user", { text: "第三" }),
+  ]
+
+  // Indexes are VISIBLE indexes: idle/synthetic do not consume a slot, so the
+  // assistant record at seq 2 is visible index 1 and the user at seq 4 is 2.
+  assert.equal(findVisibleMessageIndex(records, "msg_example_alpha_0000"), 0)
+  assert.equal(findVisibleMessageIndex(records, "msg_example_alpha_0002"), 1)
+  assert.equal(findVisibleMessageIndex(records, "msg_example_alpha_0004"), 2)
+  assert.equal(findVisibleMessageIndex(records, "msg_example_alpha_0001"), -1, "idle messages are not addressable")
+  assert.equal(findVisibleMessageIndex(records, "msg_absent"), -1)
+  assert.equal(findVisibleMessageIndex([], "msg_example_alpha_0000"), -1)
+  assert.equal(findVisibleMessageIndex(records, null), -1)
+})
+
+test("revealMessageNode appends pagination until an off-page target is rendered, then scrolls and highlights it", async () => {
+  const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
+  const { revealMessageNode, DEEP_LINK_TARGET_CLASS } = await import(
+    "../src/web/public/components/replay-deep-link.js"
+  )
+
+  const container = freshContainer()
+  const manyRecords = Array.from({ length: 210 }, (_unusedElement, recordSeq) =>
+    replayMessageRecord(recordSeq, "user", { text: `消息 ${recordSeq}` }),
+  )
+  const paginationController = renderTimeline(container, manyRecords, 200)
+  assert.equal(paginationController.renderedCount, 200, "first chunk only")
+
+  const scrolledIntoView: string[] = []
+  const originalNodeAt = paginationController.nodeAt.bind(paginationController)
+  paginationController.nodeAt = (nodeIndex: number) => {
+    const nodeElement = originalNodeAt(nodeIndex)
+    if (nodeElement !== null) {
+      nodeElement.scrollIntoView = () => scrolledIntoView.push(nodeElement.dataset.messageId!)
+    }
+    return nodeElement
+  }
+
+  const revealResult = revealMessageNode({
+    paginationController,
+    messageRecords: manyRecords,
+    messageId: "msg_example_alpha_0205",
+  })
+
+  assert.equal(revealResult.status, "located")
+  assert.equal(revealResult.visibleIndex, 205)
+  assert.equal(paginationController.renderedCount, 210, "chunks were appended until the target existed")
+  assert.deepEqual(scrolledIntoView, ["msg_example_alpha_0205"], "exactly the target was scrolled to")
+  assert.ok(
+    originalNodeAt(205)!.classTokenList().includes(DEEP_LINK_TARGET_CLASS),
+    "the located node carries the deep-link highlight class",
+  )
+})
+
+test("revealMessageNode reports notFound for an unknown id and never throws", async () => {
+  const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
+  const { revealMessageNode } = await import("../src/web/public/components/replay-deep-link.js")
+
+  const container = freshContainer()
+  const records = [replayMessageRecord(0, "user", { text: "唯一一条" })]
+  const paginationController = renderTimeline(container, records, 200)
+
+  assert.equal(
+    revealMessageNode({ paginationController, messageRecords: records, messageId: "msg_absent" }).status,
+    "notFound",
+  )
+  assert.equal(
+    revealMessageNode({ paginationController, messageRecords: records, messageId: null }).status,
+    "notFound",
+  )
+  assert.equal(
+    revealMessageNode({ paginationController: null, messageRecords: records, messageId: "msg_example_alpha_0000" }).status,
+    "notFound",
+  )
+  assert.equal(container.querySelectorAll(".replay-node").length, 1, "a failed locate does not touch the timeline")
+})
+
+test("renderSessionReplay locates the message named in the hash, and a plain hash does not", async () => {
+  const { renderSessionReplay } = await import(
+    "../src/web/public/components/session-replay.js"
+  )
+
+  const alphaRecords = [
+    replayMessageRecord(0, "user", { text: "第一条正文" }),
+    replayMessageRecord(1, "assistant", { model: { id: "glm-5.3" }, content: [{ type: "text", text: "第二条正文" }] }),
+    replayMessageRecord(2, "user", { text: "第三条正文" }),
+  ]
+  const savedFetch = globalThis.fetch
+  globalThis.fetch = (async (fetchInput: unknown) => {
+    if (!String(fetchInput).includes("/messages")) {
+      return { ok: false, status: 404, json: async () => ({}) }
+    }
+    return { ok: true, status: 200, json: async () => alphaRecords }
+  }) as unknown as typeof fetch
+
+  const stubWindow = globalThis.window as unknown as { location: { hash: string } }
+  try {
+    stubWindow.location.hash = "#/session/ses_example_alpha?msg=msg_example_alpha_0002"
+    const container = freshContainer()
+    await renderSessionReplay(container, "ses_example_alpha")
+    // The deep link targets the third visible node: exactly one node carries
+    // the highlight class (the class lives on the node, hence one match).
+    assert.equal(
+      container.querySelectorAll(".replay-deep-link-target").length,
+      1,
+      "the hash-named message is highlighted",
+    )
+    assert.ok(
+      container.querySelectorAll(".replay-deep-link-target")[0]!.dataset.messageId === "msg_example_alpha_0002",
+      "the highlighted node is the one named in the hash",
+    )
+    // The deep link must not have broken the ordinary render: all three nodes
+    // are still there, and the search bar is mounted.
+    assert.equal(container.querySelectorAll(".replay-node").length, 3)
+    assert.equal(container.querySelectorAll("input.replay-search-input").length, 1)
+
+    // A hash without ?msg= renders identically and locates nothing.
+    stubWindow.location.hash = "#/session/ses_example_alpha"
+    const plainContainer = freshContainer()
+    await renderSessionReplay(plainContainer, "ses_example_alpha")
+    assert.equal(plainContainer.querySelectorAll(".replay-node").length, 3)
+    assert.equal(plainContainer.querySelectorAll(".replay-deep-link-target").length, 0)
+  } finally {
+    globalThis.fetch = savedFetch
+    stubWindow.location.hash = ""
   }
 })
 

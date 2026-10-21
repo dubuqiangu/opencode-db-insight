@@ -54,7 +54,7 @@
 
 ## M7 收敛与发布（push #8）
 
-- [x] T7.1 对照 DESIGN.md 逐项核验（需求→设计→任务→实现双向追溯），缺口回填——✅ 双向对账完成（§4/§5/§6/§8/§9/§10 逐条比对实现与 tasks.md 勾项）；发现 8 处差异已整理成决策清单交付（小时热力未接 API/前端、会话存活与压缩事件有口径无消费、strictHitRate 未接线、/api/sessions 排序参数缺、状态面板降级 toast 而非 dialog、导出文件名时间戳粒度、导出目录 §8 与 §9 表述冲突、sqlite 打开方式readOnly 选项而非 mode=ro URI）——按任务约定差异交用户决策，不回填 DESIGN.md
+- [x] T7.1 对照 DESIGN.md 逐项核验（需求→设计→任务→实现双向追溯），缺口回填——✅ 双向对账完成（§4/§5/§6/§8/§9/§10 逐条比对实现与 tasks.md 勾项）；发现 8 处差异已整理成决策清单交付（小时热力未接 API/前端、会话存活与压缩事件有口径无消费、strictHitRate 未接线、/api/sessions 排序参数缺、状态面板降级 toast 而非 dialog、导出文件名时间戳粒度、导出目录 §8 与 §9 表述冲突、sqlite 打开方式用 readOnly 选项而非 mode=ro URI）——按任务约定差异交用户决策，不回填 DESIGN.md
 - [x] T7.2 README 完整化：安装（github:add 三方式）/更新/卸载/验证/排障——✅ README 重写完成：一句话简介+功能清单（三条斜杠命令、看板六区块、回放）、安装三方式表格（官方 add 推荐 / git clone / opencode.json file://，注明单方式）、plugin update/remove/list 验证命令（更新需重启）、使用说明（端口 18789 起 +1 重试、./insight-exports/、db 路径通用写法）、排障表（看板未启动/数据不可用/旧表 404/0% 命中率/日志位置）、与 usage-meter 互补、MIT；全文无本机绝对路径与用户名，todo 等未上前端的指标已按实测降级表述
 - [ ] T7.3 `opencode plugin update` 后重启实测全部功能 + 卸载重装干净
 - [ ] T7.5 v0.1.0 版本号 + CHANGELOG 汇总 + 用户验收
@@ -529,3 +529,36 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 版本回写：`package.json` / `INSIGHT_VERSION` → 0.22.0；DESIGN §3/§5/§6/§7/§13、CHANGELOG 0.22.0 段、本台账
 - [x] v0.22.0 发布门禁（2026-10-19）：脱敏扫描四类清零（136 tracked，新文件全为源/测试；`%USERPROFILE%` 为文档占位符、`provider.internal` 为 `\.internal\b` 误报）→ tarball 探针过（`opencode-db-insight-0.22.0.tgz`，536.3KB / 145 文件，两新卡 + 三新查询模块在包内）→ commit `4832d21` → push + tag v0.22.0（master == tag == origin == `4832d21`）→ `plugin update`（`Updated Server plugin "opencode-db-insight"`）→ verify-install **7/7 PASS**（0.22.0 @ `4832d21`，src 87=87 / test 51=51）
 - [ ] 用户真机冒烟（v0.21.0 + v0.22.0）：重启 TUI 生效 → 工具错误率趋势卡（范围芯片 7/30/90/全部、错误率折线折叠保活、🟢 实值副标题）→ 会话失败与中断卡（hero 197 中断 / 24.5%、终局错误类型条、最近中断清单链回放、🟡 推断副标题）→ 进入「只看此会话」两新卡隐藏 → 页脚图例 🟡 推断/估算
+
+## v0.23.0 TUI 侧栏 todo 块（2026-10-19）orchestrator 直养 + fix-49 数据层
+
+- [x] **需求确认**：挂 db-insight；每页 4 条、`in_progress` 恒首位；提问列表 + 消息跳转**暂不做**但记录（DESIGN §13）；侧栏按官方实现
+- [x] **官方取证**（lib-6）：「可折叠头部 + 逐行可点」唯一官方范本 = `packages/tui/src/feature-plugins/sidebar/mcp.tsx` L6（storage.store）/ L26-38（折叠头）/ L50-61（列表项 onMouseUp）；`context.renderer` 是官方 API（typings L483）但官方侧栏插件零调用；侧栏无官方分页范式（仅 `footer.tsx` 按终端高度裁剪）
+- [x] **投递形态取证**（lib-6）：官方 in-repo spec `packages/opencode/specs/tui-plugins.md` 无反预编译要求；社区活例 `@streetturtle/opencode-context-progress@2.0.0` 的 `./tui` 直接指向裸 `dist/tui.tsx` + peerDeps 声明 `@opentui/*`/`solid-js`，与 db-insight 现有姿态一致 → **按官方走裸 TSX**，不迁移 bundle
+- [x] fix-49 数据层：`src/db/session-todo-queries.ts`（精确 SQL，`db===null → []`，同步）+ `src/stats/session-todo.ts`（状态秩排序 / 隐藏规则 / clamp 分页，`SESSION_TODO_PAGE_SIZE=4`）+ `test/session-todo.test.ts`（9 例）；530/530
+- [x] 侧栏块 `src/tui/sidebar-todo.tsx`：`sidebar.content` slot + `storage.store("session-todo.view")` 持久化折叠态 + 1s tick 驱动重读 + 全动态读取走函数子节点；多页 `‹ n/m ›` 翻页；切会话页码归零；连接 open→finally close
+- [x] `src/tui.tsx` fail-safe 接线：动态 import + catch，侧栏加载失败不牵连 `/insight` 命令
+- [x] 构建门：新增 `tsconfig.json`（`jsxImportSource: @opentui/solid`）；`npm run check` 改 `--bundle --platform=node --jsx-import-source=@opentui/solid` 并断言产物引用 `@opentui/solid/jsx-runtime`、禁 `react/jsx-runtime`
+- [x] **决定性证据**：esbuild bundle 产物引用 `@opentui/solid/jsx-runtime`（非 react）→ 裸 TSX 路线本机可行；`npm run check` exit 0；`npm test` 530/530；改动文件全 LF 无 BOM
+- [ ] **真机冒烟（待用户完整重启）**：侧栏 Todos 块出现 → 标题行点击即时 ▼/▶ → 折叠态重启后保留 → 每页 4 条 + `‹ n/m ›` 可翻 → `in_progress` 在首位 → 全部 completed 时整块消失 → 新 todo 写入后 1s 内出现 → 切换会话页码归零 → `/insight` 命令仍正常（验证 fail-safe 未误伤）
+- [ ] 发布：脱敏扫描（独立一步、先读输出）→ commit + push + tag v0.23.0 → `plugin update` → `verify-install.ps1` 全绿
+- [ ] 台账待补：DESIGN §11 的 check 命令描述、README 的侧栏说明
+## v0.23.0 追加：参考项目归档 + 宽表列宽（2026-10-20）
+
+- [x] 建 repo 级参考目录 `references/`（工作区根，非 git 仓库，不会被误提交），归档 5 个快照：billion-context（MIT，0.1.202，`48d45e7`）、opencode-mem（MIT，2.32.0）、opencode-plugin-otel（MPL-2.0，2.0.1）、oc-tps（无 license，0.0.12）、Opencode-Context-Analysis-Plugin（无 license，1.0.0）
+- [x] `references/README.md`：仓库元数据表（版本/提交/license/大小）+ 选型理由
+- [x] `references/CAPABILITY-AUDIT.md`：对话记录回溯专项审计
+      - 结论：5 个项目中**只有 billion-context 有对话回溯**；其余 4 个（记忆库 / 遥测 / TPS / 单命令条形图）都没有
+      - billion-context 回溯实现：`src/export.ts:83` `renderHandoff` → `sessions-data.ts:957/1017` → 前端 `client.ts:1565` `renderHandoffMd`；1.5MB 截断 + 指向完整导出；reasoning 用原生 `<details>`
+      - db-insight 对比：会话列表/消息时间线/搜索跳转三项**不弱于**它（`replay-search.js:161` 已用 `scrollIntoView`）；落后项是轨迹图框选缩放、PNG 导出、大内容截断保护
+- [x] 宽表固定列宽：`session-list.js`（13 列）、`model-table.js`（11 列）、`agent-table.js`（4 列）各补 `<colgroup>`；`components.css` `.data-table` 改 `table-layout: fixed` + 单元格 `overflow: hidden; text-overflow: ellipsis`
+- [x] 验证：`npm test` 535/535、`npm run check` 0（已含 `check:types`）、CHANGELOG 为 LF 无 BOM
+- [x] 侧栏 todo 逻辑复核与修复（2026-10-21，oracle 独立审查 + 自校）：折叠改 `onMouseUp`、删 `requestRender`、页码复位改 `createEffect`、分页箭头先判边界；新增 `src/tui/clip-columns.ts` 按显示列宽截断（CJK/emoji 计 2 列），`test/session-todo.test.ts` 增至 14 例
+- [x] **全部完成后整块隐藏（含标题行）**：`buildSessionTodoView` 返回 `null` 时标题行也一并消失，函数子节点内门控以保持响应式。原实现只隐藏列表，标题 `▼ TodosUnited` 常驻，与验收口径不符
+- [x] **窄侧栏换行**：内容 `<text>` 加 `wrapMode="none"`，避免侧栏窄于 44 列时把状态图标挤下去
+- [x] **类型门落地**：`tsconfig.json` 原先不被任何脚本调用（`npm run check` 只跑 esbuild，不做类型检查），而 `tsc` 全仓有约 300 个既有错误。改为拆出 `check:types` 并串进 `check`，`include` 收窄到本轮 4 个模块（`clip-columns.ts` / `sidebar-todo.tsx` / `session-todo.ts` / `session-todo-queries.ts`），补齐 `allowImportingTsExtensions` + `skipLibCheck`，门现真正通过
+- [x] **`<text>` 函数子节点类型缺口收敛**：`@opentui/solid` 运行时 `insert()` 特判函数子节点并包 `createRenderEffect`（`index.js:6523`），类型定义未描述。新增具名辅助 `live()` 集中该断言，`sidebar-todo.tsx` 进入 strict 门
+- [x] **注册期卸载竞态**：`registerSessionTodoSidebar` 加 `isDisposed`，dispose 后 `render` 返回 `null`，避免动态 import 与卸载竞态把块挂进已销毁上下文
+- [x] 参考项目二次复查已写入 `references/CAPABILITY-AUDIT.md` §7：模型表 11 列对齐（此前疑点系探针正则缺陷）；markdown/样式/i18n/diagnostics 均不值得搬；剩余 4 项目仅 oc-tps 生命周期与 Context-Analysis 的 telemetry 校准有参考价值
+- [ ] **后续评估（未做）**：回放页大内容截断保护；回放页消息锚点 hash 深链；token 曲线框选缩放；PNG 导出
+- [ ] 说明：本次改动只在源码；运行中的 18789-18792 服务加载的是安装态 0.22.0，需发布后才会体现

@@ -24,6 +24,7 @@ import {
 import { formatTokens, formatCount, formatDateTime, formatPercent, escapeHtml } from "../format.js";
 import { renderTimeline, summarizeReplayTokens, summarizeStrictHitRate } from "./replay-timeline.js";
 import { buildReplaySearchBar } from "./replay-search.js";
+import { readDeepLinkMessageId, revealMessageNode } from "./replay-deep-link.js";
 import { renderReplayTokenCurve } from "./replay-token-curve.js";
 import { renderLoading, renderError } from "./state-views.js";
 
@@ -295,6 +296,23 @@ function buildTimelineSectionElement(messageRecords) {
       if (!stillHasMore) loadMoreButton.remove();
     });
     timelinePanel.appendChild(loadMoreButton);
+  }
+
+  // v0.24.0 消息深链：目标可能在未渲染分页区，revealMessageNode 会自己
+  // 追加到目标再滚动。找不到就静默停在页首——深链坏了不该让回放页报错。
+  const deepLinkMessageId = readDeepLinkMessageId(window.location.hash);
+  if (deepLinkMessageId !== null) {
+    const revealResult = revealMessageNode({
+      paginationController,
+      messageRecords,
+      messageId: deepLinkMessageId,
+    });
+    updateProgressNote();
+    replaySearch.syncAfterAppend();
+    if (revealResult.status === "located" && !paginationController.hasMore) {
+      const staleLoadMoreButton = timelinePanel.querySelector(".load-more-button");
+      if (staleLoadMoreButton !== null) staleLoadMoreButton.remove();
+    }
   }
 
   return timelinePanel;
