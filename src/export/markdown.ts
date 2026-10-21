@@ -27,6 +27,7 @@ import {
   renderNoticeSection,
   renderUserMessageSection,
 } from "./message-roles.ts"
+import { redactCredentials } from "./redact-credentials.ts"
 
 /**
  * Render a full session export document. `systemPrompt` may be null when
@@ -79,7 +80,7 @@ function renderHeaderSection(sessionSummary: SessionSummary): string {
   // collapse them into spaces before the markdown escaping pass.
   const singleLineTitle = sessionTitle.replace(/[\r\n]+/g, " ")
   const headerLines = [
-    `# ${singleLineTitle === "" ? "（无标题会话）" : escapeMarkdownSpecialCharacters(singleLineTitle)}`,
+    `# ${singleLineTitle === "" ? "（无标题会话）" : escapeMarkdownSpecialCharacters(redactCredentials(singleLineTitle))}`,
     `- **会话 ID**: ${coerceText(summaryRecord["id"]) || "未知"}`,
     `- **模型**: ${coerceText(summaryRecord["modelId"]) || "未知"}`,
     `- **Agent**: ${coerceText(summaryRecord["agent"]) || "未知"}`,
@@ -97,5 +98,5 @@ function renderHeaderSection(sessionSummary: SessionSummary): string {
 /** Tail section with the system prompt as one blockquote; "" when absent. */
 function renderSystemPromptSection(systemPrompt: string | null): string {
   if (typeof systemPrompt !== "string" || systemPrompt.trim() === "") return ""
-  return `## 📋 系统提示词\n\n${wrapTextAsBlockquote(systemPrompt)}`
+  return `## 📋 系统提示词\n\n${wrapTextAsBlockquote(redactCredentials(systemPrompt))}`
 }

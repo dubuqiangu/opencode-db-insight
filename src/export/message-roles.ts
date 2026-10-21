@@ -16,6 +16,7 @@
 
 import type { SessionMessageRecord } from "../db/types.ts"
 import { asRecord, coerceText } from "../db/rows.ts"
+import { redactCredentials } from "./redact-credentials.ts"
 import {
   buildCodeFence,
   collapseToSingleLine,
@@ -47,7 +48,7 @@ export function renderUserMessageSection(message: SessionMessageRecord): string 
   const sectionLines = [USER_SECTION_HEADING]
   const timestampLine = renderTimestampLine(message.timeCreated)
   if (timestampLine !== "") sectionLines.push("", timestampLine)
-  sectionLines.push("", renderFreeTextPassage(userText))
+  sectionLines.push("", renderFreeTextPassage(redactCredentials(userText)))
   return sectionLines.join("\n")
 }
 
@@ -70,10 +71,14 @@ export function renderAssistantMessageSection(message: SessionMessageRecord): st
     const partType = coerceText(partRecord["type"])
     if (partType === "text") {
       const textPassage = coerceText(partRecord["text"])
-      if (textPassage.trim() !== "") renderedParts.push(renderFreeTextPassage(textPassage))
+      if (textPassage.trim() !== "") {
+        renderedParts.push(renderFreeTextPassage(redactCredentials(textPassage)))
+      }
     } else if (partType === "reasoning") {
       const reasoningPassage = coerceText(partRecord["text"])
-      if (reasoningPassage.trim() !== "") renderedParts.push(wrapTextAsBlockquote(reasoningPassage))
+      if (reasoningPassage.trim() !== "") {
+        renderedParts.push(wrapTextAsBlockquote(redactCredentials(reasoningPassage)))
+      }
     } else if (partType === "tool") {
       renderedParts.push(renderToolCallBlock(partRecord))
     }
@@ -149,14 +154,24 @@ function renderToolCallBlock(toolPartRecord: Record<string, unknown>): string {
   const blockLines = [`**🔧 工具调用: ${toolName}**${renderToolStatusSuffix(stateRecord)}`]
 
   if (stateRecord !== null && stateRecord["input"] !== undefined && stateRecord["input"] !== null) {
-    blockLines.push("", "参数:", "", buildCodeFence(safeStringifyJson(stateRecord["input"]), "json"))
+    blockLines.push(
+      "",
+      "参数:",
+      "",
+      buildCodeFence(redactCredentials(safeStringifyJson(stateRecord["input"])), "json"),
+    )
   }
 
   const toolOutput = stateRecord === null ? "" : readToolOutput(stateRecord)
   if (toolOutput.trim() === "") {
     blockLines.push("", "*（无输出记录）*")
   } else {
-    blockLines.push("", "输出:", "", buildCodeFence(truncateToolOutput(toolOutput), "text"))
+    blockLines.push(
+      "",
+      "输出:",
+      "",
+      buildCodeFence(redactCredentials(truncateToolOutput(toolOutput)), "text"),
+    )
   }
   return blockLines.join("\n")
 }

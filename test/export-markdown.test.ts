@@ -326,3 +326,45 @@ test("truncateNoticeText 截在高代理位时同样回退一个码元（P2-1）
 
   assert.equal(truncateNoticeText(surrogateHeavyNotice), "x" + "😀".repeat(99) + "...")
 })
+
+test("导出文档会把凭据替换掉：user 正文、assistant 文本、reasoning、工具入参、工具输出、标题、系统提示词", () => {
+  // 合成值：形状与实测一致（sk- 51 位、ghp_ 40 位），但主体是编的。
+  const fakeOpenAiKey = "sk-testonly0000111122223333444455556666aaaa"
+  const fakeGithubKey = "ghp_testonly0000111122223333444455556666"
+  const summaryWithSecret = { ...buildSessionSummaryFixture(), title: "调试 " + fakeOpenAiKey }
+
+  const messagesCarryingSecrets = [
+    buildMessageFixture("user", { text: "我的 key 是 " + fakeOpenAiKey }),
+    buildMessageFixture("assistant", {
+      content: [
+        { type: "text", text: "收到 " + fakeGithubKey },
+        { type: "reasoning", text: "我在想 " + fakeOpenAiKey },
+        {
+          type: "tool",
+          name: "bash",
+          state: {
+            status: "completed",
+            input: { command: "curl -H 'Authorization: Bearer " + fakeOpenAiKey + "'" },
+            metadata: { output: "export GITHUB=" + fakeGithubKey },
+          },
+        },
+      ],
+    }),
+  ]
+
+  const renderedExport = renderSessionMarkdown(
+    summaryWithSecret,
+    messagesCarryingSecrets,
+    "系统提示词里也有 " + fakeOpenAiKey,
+  )
+
+  assert.ok(!renderedExport.includes(fakeOpenAiKey), "sk- 值不能出现在导出里")
+  assert.ok(!renderedExport.includes(fakeGithubKey), "ghp_ 值不能出现在导出里")
+  assert.ok(renderedExport.includes("sk-…aaaa"), "保留末 4 位，用户还能认出是哪把 key")
+  assert.ok(renderedExport.includes("github-…6666"), "github 值同样保留末 4 位")
+  // 「脱敏」不能变成「删段」：结构标记必须还在。
+  assert.ok(renderedExport.includes("## 🧑 用户"))
+  assert.ok(renderedExport.includes("## 🤖 助手"))
+  assert.ok(renderedExport.includes("## 📋 系统提示词"))
+  assert.ok(renderedExport.includes("**🔧 工具调用: bash**"))
+})
