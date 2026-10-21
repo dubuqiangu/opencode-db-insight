@@ -115,16 +115,17 @@ export function readToolOutputForDisplay(stateRecord) {
 /**
  * 回放页 thinking（reasoning）正文的展示上限（v0.24.x）。
  *
- * 比工具输出更紧，理由有三个：reasoning 默认**展开**（用户一进来就吃这份
- * 布局成本）；它没有「点击展开」这个天然的折叠闸门；且实测本机库里 reasoning
- * 是唯一真正超 100k 的渲染面（最大 150,908，18 个超 100k），而 text part
- * 与 tool output 都远低于 200k。
+ * 比工具输出更紧，理由是实测：reasoning 是唯一真正超 100k 的渲染面
+ * （最大 150,908，18 个超 100k），而 text part 与 tool output 都远低于 200k；
+ * 且它默认**展开**，一进页面就吃这份布局成本。
  *
- * 搜索侧**仍扫全文**（buildSearchableMessageText 保持原样）：这里截的是
- * 「铺在页面上的正文」，不是搜索面。这与工具输出的处理有意不同——工具输出的
- * 截断是沉默丢内容（用户看不到被砍掉的部分），若搜索越过它就会「搜得到却
- * 看不见」；reasoning 的截断则在页面上明确标注了总长度，且展开是默认态，
- * 命中后用户第一眼就能看到所在段落。
+ * **搜索侧必须用同一上限**（教训，别再改回去）：初版让搜索扫全文，理由写的
+ * 是「reasoning 默认展开，命中第一眼就能看到所在段落」——这对超过 100k 的
+ * 那 18 个 part 是假的。用户搜第 120k 字符处的短语，计数说「1 处命中」，
+ * 跳到节点，**那段文字在 DOM 里根本不存在**，而展开态也无可再展开。这正是
+ * 本模块存在的意义所要消灭的「搜得到却看不见」。标注了总长度并不能让一个
+ * 不存在的命中变得可见。故 render 与 search 同源（见 buildSearchableMessageText
+ * 的 reasoning 分支），本模块的对齐不变量重新处处成立。
  */
 export const REASONING_DISPLAY_MAX_CHARS = 100_000;
 
@@ -154,7 +155,11 @@ function buildSearchableMessageText(messageRecord) {
       if (partRecord === null) continue;
       const partType = String(partRecord.type ?? "");
       if (partType === "reasoning") {
-        passages.push(typeof partRecord.text === "string" ? partRecord.text : "");
+        // 与渲染同源（v0.24.x 修正）：渲染侧把 reasoning 截到
+        // REASONING_DISPLAY_MAX_CHARS，搜索面必须同样截断。初版这里推全文，
+        // 导致「计数说命中、跳过去却看不见那段文字」——正是本模块要消灭的
+        // 错位。truncateForDisplay 是纯函数，不依赖 state，可直接在此调用。
+        passages.push(truncateForDisplay(typeof partRecord.text === "string" ? partRecord.text : "", REASONING_DISPLAY_MAX_CHARS).text);
       } else if (partType === "tool") {
         passages.push(readToolName(partRecord));
         passages.push(readToolInput(asRecord(partRecord.state)));

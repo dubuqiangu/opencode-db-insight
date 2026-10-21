@@ -62,6 +62,21 @@ export function buildDeepLinkedSessionHash(sessionId, messageId) {
 }
 
 /**
+ * 在 hash 上拼出「已消费」的会话链接：保留会话 id，去掉 `?msg=`。
+ *
+ * 用于深链定位成功后把参数抹掉（C1）。用 replaceState 而不是改
+ * `window.location.hash = ...`：后者会压入一条新历史记录并触发
+ * hashchange，导致整个回放页重新渲染一遍——用户会看到页面闪一下。
+ */
+export function buildConsumedSessionHash(hashText) {
+  const normalizedHash = typeof hashText === "string" ? hashText : "";
+  const queryStart = normalizedHash.indexOf("?");
+  if (queryStart === -1) return normalizedHash;
+  // hash 本身已是 `#/session/<encoded id>`，不含 `?`，可直接剪掉尾部。
+  return normalizedHash.slice(0, queryStart);
+}
+
+/**
  * 在可见消息序列里找 `messageId` 的下标；找不到返回 -1。
  * 过滤口径必须与 renderTimeline 一致，否则下标会整体错位。
  */
@@ -99,7 +114,9 @@ export function revealMessageNode({ paginationController, messageRecords, messag
 
   const targetNode = paginationController.nodeAt(visibleIndex);
   if (targetNode === null || targetNode === undefined) {
-    return { status: "notFound", visibleIndex };
+    // 与上面那个 notFound 分支保持同一形状（visibleIndex 恒为 -1）：
+    // 两种失败原因不同，但调用方不该需要区分「没找到」与「找到了却没渲染」。
+    return { status: "notFound", visibleIndex: -1 };
   }
 
   if (typeof targetNode.scrollIntoView === "function") {
@@ -109,12 +126,13 @@ export function revealMessageNode({ paginationController, messageRecords, messag
   if (typeof targetNode.classList?.add === "function") {
     targetNode.classList.add(DEEP_LINK_TARGET_CLASS);
     // 高亮自动消隐：深链是一次性落点提示，不该长期占着视觉权重。
-    const clearTimer = setTimeout(() => {
+    // 不调 unref()：浏览器里 setTimeout 返回的是 number，不是 Node 的 Timeout
+    // 对象，那行判断永远为假，是死代码。
+    setTimeout(() => {
       if (typeof targetNode.classList?.remove === "function") {
         targetNode.classList.remove(DEEP_LINK_TARGET_CLASS);
       }
     }, DEEP_LINK_FLASH_MS);
-    if (typeof clearTimer?.unref === "function") clearTimer.unref();
   }
 
   return { status: "located", visibleIndex };

@@ -6,8 +6,8 @@
  * 消息 `data` 的解释口径与 src/export/message-roles.ts 逐条对齐
  * （工具名 name→tool 回退；输出 state.metadata.output→state.content 回退）。
  * 文本提取函数自 v0.10.0 起共享自 replay-message-text.js（渲染与搜索
- * 共用同一出处）。大会话分页：visible 消息 >200 条时先渲染 200 条，
- * "加载更多"逐块追加。
+ * 共用同一出处）。大会话分页：每块最多 200 条，且整块的正文预算不超过
+ * 300,000 字符（见 DEFAULT_PAGE_CHAR_BUDGET），"加载更多"逐块追加。
  */
 
 import { formatDateTime, escapeHtml } from "../format.js";
@@ -26,6 +26,21 @@ import {
 } from "./replay-message-text.js";
 
 const DEFAULT_PAGE_SIZE = 200;
+/**
+ * 单块正文预算（字符，v0.24.x）。条数上限本身不封顶布局成本：实测本机库
+ * 1041 个有可见消息的会话里，200 条一块的正文长度中位数 112,823、p95
+ * 708,134、p99 1,062,388、最大 1,744,374——也就是说约 11% 的会话一打开就
+ * 要布局几十万到一百多万字符。预算取 300,000 的依据：
+ * - 落在 p50 与 p95 之间偏保守的位置，中位数会话（112k）的首屏块仍是完整
+ *   200 条，普通小会话的分页行为逐字不变；
+ * - 最坏单条正文约 2×10⁵ 字符（工具输出上限）+ 1×10⁵（思考过程上限），
+ *   一块装不下两条最重的消息——重的会话会自然切成每块 2~数条；
+ * - 1,744,374 这样的最大首屏切成约 6 块，首屏布局量降到原来的六分之一
+ *   左右，剩下的一次点击一块，不会一次性回流所有内容。
+ * 预算按「预估正文长度」判断，不做 DOM 测量：测量要等布局完成，那正是
+ * 我们要避免的开销。
+ */
+const DEFAULT_PAGE_CHAR_BUDGET = 300_000;
 /** 单个工具块（参数+输出）超过此字符数默认折叠。 */
 const TOOL_BLOCK_COLLAPSE_THRESHOLD = 4000;
 
@@ -251,6 +266,43 @@ function buildNoticeNode(messageRecord) {
 /* ---------------- 时间线容器 + 分页 ---------------- */
 
 /**
+ * 估算单条消息渲染后铺在页面上的正文长度（字符）。
+ *
+ * 只算「会进入布局的可见正文」，与各 build*Node 实际写入 DOM 的规则一致：
+ * - user：readMessageText 全文（空文本走占位节点，长度接近 0）；
+ * - assistant：text part 全文 + reasoning 的展示截断长度（折叠与否都算，
+ *   因为 reasoning 默认展开）+ 工具块的参数与输出展示长度；
+ * - 通知行：正文是 ≤80 字符的拼装串，按小常量计。
+ * 估算值略偏大（含截断说明与元信息行的开销）是有意的：宁可提前切块，
+ * 也不要让某个超重消息因为低估而挤进上一块。
+ */
+function estimateNodeCharCost(messageRecord) {
+  const messageType = String(messageRecord.type ?? "");
+  const dataRecord = asRecord(messageRecord.data);
+  if (dataRecord === null) return 0;
+  if (messageType === "user") return readMessageText(dataRecord).length;
+  if (messageType !== "assistant") return 200; // 通知行：拼装串 + 图标时间
+
+  let totalCost = 0;
+  const contentParts = Array.isArray(dataRecord.content) ? dataRecord.content : [];
+  for (const contentPart of contentParts) {
+    const partRecord = asRecord(contentPart);
+    if (partRecord === null) continue;
+    const partType = String(partRecord.type ?? "");
+    if (partType === "text") {
+      totalCost += typeof partRecord.text === "string" ? partRecord.text.length : 0;
+    } else if (partType === "reasoning") {
+      const reasoningPassage = typeof partRecord.text === "string" ? partRecord.text : "";
+      totalCost += Math.min(reasoningPassage.length, REASONING_DISPLAY_MAX_CHARS) + 200;
+    } else if (partType === "tool") {
+      const stateRecord = asRecord(partRecord.state);
+      totalCost += readToolInput(stateRecord).length + readToolOutputForDisplay(stateRecord).text.length + 200;
+    }
+  }
+  return totalCost;
+}
+
+/**
  * 渲染角色时间线，返回分页控制器：
  *   { appendNextChunk(): boolean, hasMore, visibleCount,
  *     renderedCount, nodeAt(index) }
@@ -260,8 +312,22 @@ function buildNoticeNode(messageRecord) {
  * 个子节点恒等于第 i 条可见消息（buildMessageNode 每条消息恰好产出一个
  * 节点），与 buildReplaySearchIndex 的第 i 项对齐（见
  * replay-message-text.js 头部的对齐不变量）。
+ *
+ * v0.24.x 起每块受**双重封顶**：条数不超过 pageSize，正文估算不超过
+ * charBudget。预算只影响「一批装多少条」，不影响分页语义——无论哪一侧
+ * 先到上限，appendNextChunk 都从 renderedCount 连续渲染到块尾，所以调用
+ * 若干次之后前 N 条必然齐全，nodeAt(i) 仍是第 i 条。这一点是搜索导航与
+ * 深链定位的正确性基础，不要在追加时跳过任何一条。
+ *
+ * 每块至少 1 条：单条就超预算时也照样渲染它，否则 renderedCount 不再前进，
+ * 搜索导航与深链的 while 循环会永远转下去。
  */
-export function renderTimeline(container, messageRecords, pageSize = DEFAULT_PAGE_SIZE) {
+export function renderTimeline(
+  container,
+  messageRecords,
+  pageSize = DEFAULT_PAGE_SIZE,
+  charBudget = DEFAULT_PAGE_CHAR_BUDGET,
+) {
   const visibleRecords = (Array.isArray(messageRecords) ? messageRecords : [])
     .filter((record) => isVisibleReplayMessageType(String(record.type ?? "")));
 
@@ -272,6 +338,21 @@ export function renderTimeline(container, messageRecords, pageSize = DEFAULT_PAG
 
   const timelineState = { lastAssistantModelId: null, assistantModelCounter: 0 };
   let renderedCount = 0;
+
+  /** 自 chunkStart 起按「条数 + 字符预算」算出本块结束下标（至少 1 条）。 */
+  function resolveChunkEnd(chunkStart) {
+    const countLimit = Math.min(chunkStart + pageSize, visibleRecords.length);
+    let chunkChars = 0;
+    let chunkEnd = chunkStart;
+    while (chunkEnd < countLimit) {
+      const nodeCharCost = estimateNodeCharCost(visibleRecords[chunkEnd]);
+      // 先判「加上这条会不会超」，再决定是否停下：第一条无条件收下。
+      if (chunkEnd > chunkStart && chunkChars + nodeCharCost > charBudget) break;
+      chunkChars += nodeCharCost;
+      chunkEnd += 1;
+    }
+    return chunkEnd;
+  }
 
   const controller = {
     hasMore: false,
@@ -284,7 +365,7 @@ export function renderTimeline(container, messageRecords, pageSize = DEFAULT_PAG
       return index >= 0 && index < renderedCount ? listElement.children[index] : null;
     },
     appendNextChunk() {
-      const chunkEnd = Math.min(renderedCount + pageSize, visibleRecords.length);
+      const chunkEnd = resolveChunkEnd(renderedCount);
       const fragment = document.createDocumentFragment();
       for (let index = renderedCount; index < chunkEnd; index += 1) {
         fragment.appendChild(buildMessageNode(visibleRecords[index], timelineState));

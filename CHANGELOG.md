@@ -8,9 +8,16 @@
 
 ### Added
 - **回放页大内容截断保护**（v0.24.x）：回放页的 reasoning 正文**默认展开**且原先没有上限，实测本机库最大 reasoning part **150,908 字符、18 个超 100k**——这是唯一真正超限的渲染面，一进页面就吃这份布局成本。现 `REASONING_DISPLAY_MAX_CHARS = 100_000`，截断在码元边界（不留孤立高位代理），标题行补字符总数、块尾一行琥珀小字说明「仅显示前 N 字符，完整思考过程共 M 字符」。
-  - **搜索侧仍扫全文**（与工具输出有意不同）：reasoning 默认展开，命中后第一眼就能看到所在段落；工具块默认折叠，若搜索越过截断就会「搜得到却看不见」。两个方向都由测试分别锁死。
+  - **搜索侧用同一上限**（A5，据 @oracle 审查修正）：初版让搜索扫全文，理由是「reasoning 默认展开，命中第一眼就能看到所在段落」，这对那 18 个超 100k 的 part 是**假的**——搜第 120k 字符处的短语，计数说「1 处命中」，跳过去那段文字在 DOM 里根本不存在，展开态也无可再展开。这违反了本模块「搜得到的必然渲染得出来」的不变量，故 render 与 search 同源截断。旧测试断言（"search haystack still covers the whole thought"）已反转为锁定新不变量。
   - 工具输出同样加上 `TOOL_OUTPUT_DISPLAY_MAX_CHARS = 200_000` 的保护（实测最大 131,821，未触发，属前瞻性护栏而非当前痛点）。
   - 与导出 Markdown 的 `TOOL_OUTPUT_CHARACTER_LIMIT = 4000` 有意不同（交互浏览宽、文档窄），因此提示里**不**引导用户「导出看全文」——导出只会更短。
+
+- **回放页分页改为「条数 + 字符预算」双重封顶**（v0.24.x）：`renderTimeline` 原先按固定条数分页，首屏恒渲染 200 条。实测本机库 1041 个有可见消息的会话，首屏渲染字符中位数 **112,823**、p95 **708,134**、p99 **1,062,388**、最大 **1,744,374**——**115 个会话首屏超 500k 字符、14 个超 1M**，约 11% 的会话一打开就要布局几十万到一百多万字符。而上一轮的截断阈值对此触发率为 0（成本是 200 条累积的，单块都不超限）。
+  - 新增 `DEFAULT_PAGE_CHAR_BUDGET = 300_000` 与纯函数 `estimateNodeCharCost`（按实际写入 DOM 的可见正文估算：user 全文、assistant text 全文、reasoning 的**展示**截断长度、工具入参与输出的**展示**长度、通知行小常量）。
+  - `resolveChunkEnd` 在 `pageSize` 条数上限内累加估算，超预算即停；**每块至少 1 条**（单条就超预算也照样渲染），否则 `renderedCount` 不前进，搜索导航与深链定位的 `while` 会永远转下去。
+  - 分页语义未变：追加仍从 `renderedCount` 连续渲染到块尾、不跳过任何一条，故 `nodeAt(i)` 恒为第 i 条可见消息。
+  - 中位数会话首屏仍在 200 条以内 → **多数会话行为逐字不变**。
+  - 进度文案不再写死 200：`已渲染 N 条 · 点击加载更多`；条数被预算截短时加后缀 `（本页消息较长，按篇幅分批）`；末尾仍是 `全部 N 条已加载`。
 
 - **回放页消息级深链**（`src/web/public/components/replay-deep-link.js`，新增）：`#/session/<id>?msg=<messageID>` 可直接定位到某一条消息。
   - `id → 可见下标` 复用 `isVisibleReplayMessageType` 过滤后的顺序，与 `renderTimeline` / `buildReplaySearchIndex` 同一口径（算错一档就会定位到隔壁消息）。
@@ -20,6 +27,9 @@
   - 每个时间线节点（含 `system` / `model-switched` / `compaction` 通知行与空文本 user 占位）都带 `data-message-id` 与 `id="msg-<messageID>"`，给深链与外部锚点一个稳定落点。
 
 ### Fixed
+- **深链 `?msg=` 永不清除，F5 每次重复滚动 + 闪烁**（C1，据 @oracle 审查修正）：`session-replay.js` 每次渲染都读 `window.location.hash`，定位成功后却没有任何地方抹掉参数。按 F5 或重进同一链接会再滚一次、再闪一次 2s 高亮，与「一次性落点提示」的契约矛盾。现在定位成功（`status === "located"`）后用 `history.replaceState` 剥掉参数（新增 `buildConsumedSessionHash`）；不用 `location.hash =` 是因为后者会压一条历史记录并触发 `hashchange`，整个回放页会重渲染一遍。`replaceState` 加了 `typeof !== "function"` 守卫——测试桩与部分宿主没有 `history` 对象，缺它不该让回放页失败。定位失败（`notFound`）的链接保留原样，用户能看出地址里的 id 没对上。
+- **`revealMessageNode` 的两个 `notFound` 返回形状不一致**（A8）：`:102` 返回实际 `visibleIndex`，`:91` 返回 `-1`。当前调用方只判 `status`，无活的 bug，但契约注释写着 `notFound` 统一语义，调用方不该需要区分「没找到」与「找到了却没渲染」。两处统一为 `visibleIndex: -1`。
+- **`replay-deep-link.js` 的死代码**（A7）：`typeof clearTimer?.unref === "function"` 恒为假——浏览器 `setTimeout` 返回 number，不是 Node 的 `Timeout` 对象。已删除。
 - **会话路由正则吞掉查询串**：`app.js` 的 `routeByHash` 原用 `/^#\/session\/(.+)$/`，`ses_x?msg=msg_y` 会被整段当作会话 id 去查库，直接误报「旧表会话」。改为 `([^?]+)(\?.*)?`，会话段在 `?` 处截止。
 - **侧栏 Todos 块：整块隐藏未生效**（v0.23.0 引入，未发布即修）。`buildSessionTodoView` 返回 `null` 时只隐藏了列表，标题行 `▼ Todos` 仍常驻 —— 与「全部完成后整块消失」的验收口径不符。现在标题行也由 `todoPage() === null` 门控，在函数子节点内保持响应式。
 - **侧栏 Todos 块：侧栏窄于标签预算时仍会换行**。`<text>` 默认 `wrapMode: "word"`，44 列的标签在更窄的侧栏里会折成两行、把状态图标挤下去，正是截断要防的症状。内容单元格改为 `wrapMode="none"`，由 `clipToColumns` 负责宽度预算。

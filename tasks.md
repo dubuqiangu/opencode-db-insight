@@ -567,8 +567,26 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 
 - [x] **发现的真 bug（经实测修正归因）**：`replay-timeline.js` 的 reasoning 正文默认展开（`detailsElement.open = true`）且**无任何上限**。实测本机库 59143 条消息 / 61002 个 tool part：reasoning part 最大 **150,908 字符、18 个超 100k**，而 assistant text part 最大 39,288、tool output 最大 131,821（0 个超 200k）、user 正文最大 30,530。→ **真正需要截断的是 reasoning，不是工具输出**
 - [x] **归因纠错**：上一轮我用「单条消息 data 最大 4.28 MB」推断工具输出撑爆 DOM，那是整条消息 data 的大小（含全部 content/reasoning），不是单个 tool output。修复方向随之调整：reasoning 截到 100k（含标题字符数 + 块尾琥珀说明），工具输出 200k 保留为前瞻性护栏（当前未触发）
-- [x] **搜索策略按渲染形态区分**（有意不统一）：工具块默认折叠 → 搜索结果必须同受 200k 截断，否则「搜得到却看不见」；reasoning 默认展开 → 搜索仍扫全文，命中即可见。两个方向各有测试锁死
+- [x] ~~**搜索策略按渲染形态区分**（有意不统一）~~ **该判断已被推翻**（见下条 A5）：工具块默认折叠 → 搜索同受 200k 截断；reasoning 默认展开 → 搜索仍扫全文。**这个不对称是错的**
 - [x] 验证：`npm test` **544/544**（+3 例）、`npm run check` 0、改动文件 GLUE=0、LF 无 BOM
+
+## v0.24.x 追加：ora-18 独立审查处置（2026-10-21）
+- [x] **A5（中，推翻上轮设计）**：reasoning 搜索扫全文 = 隐形命中。实测 18 个超 100k 的 part，搜第 120k 字符处短语 → 计数报「1 处命中」，跳过去那段文字在 DOM 里根本不存在、展开态也无可再展开。违反本模块「搜得到的必然渲染得出来」不变量。修法：`buildSearchableMessageText` 的 reasoning 分支改用 `truncateForDisplay(..., REASONING_DISPLAY_MAX_CHARS).text`，render 与 search 同源。旧测试断言已**反转**为锁定新不变量（附「上限内仍可搜到」反向断言）
+- [x] **A5 的对称性证据**（oracle 指出、我上轮漏了）：工具块 >4000 字符默认折叠 → 用户可展开看到 200k；reasoning 默认展开 → 被截掉的 50k 永远拿不到。我的策略把方向搞反了
+- [x] **C1（高）**：`?msg=` 永不清除，F5 / 重进同一链接会再滚一次再闪一次 2s 高亮。修法：定位成功后 `history.replaceState` 剥掉参数（新增 `buildConsumedSessionHash`）；不用 `location.hash =`（会压历史并触发 hashchange → 整页重渲染）。`replaceStateAvailability` 加 `typeof !== "function"` 守卫（测试桩与部分宿主无 `history`，缺它不该让回放页失败）。`notFound` 时保留链接原样
+- [x] **A7（低）**：`typeof clearTimer?.unref === "function"` 恒为假（浏览器 `setTimeout` 返回 number），删
+- [x] **A8（低）**：两个 `notFound` 返回形状不一致（`:102` 给实际下标、`:91` 给 -1），统一为 `visibleIndex: -1`
+- [x] **自查纠错 1**：写文件把 `session-replay.js` 整改成 CRLF（367 行），diff 一度膨胀到 702 行纯噪声；已改回 LF，现 diff 42 行
+- [x] **自查纠错 2**：`window.history` 在测试桩不存在，`replaceState` 直接抛 TypeError → 加守卫，顺带暴露真实健壮性问题纵：宿主不提供 `history` 时不该让回放页失败
+- [x] 验证：`npm test` 544/544、`npm run check` 0、改动文件 GLUE=0、LF 无 BOM
+
+## v0.24.x 追加：回放页分页「条数 + 字符预算」双重封顶（2026-10-21，des-27）
+- [x] **立项依据（实测，非推断）**：`renderTimeline` 按固定条数分页，首屏恒 200 条。1041 个有可见消息的会话首屏渲染字符：中位 112,823 / p95 708,134 / p99 1,062,388 / 最大 1,744,374；**超 500k 的 115 个、超 1M 的 14 个**（约 11% 的会话一打开就要布局几十万到一百多万字符）。上两轮截断阈值对此触发率 **0**——成本是 200 条累积的，单块都不超限
+- [x] `replay-timeline.js`：新增 `DEFAULT_PAGE_CHAR_BUDGET = 300_000`、纯函数 `estimateNodeCharCost`（按实际写入 DOM 的可见正文：user 全文 / assistant text 全文 / reasoning 的**展示**截断长度 / 工具入参与输出的**展示**长度 / 通知行小常量）；`renderTimeline` 增可选第 4 参 `charBudget`，旧调用点一行不改
+- [x] `resolveChunkEnd`：条数上限内累加估算，超预算即停，**每块至少 1 条**——否则 `renderedCount` 不前进，搜索导航与深链的 `while` 会永远转
+- [x] 分页语义未变：追加仍从 `renderedCount` 连续渲染到块尾、不跳过任何一条 → `nodeAt(i)` 恒为第 i 条可见消息
+- [x] `session-replay.js` 进度文案不再写死 200：`已渲染 N 条 · 点击加载更多`，被预算截短时加 `（本页消息较长，按篇幅分批）`，末尾仍 `全部 N 条已加载`；中位数会话仍在 200 条内 → **多数会话行为逐字不变**
+- [x] 验收：`test/web-replay-pagination-budget.test.ts` 4 例（超重单条独占一页不死循环 / 预算触发时该页少于 200 / 多次追加后 `nodeAt(i)` 仍对齐且与 `findVisibleMessageIndex` 口径一致 / 普通会话仍按 200 分页）；`npm test` **548/548**、`npm run check` 0、三文件 LF 无 BOM 无行尾空白
 
 - [ ] **后续评估（未做）**：token 曲线框选缩放（v0.25.0 立项，1–2 天，需设计定交互）；PNG 导出（暂缓，需新依赖）
 - [ ] 说明：本次改动只在源码；运行中的 18789-18792 服务加载的是安装态 0.22.0，需发布后才会体现

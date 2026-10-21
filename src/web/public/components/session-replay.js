@@ -2,7 +2,8 @@
  * 单会话回放视图（M4）：#/session/:id 的真实页面。
  * 结构：返回链接 + 会话头部（标题/模型/agent/时间跨度/token 汇总）
  *      + 系统提示词折叠面板（默认收起）
- *      + 角色时间线（replay-timeline.js，>200 条分页加载）
+ *      + 角色时间线（replay-timeline.js，每块最多 200 条，且受正文
+ *        字符预算封顶：正文重的会话每块条数更少）
  *      + 会话内搜索（replay-search.js，v0.10.0：时间线头部的查找栏，
  *        输入即搜防抖、命中节点级高亮、分页区命中可导航）。
  *      + Token 消耗曲线（replay-token-curve.js，v0.20.0：头部开销行下
@@ -24,11 +25,20 @@ import {
 import { formatTokens, formatCount, formatDateTime, formatPercent, escapeHtml } from "../format.js";
 import { renderTimeline, summarizeReplayTokens, summarizeStrictHitRate } from "./replay-timeline.js";
 import { buildReplaySearchBar } from "./replay-search.js";
-import { readDeepLinkMessageId, revealMessageNode } from "./replay-deep-link.js";
+import {
+  buildConsumedSessionHash,
+  readDeepLinkMessageId,
+  revealMessageNode,
+} from "./replay-deep-link.js";
 import { renderReplayTokenCurve } from "./replay-token-curve.js";
 import { renderLoading, renderError } from "./state-views.js";
 
 const TIMELINE_PAGE_SIZE = 200;
+/**
+ * 单块正文预算：与 replay-timeline.js 的 DEFAULT_PAGE_CHAR_BUDGET 同值。
+ * 只用于进度文案——想知道这一块是不是被预算提前截短，不必重复算一遍。
+ */
+const TIMELINE_PAGE_CHAR_BUDGET = 300_000;
 
 /** 路由切换竞态守卫：只有最新一次渲染请求可以落 DOM。 */
 let renderSequence = 0;
@@ -271,9 +281,19 @@ function buildTimelineSectionElement(messageRecords) {
   const progressNote = document.createElement("span");
   progressNote.className = "panel-head-extra num";
   const updateProgressNote = () => {
-    progressNote.textContent = paginationController.hasMore
-      ? "已渲染 200 条 · 点击加载更多"
-      : `全部 ${paginationController.visibleCount} 条已加载`;
+    const renderedTotal = paginationController.visibleCount;
+    if (!paginationController.hasMore) {
+      progressNote.textContent = `全部 ${renderedTotal} 条已加载`;
+      return;
+    }
+    // 每块不再恒为 200 条：正文过重的会话会被字符预算提前截短（见
+    // replay-timeline.js 的 DEFAULT_PAGE_CHAR_BUDGET）。条数偏少时说明这一块
+    // 是按篇幅切的，不点明的话用户会以为 200 条的分页失效了。
+    const isBudgetLimitedPage = paginationController.renderedCount < TIMELINE_PAGE_SIZE
+      && renderedTotal > TIMELINE_PAGE_SIZE;
+    progressNote.textContent = isBudgetLimitedPage
+      ? `已渲染 ${paginationController.renderedCount} 条（本页消息较长，按篇幅分批）· 点击加载更多`
+      : `已渲染 ${paginationController.renderedCount} 条 · 点击加载更多`;
   };
   updateProgressNote();
   timelineHeader.innerHTML = "<div><h2>角色时间线</h2></div>";
@@ -312,6 +332,18 @@ function buildTimelineSectionElement(messageRecords) {
     if (revealResult.status === "located" && !paginationController.hasMore) {
       const staleLoadMoreButton = timelinePanel.querySelector(".load-more-button");
       if (staleLoadMoreButton !== null) staleLoadMoreButton.remove();
+    }
+    // C1 修正：`?msg=` 只该生效一次。不清掉它，按 F5 或重进同一链接会再滚一次、
+    // 再闪一次高亮（DEEP_LINK_FLASH_MS），与「一次性落点提示」的契约矛盾。
+    // 只在定位成功时清：notFound 的链接保留原样，用户至少能看出地址里的 id 没对上。
+    if (revealResult.status === "located") {
+      const consumedHash = buildConsumedSessionHash(window.location.hash);
+      if (consumedHash !== window.location.hash) {
+        // 守卫而非假设：测试桩与某些宿主没有 history 对象，缺它不该让回放页失败。
+        if (typeof window.history?.replaceState === "function") {
+          window.history.replaceState(null, "", consumedHash);
+        }
+      }
     }
   }
 

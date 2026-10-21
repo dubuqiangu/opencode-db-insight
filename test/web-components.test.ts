@@ -2471,7 +2471,7 @@ test("an oversized tool output is truncated in the DOM, and the same truncation 
   )
 })
 
-test("an oversized reasoning block is truncated for display and labeled, while the search haystack still covers the whole thought", async () => {
+test("an oversized reasoning block is truncated for display and labeled, and the search haystack stops at the same limit", async () => {
   const { renderTimeline } = await import("../src/web/public/components/replay-timeline.js")
   const { buildReplaySearchIndex, REASONING_DISPLAY_MAX_CHARS } = await import(
     "../src/web/public/components/replay-message-text.js"
@@ -2513,13 +2513,20 @@ test("an oversized reasoning block is truncated for display and labeled, while t
     "the note reports the untouched total length",
   )
 
-  // Deliberate difference from tool output: the search haystack keeps the FULL
-  // reasoning text. The block renders expanded by default, so a hit here is
-  // still the first thing the user sees — unlike a collapsed tool block.
+  // The invariant this module exists promising: whatever the search can find blow,
+  // the page can render. An earlier version let the haystack keep the FULL reasoning
+  // text on the theory that "reasoning renders expanded, so a hit is instantly
+  // visible" — false for the 18 real parts over 100k: the counter said "1 处命中",
+  // the node scrolled in, and the matched text was not in the DOM at all, with
+  // nothing left to expand. Same limit on both sides, or the hit is a ghost.
   const searchIndex = buildReplaySearchIndex(searchRecords)
   assert.ok(
-    searchIndex[0]!.haystack.includes("deep_tail_marker"),
-    "reasoning search stays full-text even though display is truncated",
+    !searchIndex[0]!.haystack.includes("deep_tail_marker"),
+    "search must not reach text past the display limit",
+  )
+  assert.ok(
+    searchIndex[0]!.haystack.includes("think"),
+    "text inside the limit stays searchable",
   )
 })
 
