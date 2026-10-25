@@ -31,6 +31,7 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 import { installDomShim, freshContainer, sleep } from "./helpers/web-dom-shim.ts"
+import { MISSING_REASON } from "../src/web/public/precision.js"
 
 installDomShim()
 
@@ -523,17 +524,21 @@ test("session-list: a legacy wire missing the enrichment fields degrades every n
 
   assert.ok(
     container.innerHTML.includes(
-      '<td class="num"><span title="旧数据没有 cache/input 分项记录，无法计算命中率">—</span></td>',
+      `<td class="num"><span class="missing-value" title="${MISSING_REASON.legacyField}">—</span></td>`,
     ),
-    "missing cache/input parts degrade 命中率 to — with the not-recorded explanation",
+    "missing cache/input parts degrade 命中率 to the shared not-recorded placeholder",
   )
   assert.ok(
-    container.innerHTML.includes('<td class="num"><span title="旧数据没有 reasoning 记录">—</span></td>'),
-    "missing tokensReasoning degrades Reasoning to —",
+    container.innerHTML.includes(
+      `<td class="num"><span class="missing-value" title="${MISSING_REASON.legacyField}">—</span></td>`,
+    ),
+    "missing tokensReasoning degrades Reasoning to the shared not-recorded placeholder",
   )
   assert.ok(
-    container.innerHTML.includes('<td class="num"><span title="旧数据没有步数记录">—</span></td>'),
-    "missing stepCount degrades 步数 to —",
+    container.innerHTML.includes(
+      `<td class="num"><span class="missing-value" title="${MISSING_REASON.legacyField}">—</span></td>`,
+    ),
+    "missing stepCount degrades 步数 to the shared not-recorded placeholder",
   )
   assert.ok(!/NaN/.test(container.innerHTML), "the legacy wire must never render NaN")
   assert.ok(!container.innerHTML.includes("undefined"), "missing fields must not leak the literal undefined")
@@ -568,7 +573,7 @@ test("session-list: a zero token denominator degrades 命中率 to — while hon
 
   assert.ok(
     container.innerHTML.includes(
-      '<td class="num"><span title="本会话没有输入与缓存读写，无法计算命中率">—</span></td>',
+      `<td class="num"><span class="missing-value" title="${MISSING_REASON.zeroDenominator}">—</span></td>`,
     ),
     "a zero denominator is not a computable hit rate → —",
   )

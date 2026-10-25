@@ -7,14 +7,17 @@
  */
 
 import { formatTokens, formatPercent, formatCount } from "../format.js";
+import { MISSING_REASON, renderPrecisionBadge, renderMissingValue } from "../precision.js";
 import { renderLoading } from "./state-views.js";
 
-const PRECISION_TITLE_EXACT = "实值：直接来自 opencode.db 的原始计数，未做任何换算。";
-const PRECISION_TITLE_ESTIMATE = "估算：由 token 量按公开单价换算而来，仅作量级参考（本库 cost 字段常为 0）。";
-
-function precisionBadge(kind) {
-  const isExact = kind === "exact";
-  return `<span class="precision ${isExact ? "exact" : "estimate"}" title="${isExact ? PRECISION_TITLE_EXACT : PRECISION_TITLE_ESTIMATE}">${isExact ? "实值" : "估算"}</span>`;
+/**
+ * 成本估算单元格：estimation 恒为数字（来源见 data-source 的 todayCostEstimateUsd），
+ * 缺失时不渲染 "$—"——货币符号会暗示这里真有一条读数。
+ */
+function costEstimateHtml(costValue) {
+  return Number.isFinite(costValue)
+    ? `$${costValue}`
+    : renderMissingValue(MISSING_REASON.costNotRecorded);
 }
 
 /** 迷你 sparkline：min-max 归一化的面积折线，宽度铺满卡片底部。 */
@@ -67,7 +70,7 @@ function cardHtml({ tone, label, valueHtml, subHtml, sparkline, precision }) {
     <article class="kpi-card" data-tone="${tone}">
       <div class="kpi-head">
         <span class="kpi-label">${label}</span>
-        ${precisionBadge(precision)}
+        ${renderPrecisionBadge(precision)}
       </div>
       <div class="kpi-value">${valueHtml}</div>
       <div class="kpi-sub">${subHtml}</div>
@@ -102,7 +105,7 @@ export function renderKpiRow(container, overview) {
       subHtml: `
         <span class="kpi-split">入 <b class="in num">${formatTokens(overview.todayInput)}</b>
           · 出 <b class="out num">${formatTokens(overview.todayOutput)}</b></span>
-        <span class="kpi-split">≈ <span class="num">$${overview.todayCostEstimateUsd ?? "—"}</span> ${precisionBadge("estimate")}</span>
+        <span class="kpi-split">≈ <span class="num">${costEstimateHtml(overview.todayCostEstimateUsd)}</span> ${renderPrecisionBadge("estimate")}</span>
         ${deltaBadge(todayTokensDeltaText, signOf(overview.todayTokens, overview.yesterdayTokens))}`,
       sparkline: sparklineSvg(overview.sparklineTokens, "var(--blue)"),
       precision: "exact",

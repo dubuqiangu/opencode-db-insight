@@ -22,6 +22,7 @@ import assert from "node:assert/strict"
 
 import { strictHitRate } from "../src/stats/hit-rate.ts"
 import { directoryDisplayName } from "../src/db/directory-queries.ts"
+import { MISSING_REASON } from "../src/web/public/precision.js"
 
 /* ------------------------- thin DOM shim ------------------------- */
 
@@ -1078,14 +1079,16 @@ test("renderSessionList renders the updated-time and cost cells and routes their
   )
 
   // Cost cell: KPI-card convention ($ + raw value) for a real cost, and the
-  // hitRateCell-style "—" degradation with an explanatory title for 0.
+  // unified no-reading placeholder (reason taken from the shared catalog) for 0.
   assert.ok(container.innerHTML.includes("<td class=\"num\">$2.5</td>"), "a real cost renders as $ + raw value")
   assert.ok(
-    container.innerHTML.includes("无成本记录（本库 cost 字段常为 0，DESIGN §5）"),
+    container.innerHTML.includes(MISSING_REASON.costNotRecorded),
     "zero cost degrades to — with the not-recorded explanation",
   )
   assert.ok(
-    container.innerHTML.includes("<td class=\"num\"><span title=\"无成本记录（本库 cost 字段常为 0，DESIGN §5）\">—</span></td>"),
+    container.innerHTML.includes(
+      `<td class="num"><span class="missing-value" title="${MISSING_REASON.costNotRecorded}">—</span></td>`,
+    ),
     "the degraded cost cell keeps its numeric alignment slot",
   )
   assert.ok(

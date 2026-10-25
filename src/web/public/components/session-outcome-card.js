@@ -1,5 +1,6 @@
 /** 会话失败与中断：仅最后一条 assistant 消息带 error 才视为错误收尾。 */
 import { escapeHtml, formatCount, formatPercent, formatRelative, formatDateTime } from "../format.js";
+import { MISSING_REASON, renderMissingValue } from "../precision.js";
 import { renderEmpty } from "./state-views.js";
 
 const MAX_RECENT_SESSIONS = 5;
@@ -65,9 +66,14 @@ export function renderSessionOutcomeCard(container, payload) {
   // 载荷不自洽时不把人数截断后伪装成真实计数；人数与占比一起降级。
   const hasConsistentCount = hasStepSamples && Number.isFinite(interruptedSessions)
     && interruptedSessions >= 0 && interruptedSessions <= sessionsWithSteps;
-  const validInterruptedCount = hasConsistentCount ? formatCount(interruptedSessions) : "—";
+  const validInterruptedCount = hasConsistentCount
+    ? formatCount(interruptedSessions)
+    : renderMissingValue(MISSING_REASON.inconsistentCount);
   const validShare = hasConsistentCount && Number.isFinite(interruptedShare)
     ? Math.min(1, Math.max(0, interruptedShare)) : null;
+  const interruptedShareText = validShare === null
+    ? renderMissingValue(MISSING_REASON.zeroDenominator)
+    : formatPercent(validShare);
 
   container.innerHTML = `<div class="session-outcome-intro">
     <div class="session-outcome-hero">
@@ -75,7 +81,7 @@ export function renderSessionOutcomeCard(container, payload) {
       <div class="session-outcome-hero-label">以错误收尾的会话</div>
     </div>
     <div class="session-outcome-share">
-      <span class="session-outcome-share-value num">${validShare === null ? "—" : formatPercent(validShare)}</span>
+      <span class="session-outcome-share-value num">${interruptedShareText}</span>
       <span class="metric-hint">占有 assistant 步骤的 <span class="num">${hasStepSamples ? formatCount(sessionsWithSteps) : "0"}</span> 个会话</span>
     </div>
   </div>

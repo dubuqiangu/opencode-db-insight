@@ -1,5 +1,6 @@
 /** 工具错误逐日趋势：数据由调用方传入；图表/范围选择均不发请求。 */
 import { dateKeyToEpoch, epochToDateKey, escapeHtml, formatCount, formatPercent } from "../format.js";
+import { MISSING_REASON, renderMissingValue } from "../precision.js";
 import { MAX_TREND_DAYS } from "../data-source.js";
 import { cssVar } from "../theme.js";
 import { showTooltip, hideTooltip } from "../tooltip.js";
@@ -86,9 +87,13 @@ export function renderToolErrorTrendCard(container, payload, options = {}) {
   const maximumErrors = Math.max(1, ...safePoints.map((point) => point.errors));
   const totalErrors = safePoints.reduce((sum, point) => sum + point.errors, 0);
   const totalCalls = safePoints.reduce((sum, point) => sum + point.toolCalls, 0);
+  // 窗口错误率的分母是整段窗口的调用总数，为 0 时比率不可得而非 0%。
+  const windowErrorRateText = totalCalls > 0
+    ? formatPercent(totalErrors / totalCalls)
+    : renderMissingValue(MISSING_REASON.zeroDenominator);
   content.innerHTML = `<div class="tool-error-summary">
     <span><b class="num">${formatCount(totalErrors)}</b> 次错误 <span class="tool-error-summary-separator">/</span> ${formatCount(totalCalls)} 次调用</span>
-    <span>窗口错误率 <b class="num">${totalCalls > 0 ? formatPercent(totalErrors / totalCalls) : "—"}</b></span>
+    <span>窗口错误率 <b class="num">${windowErrorRateText}</b></span>
   </div><div class="tool-error-legend">
     <span class="legend-chip"><span class="swatch tool-error-count-swatch"></span><span class="chip-name">错误数 · 左轴</span></span>
     <button type="button" class="legend-chip tool-error-rate-toggle${rateVisible ? "" : " off"}" aria-pressed="${rateVisible}" title="显示或隐藏错误率折线（右轴）">

@@ -8,6 +8,7 @@
 import {
   formatTokens, formatCount, formatPercent, formatSeenRange, escapeHtml,
 } from "../format.js";
+import { MISSING_REASON, renderMissingValue } from "../precision.js";
 import { modelPalette } from "../theme.js";
 import { renderEmpty, renderLoading } from "./state-views.js";
 
@@ -59,9 +60,17 @@ function sortModels(modelMetrics) {
 }
 
 function hitRateCell(metric) {
+  // 旧 wire 没有命中率分项：字段缺失或非有限值一律显示带原因的 "—"
+  if (!Number.isFinite(metric.hitRate)) {
+    return `<span class="hit-pill low">${renderMissingValue(MISSING_REASON.legacyField)}</span>`;
+  }
   // 通道不报缓存：DESIGN §10 —— hitRate 为 0 视为 provider 侧不上报缓存
   if (metric.cacheSupported === false || (metric.hitRate === 0 && metric.tokens > 0)) {
-    return `<span class="hit-pill low">—</span> <span class="badge no-cache" title="该通道不上报缓存用量，命中率不可得（DESIGN §10）">通道无缓存</span>`;
+    return `<span class="hit-pill low">${renderMissingValue(MISSING_REASON.channelNoCache)}</span> <span class="badge no-cache" title="该通道不上报缓存用量，命中率不可得（DESIGN §10）">通道无缓存</span>`;
+  }
+  // 没有正的 token 用量：缓存分母为 0，比率无定义——显示 "—" 而不是 0%
+  if (metric.hitRate === 0 && !(metric.tokens > 0)) {
+    return `<span class="hit-pill low">${renderMissingValue(MISSING_REASON.zeroDenominator)}</span>`;
   }
   const isHigh = metric.hitRate >= 0.9;
   return `<span class="hit-pill ${isHigh ? "" : "low"}">${formatPercent(metric.hitRate, 1)}</span>`;

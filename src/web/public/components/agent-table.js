@@ -8,6 +8,7 @@
  */
 
 import { formatTokens, formatCount, escapeHtml } from "../format.js";
+import { MISSING_REASON, renderMissingValue } from "../precision.js";
 import { renderEmpty, renderLoading } from "./state-views.js";
 
 /** 每行展示的偏好工具数（toolFingerprint 按调用次数降序取前 N）。 */
@@ -27,10 +28,12 @@ function topToolEntries(toolFingerprint, limit = TOP_TOOLS_SHOWN) {
     .slice(0, limit);
 }
 
-/** 偏好工具单元格：前 3 个小字 chip（名称 + 次数）；没有工具时显示 —。 */
+/** 偏好工具单元格：前 3 个小字 chip（名称 + 次数）；没有工具调用记录时显示带原因的 "—"。 */
 function topToolsCell(toolFingerprint) {
   const entries = topToolEntries(toolFingerprint);
-  if (entries.length === 0) return "<span class=\"agent-tool-list\">—</span>";
+  if (entries.length === 0) {
+    return `<span class="agent-tool-list">${renderMissingValue(MISSING_REASON.noToolCalls)}</span>`;
+  }
   const chips = entries.map(([toolName, callCount]) =>
     `<span class="agent-tool-chip">${escapeHtml(toolName)} <b>${formatCount(callCount)}</b></span>`);
   return `<span class="agent-tool-list">${chips.join("")}</span>`;

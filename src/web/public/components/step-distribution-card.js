@@ -11,12 +11,16 @@
  */
 
 import { formatCount } from "../format.js";
+import { MISSING_REASON, renderMissingValue } from "../precision.js";
 import { renderSharedDistributionCard } from "./distribution-card.js";
 
 /** 步数分布卡的展示选项：轴刻度走整数计数（formatCount），单位「步」。 */
 const STEP_CARD_OPTIONS = {
   formatAxis: (value) => formatCount(value),
-  formatMean: (value) => Number.isFinite(value) ? value.toFixed(1) : "—",
+  // 均值缺失时给带原因悬浮的占位；本回调的返回值按 HTML 插入，
+  // 故必须同时置 `formatMeanReturnsHtml`，否则会被共享渲染器转义成字面标签。
+  formatMean: (value) => Number.isFinite(value) ? value.toFixed(1) : renderMissingValue(MISSING_REASON.noSamples),
+  formatMeanReturnsHtml: true,
   sampleUnit: "步",
   rawUnit: "步",
   exclusionLabel: "已排除零 assistant 消息会话",

@@ -2,6 +2,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
+import { MISSING_REASON } from "../src/web/public/precision.js"
 
 type EventListener = (event?: unknown) => void
 
@@ -269,8 +270,18 @@ test("outcome card degrades inconsistent interrupted counts and shares together"
     interruptedSessions: 5, interruptedShare: 5 / 3,
     byErrorType: [], recentInterrupted: [],
   })
-  assert.match(container.innerHTML, /session-outcome-hero-number num">—<\/div>/)
-  assert.match(container.innerHTML, /session-outcome-share-value num">—<\/span>/)
+  assert.ok(
+    container.innerHTML.includes(
+      `session-outcome-hero-number num"><span class="missing-value" title="${MISSING_REASON.inconsistentCount}">—</span></div>`,
+    ),
+    "inconsistent interrupted count degrades with the shared reason",
+  )
+  assert.ok(
+    container.innerHTML.includes(
+      `session-outcome-share-value num"><span class="missing-value" title="${MISSING_REASON.zeroDenominator}">—</span></span>`,
+    ),
+    "an undefined share degrades with the shared reason",
+  )
   assert.doesNotMatch(container.innerHTML, /100\.0%/)
 })
 

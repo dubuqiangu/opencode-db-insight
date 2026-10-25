@@ -54,6 +54,7 @@
  */
 
 import { formatTokens, formatCount, formatPercent, formatDateTime, formatRelative, formatDurationMs, escapeHtml, shortenSessionId } from "../format.js";
+import { MISSING_REASON, renderMissingValue } from "../precision.js";
 import { modelPalette } from "../theme.js";
 import { buildEmptyHtml, buildLoadingHtml } from "./state-views.js";
 import { sessionsCsvExportEntryHtml } from "./session-csv-export.js";
@@ -107,18 +108,18 @@ const SORT_LABEL_BY_KEY = {
 /**
  * Cost 单元格：口径与 KPI 卡一致（$ + 原始值，参照 kpi-card 的
  * $todayCostEstimateUsd），浮点噪声截到两位小数。0 / null / 非有限数
- * 降级 "—"——本库 cost 字段常为 0（DESIGN §5），0 与「未记录」同义，
- * 降级惯例同 model-table hitRateCell 的「通道无缓存」（— + 说明 title）。
+ * 降级为不可得——本库 cost 字段常为 0（DESIGN §5），0 与「未记录」同义，
+ * 原因统一取自 `MISSING_REASON`（见 `precision.js`）。
  */
 function costCell(costValue) {
   if (!Number.isFinite(costValue)) {
-    return `<span title="无成本记录（本库 cost 字段常为 0，DESIGN §5）">—</span>`;
+    return renderMissingValue(MISSING_REASON.costNotRecorded);
   }
   // 降级判定取在舍入之后：亚分值（如 0.004）舍入为 0，与精确 0 同走降级，
   // 否则会渲染出降级设计想避免的 "$0"（0.6.0 审查 P2-1）。
   const roundedCost = Number(costValue.toFixed(2));
   if (roundedCost === 0) {
-    return `<span title="无成本记录（本库 cost 字段常为 0，DESIGN §5）">—</span>`;
+    return renderMissingValue(MISSING_REASON.costNotRecorded);
   }
   return `$${String(roundedCost)}`;
 }
@@ -134,11 +135,11 @@ function strictHitRateCell(session) {
   const paidInput = session.tokensInput;
   const cacheWrite = session.tokensCacheWrite;
   if (![cacheRead, paidInput, cacheWrite].every((tokenValue) => Number.isFinite(tokenValue))) {
-    return `<span title="旧数据没有 cache/input 分项记录，无法计算命中率">—</span>`;
+    return renderMissingValue(MISSING_REASON.legacyField);
   }
   const denominator = cacheRead + paidInput + cacheWrite;
   if (denominator === 0) {
-    return `<span title="本会话没有输入与缓存读写，无法计算命中率">—</span>`;
+    return renderMissingValue(MISSING_REASON.zeroDenominator);
   }
   return formatPercent(cacheRead / denominator);
 }
@@ -149,7 +150,7 @@ function strictHitRateCell(session) {
  */
 function reasoningTokensCell(session) {
   if (!Number.isFinite(session.tokensReasoning)) {
-    return `<span title="旧数据没有 reasoning 记录">—</span>`;
+    return renderMissingValue(MISSING_REASON.legacyField);
   }
   return formatTokens(session.tokensReasoning);
 }
@@ -157,7 +158,7 @@ function reasoningTokensCell(session) {
 /** 步数单元格（v0.20.0）：assistant 消息数；字段缺失渲染 "—"。 */
 function stepCountCell(session) {
   if (!Number.isFinite(session.stepCount)) {
-    return `<span title="旧数据没有步数记录">—</span>`;
+    return renderMissingValue(MISSING_REASON.legacyField);
   }
   return formatCount(session.stepCount);
 }
@@ -167,7 +168,7 @@ function wallClockCell(session) {
   const durationMilliseconds = session.durationMilliseconds;
   return Number.isFinite(durationMilliseconds) && durationMilliseconds > 0
     ? formatDurationMs(durationMilliseconds)
-    : "—";
+    : renderMissingValue(MISSING_REASON.nonPositiveDuration);
 }
 
 /**

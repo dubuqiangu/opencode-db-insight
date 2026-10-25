@@ -70,6 +70,7 @@ export function renderDistributionCard(container, distribution) {
  *   {
  *     formatAxis: (value) => string,   // x 轴刻度 + 卡头最大 + 图例值
  *     formatMean?: (value) => string,  // 卡头均值，默认与轴相同
+ *     formatMeanReturnsHtml?: boolean, // 均值为 HTML 片段（不可得占位）时置 true，跳过转义
  *     sampleUnit: string,              // 卡头均值/最大数字后的单位词
  *     rawUnit: string,                 // 桶原始边界单位（明细与 tooltip）
  *     exclusionLabel: string, emptyHint: string,
@@ -107,7 +108,7 @@ export function renderSharedDistributionCard(container, distribution, options) {
   const bucketGap = bucketBandWidth >= 8 ? 2 : 0;
 
   container.innerHTML = `
-    ${buildCardMetaHtml(distribution, totalSessions, formatAxis, formatMean, sampleUnit, options.exclusionLabel)}
+    ${buildCardMetaHtml(distribution, totalSessions, formatAxis, formatMean, sampleUnit, options.exclusionLabel, options.formatMeanReturnsHtml === true)}
     ${buildLegendHtml(percentileEntries, formatAxis)}
     <div class="distribution-histogram-scroll" tabindex="0" role="region" aria-label="${escapeHtml(ariaLabel)}，可横向滚动">
       <svg class="distribution-histogram-svg" viewBox="0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}" role="img" aria-label="${escapeHtml(ariaLabel)}；每档等宽、非线性数值轴；各档精确范围和数量见图后明细">
@@ -177,13 +178,15 @@ function readPercentiles(rawPercentiles) {
 
 /* ---------------- 卡头两行小字 + 图例 ---------------- */
 
-function buildCardMetaHtml(distribution, totalSessions, formatAxis, formatMean, sampleUnit, exclusionLabel) {
+function buildCardMetaHtml(distribution, totalSessions, formatAxis, formatMean, sampleUnit, exclusionLabel, formatMeanReturnsHtml) {
   const mean = Number(distribution.mean);
   const max = Number(distribution.max);
+  const meanText = formatMean(mean);
+  const meanHtml = formatMeanReturnsHtml ? meanText : escapeHtml(meanText);
   return `
     <div class="distribution-card-meta">
        <span>样本 <b class="num">${formatCount(totalSessions)}</b> 个会话 · ${escapeHtml(exclusionLabel)}</span>
-       <span>均值 <b class="num">${escapeHtml(formatMean(mean))}</b> ${sampleUnit} · 最大 <b class="num">${escapeHtml(formatAxis(max))}</b> ${sampleUnit}</span>
+       <span>均值 <b class="num">${meanHtml}</b> ${sampleUnit} · 最大 <b class="num">${escapeHtml(formatAxis(max))}</b> ${sampleUnit}</span>
     </div>`;
 }
 

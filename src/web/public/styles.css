@@ -342,6 +342,16 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .precision.estimate::before { background: var(--amber); }
 .precision.estimate { color: var(--amber); border-color: var(--amber-soft); }
 
+/*
+ * 不可得占位。短横线本身已经够显眼，只补一条极淡虚线下划线，
+ * 让「可以悬浮问原因」这件事被看见——不加颜色，避免和琥珀色
+ * 的估算徽标混成同一档语义。
+ */
+.missing-value {
+  cursor: help;
+  border-bottom: 1px dotted var(--border);
+}
+
 .kpi-value {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;

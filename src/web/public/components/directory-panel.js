@@ -28,6 +28,7 @@
  */
 
 import { formatCount, formatTokens, formatRelative, escapeHtml, pathLastSegment } from "../format.js";
+import { MISSING_REASON, renderMissingValue } from "../precision.js";
 import { renderEmpty } from "./state-views.js";
 
 /**
@@ -66,9 +67,11 @@ export function renderDirectoryPanel(container, directoryStats, selectedDirector
       ? `入 = 纯输入 tokens.input · cache.read ${formatTokens(tokensCacheRead)} 另计 · 与 KPI 卡「入」同口径`
       : "入 = 纯输入 tokens.input · cache.read 另计 · 与 KPI 卡「入」同口径";
     const lastActiveMs = Number(rowRecord?.lastActiveMs);
-    const lastActiveText = Number.isFinite(lastActiveMs) && lastActiveMs > 0
-      ? formatRelative(lastActiveMs)
-      : "—";
+    const isLastActiveKnown = Number.isFinite(lastActiveMs) && lastActiveMs > 0;
+    // 最近活跃时间戳缺失或非正数：不编造时间，显示带原因的 "—"
+    const lastActiveCellHtml = isLastActiveKnown
+      ? escapeHtml(formatRelative(lastActiveMs))
+      : renderMissingValue(MISSING_REASON.notRecorded);
     const barWidthPercent = Math.max(2, (stepCount / topSteps) * 100);
     // 空串目录不挂下钻（见头部注释）；有回调且非空串的行才可点。
     const isSelectable = onDirectorySelect !== null && directoryPath !== "";
@@ -85,7 +88,7 @@ export function renderDirectoryPanel(container, directoryStats, selectedDirector
         <span class="directory-count num" title="步骤数">${formatCount(stepCount)}</span>
         <span class="directory-count num" title="${inputCellTitle}">${formatTokens(tokensInput)}</span>
         <span class="directory-count num" title="出 = tokens.output · 与 KPI 卡「出」同口径">${formatTokens(tokensOutput)}</span>
-        <span class="directory-last-active num"${Number.isFinite(lastActiveMs) && lastActiveMs > 0 ? ` title="${escapeHtml(new Date(lastActiveMs).toLocaleString())}"` : ""}>${escapeHtml(lastActiveText)}</span>
+        <span class="directory-last-active num"${isLastActiveKnown ? ` title="${escapeHtml(new Date(lastActiveMs).toLocaleString())}"` : ""}>${lastActiveCellHtml}</span>
       </div>`;
   });
 

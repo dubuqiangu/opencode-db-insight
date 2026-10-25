@@ -8,6 +8,7 @@
  */
 
 import { formatCount, formatDuration, formatPercent, escapeHtml } from "../format.js";
+import { MISSING_REASON, renderMissingValue } from "../precision.js";
 import { renderEmpty } from "./state-views.js";
 
 /** 中位存活时长 < 1 秒视为无效数据。 */
@@ -25,6 +26,10 @@ export function renderSessionSurvivalCard(container, survival) {
   }
   const hasMedian = Number.isFinite(medianDurationSeconds) && medianDurationSeconds >= MINIMUM_MEDIAN_SECONDS;
   const shortLivedShare = Number(survival.shortLivedShare);
+  // 中位时长原本转义后插入，缺失占位带悬浮标签，故与数值分支分开取文案。
+  const medianDurationText = hasMedian
+    ? escapeHtml(formatDuration(medianDurationSeconds))
+    : renderMissingValue(MISSING_REASON.noSamples);
 
   const outcomeEntries = Object.entries(survival.idleOutcomeCounts ?? {})
     .map(([outcomeName, outcomeCount]) => [outcomeName, Number(outcomeCount)])
@@ -44,7 +49,7 @@ export function renderSessionSurvivalCard(container, survival) {
     <div class="survival-grid">
       <div class="survival-metric">
         <span class="metric-label">中位存活时长</span>
-        <span class="metric-value num">${hasMedian ? escapeHtml(formatDuration(medianDurationSeconds)) : "—"}</span>
+        <span class="metric-value num">${medianDurationText}</span>
         <span class="metric-hint">会话首条 → 末条消息</span>
       </div>
       <div class="survival-metric">
