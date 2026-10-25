@@ -442,7 +442,7 @@ export function renderSessionList(
   container.innerHTML = `
     ${rangeSelectorHtml}<table class="data-table session-table" aria-label="会话列表">
       <colgroup>
-        <col><col style="width:150px"><col style="width:140px"><col style="width:110px">
+        <col style="width:200px"><col style="width:150px"><col style="width:140px"><col style="width:110px">
         <col style="width:112px"><col style="width:112px">
         <col style="width:72px"><col style="width:72px"><col style="width:88px">
         <col style="width:76px"><col style="width:80px"><col style="width:64px">
