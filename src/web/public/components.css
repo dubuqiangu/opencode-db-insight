@@ -228,6 +228,21 @@
 .session-table th, .session-table td { padding-left: 8px; padding-right: 8px; }
 .session-table .session-title-cell { max-width: 170px; }
 .session-table .model-cell { max-width: 120px; }
+/* 会话 ID 列（v0.22.0）：截断后的形态固定为「13 字符 + … + 4 字符」，
+ * 等宽字体让每行占等宽，列宽才不会随 ID 抖动；颜色压成 dim，因为它是
+ * 身份标识而不是主读数，压过标题会抢走视觉主次。完整值在 title 悬浮。 */
+.session-table .session-id-cell {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  cursor: help;
+}
 
 /* 墙钟列（v0.21.0）：会话列表新增「墙钟」列（会话首末消息的耗时跨度，
  * formatDurationMs 紧凑时长）。列头与单元格都挂 .col-duration，复用

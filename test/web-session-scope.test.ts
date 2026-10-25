@@ -133,6 +133,23 @@ function okJsonBody(requestUrl: string): unknown {
   return []
 }
 
+test("data-source: fetchRefresh requests /api/refresh exactly, never /api/api/refresh", async () => {
+  const { fetchRefresh } = await import("../src/web/public/data-source.js")
+  const stub = installStubFetch(() => ({ ok: true, status: 200, json: async () => ({}) }))
+  try {
+    await fetchRefresh()
+  } finally {
+    stub.restore()
+  }
+  // fetchWithTimeout prefixes API_BASE ("/api") itself, so the path argument
+  // must be the relative segment. Writing "/api/refresh" produced
+  // "/api/api/refresh" → 404 on every page load, silently disabling the
+  // cache-busting call (the page then fell back to the 60s TTL and F5 could
+  // show data up to a minute old). Live browser run showed exactly two such
+  // 404s per load.
+  assert.deepEqual(stub.capturedUrls, ["/api/refresh"], "the refresh call must hit the single-prefix endpoint")
+})
+
 test("data-source: every ?session= endpoint appends the scope param, and a null scope keeps the legacy path", async () => {
   const dataSource = await import("../src/web/public/data-source.js")
   const scopeId = "ses_example_scope"

@@ -53,7 +53,7 @@
  * 只显示该会话自身一行，排序/范围/导出全部锁定。
  */
 
-import { formatTokens, formatCount, formatPercent, formatDateTime, formatRelative, formatDurationMs, escapeHtml } from "../format.js";
+import { formatTokens, formatCount, formatPercent, formatDateTime, formatRelative, formatDurationMs, escapeHtml, shortenSessionId } from "../format.js";
 import { modelPalette } from "../theme.js";
 import { buildEmptyHtml, buildLoadingHtml } from "./state-views.js";
 import { sessionsCsvExportEntryHtml } from "./session-csv-export.js";
@@ -76,6 +76,11 @@ const VISIBLE_ROWS = 15;
  */
 const COLUMNS = [
   { label: "标题", sortKey: "title", numeric: false },
+  // 会话 ID（v0.22.0）：列表原先只把 id 写在 <tr data-session-id> 属性里，
+  // 表面上一行身份不明——窗口标题/日志/URL 里给的 ID 无法与某一行对上。
+  // 不可排序：后端 ?sort= 白名单没有 id，加进来只能做假交互；display-only
+  // 列与 入/出/命中率 同待遇，只挂口径说明。
+  { label: "会话 ID", sortKey: null, numeric: false, extraClass: "col-session-id", title: "会话 ID（session_v2.id）· 表内截断展示，悬浮看完整值，点行体进回放" },
   { label: "模型", sortKey: null, numeric: false },
   { label: "Agent", sortKey: null, numeric: false },
   { label: "创建时间", sortKey: "time_created", numeric: true },
@@ -378,6 +383,7 @@ export function renderSessionList(
     return `
     <tr class="session-row" data-session-id="${escapeHtml(session.id)}" title="查看会话回放（M4）">
       <td class="primary">${buildTitleCellHtml(session, sessionScopeId, onSessionScopeChange)}</td>
+      <td class="col-session-id"><span class="session-id-cell" title="${escapeHtml(session.id)}">${escapeHtml(shortenSessionId(session.id))}</span></td>
       <td><span class="model-cell"><span class="dot" style="background:${modelColor.get(session.modelId) ?? "transparent"}"></span><span class="name">${escapeHtml(session.modelId)}</span></span></td>
       <td><span class="badge">${escapeHtml(session.agent)}</span></td>
       <td class="num" title="${formatDateTime(session.timeCreated)}">${formatRelative(session.timeCreated, now)}</td>
@@ -435,7 +441,7 @@ export function renderSessionList(
   container.innerHTML = `
     ${rangeSelectorHtml}<table class="data-table session-table" aria-label="会话列表">
       <colgroup>
-        <col><col style="width:140px"><col style="width:110px">
+        <col><col style="width:150px"><col style="width:140px"><col style="width:110px">
         <col style="width:112px"><col style="width:112px">
         <col style="width:72px"><col style="width:72px"><col style="width:88px">
         <col style="width:76px"><col style="width:80px"><col style="width:64px">

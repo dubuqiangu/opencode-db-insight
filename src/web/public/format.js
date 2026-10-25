@@ -144,6 +144,25 @@ export function pathLastSegment(directoryPath) {
   return segments.length > 0 ? segments[segments.length - 1] : pathText;
 }
 
+/**
+ * 会话 ID 的表格展示形态（v0.22.0）。
+ *
+ * 真实 ID 形如 `ses_e96cbcc1effeSIZkRVMQPRT1Tq`（约 30 字符），整串放进表格
+ * 会把列撑到没有意义的宽度，只能用等宽小字截断。截断保留**头部 + 尾部**：
+ * 头部 `ses_` 前缀加上随机段开头足以在视觉上区分相邻行，尾部几字符便于与
+ * 日志、URL 里出现的同一 ID 肉眼对齐——只留头部的话，同一批次生成的会话
+ * ID 前段常常相同（同一毫秒 + 同一前缀），反而看不出差别。
+ *
+ * 完整 ID 一律由调用方写进 title 悬浮，不在本函数里丢信息。
+ */
+export function shortenSessionId(sessionId) {
+  const idText = String(sessionId ?? "");
+  const HEAD_CHARS = 13;
+  const TAIL_CHARS = 4;
+  if (idText.length <= HEAD_CHARS + TAIL_CHARS) return idText;
+  return `${idText.slice(0, HEAD_CHARS)}…${idText.slice(-TAIL_CHARS)}`;
+}
+
 const HTML_ESCAPE_MAP = {
   "&": "&" + "amp;",
   "<": "&" + "lt;",

@@ -903,6 +903,32 @@ test("getMockDirectoryStats mirrors the v0.15.0 three-part token wire with cross
   assert.equal(directoryPartTotals.output, trendPartTotals.output, "Σ directories tokensOutput must equal the trend output total")
 })
 
+test("shortenSessionId keeps both ends of a long id and leaves short ids alone", async () => {
+  const { shortenSessionId } = await import("../src/web/public/format.js")
+
+  // Real ids are ~30 chars (`ses_` + 26): the head keeps the prefix plus
+  // enough of the random segment to tell adjacent rows apart, and the tail
+  // stays so an id pasted from a log or URL can be matched by eye fold.
+  const realLengthId = "ses_e96cbcc1effeSIZkRVMQPRT1Tq"
+  assert.equal(shortenSessionId(realLengthId), "ses_e96cbcc1e…T1Tq",
+    "a 30-char id renders as 13 head chars + ellipsis + 4 tail chars")
+  assert.equal(shortenSessionId(realLengthId).length, 18)
+
+  // Exactly at the budget: no ellipsis, no lost character.
+  const exactlyAtBudget = "ses_0123456789abc"
+  assert.equal(exactlyAtBudget.length, 17)
+  assert.equal(shortenSessionId(exactlyAtBudget), exactlyAtBudget, "an id exactly at the budget renders verbatim")
+  const oneOverBudget = "ses_0123456789abcd"
+  assert.equal(shortenSessionId(oneOverBudget), "ses_012345678…abcd",
+    "one char over the budget starts truncating (the boundary is not arbitrary)")
+
+  // Shorter ids (tests, fixtures, future id formats) also render verbatim
+  // rather than turning into a bare ellipsis.
+  assert.equal(shortenSessionId("ses_short"), "ses_short")
+  assert.equal(shortenSessionId(""), "")
+  assert.equal(shortenSessionId(undefined as unknown as string), "", "a missing id degrades to an empty cell, not the string undefined")
+})
+
 test("pathLastSegment mirrors the backend directoryDisplayName value for value", async () => {
   const { pathLastSegment } = await import("../src/web/public/format.js")
 
@@ -1105,14 +1131,34 @@ test("renderSessionList renders the v0.13.0 入/出 columns beside the folded To
 
   renderSessionList(container, breakdownPayload, null, "time_updated", "desc", noopSortChange)
 
-  // Thirteen headers total; the sortable set is still exactly the five backend
-  // whitelist keys — the v0.13.0 入/出 pair and the v0.20.0
-  // 命中率/Reasoning/步数 and 墙钟 join the non-sortable display columns.
-  assert.equal(container.querySelectorAll("th").length, 13, "the v0.21.0 session table has thirteen columns")
+  // Fourteen headers total; the sortable set is still exactly the five backend
+  // whitelist keys — the v0.13.0 入/出 pair, the v0.20.0
+  // 命中率/Reasoning/步数/墙钟 and the v0.22.0 会话 ID column join the
+  // non-sortable display columns.
+  assert.equal(container.querySelectorAll("th").length, 14, "the v0.22.0 session table has fourteen columns")
   assert.deepEqual(
     container.querySelectorAll("th.sortable").map((headerCell) => headerCell.dataset.sortKey),
     ["title", "time_created", "time_updated", "tokens", "cost"],
-    "the 入/出 and 命中率/Reasoning/步数 columns must not add server-sort keys (whitelist unchanged)",
+    "the display-only columns must not add server-sort keys (whitelist unchanged)",
+  )
+
+  // v0.22.0 会话 ID column: sits right after 标题 (identity before everything
+  // derived from it), carries the full id in a hover title, and is not
+  // sortable because ?sort= has no id key.
+  const sessionIdHeader = container.querySelectorAll("th").find(
+    (headerCell) => (headerCell.attributes.get("title") ?? "").startsWith("会话 ID（session_v2.id）"),
+  )!
+  assert.ok(sessionIdHeader, "the 会话 ID header must be rendered")
+  assert.ok(!sessionIdHeader.classTokenList().includes("sortable"), "the 会话 ID column is not sortable")
+  assert.ok(!("sortKey" in sessionIdHeader.dataset), "the 会话 ID column must not carry a sort key")
+  assert.match(
+    container.innerHTML,
+    />\s*标题\s*<\/th>[\s\S]*?>\s*会话 ID\s*<\/th>[\s\S]*?>\s*模型\s*<\/th>/,
+    "会话 ID must render between 标题 and 模型",
+  )
+  assert.ok(
+    container.innerHTML.includes('<span class="session-id-cell" title="ses_example_golf">ses_example_golf</span>'),
+    "a short id renders verbatim (no ellipsis) with the full value in the hover title",
   )
 
   // v0.20.0 命中率/Reasoning/步数 (wiring lane): display-only columns that sit

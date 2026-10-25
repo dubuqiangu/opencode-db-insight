@@ -301,9 +301,14 @@ async function fetchResponse(path) {
  * 清掉服务端 60s TTL 查询缓存（/api/refresh 只动内存缓存、不碰数据库，
  * 毫秒级）。页面每次载入先调它，浏览器 F5 才保证拉到全新数据；
  * 失败不阻塞面板加载（退化为最多滞后 60 秒的 TTL 语义）。
+ *
+ * path 是相对 `API_BASE`（"/api"）的段：`fetchWithTimeout` 自己拼接前缀，
+ * 这里再写一遍 "/api" 会请求到 `/api/api/refresh`。此前真实浏览器里
+ * 每次都出现两个 404，正是因为这里写成了绝对路径——手动刷新缓存整条链
+ * 静默失效，页面回退到 TTL 语义，F5 看到的数据可能是 60 秒前的。
  */
 export async function fetchRefresh() {
-  return fetchJson("/api/refresh");
+  return fetchJson("/refresh");
 }
 
 /* ---------------- 形状适配（真实 → 组件） ---------------- */
