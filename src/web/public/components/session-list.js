@@ -1,5 +1,5 @@
 /**
- * 会话列表：标题 / 模型 / agent / 创建时间 / 更新时间 / 入 / 出 / tokens /
+ * 会话列表：标题 / 模型 / agent / 时间（创建+更新合并） / 入 / 出 / tokens /
  * 命中率 / Reasoning / 步数 / cost。
  * 行 hover 高亮，点击跳 #/session/:id（M4 回放页，暂为占位路由）。
  * 支持按模型过滤（模型排行榜行下钻）。
@@ -19,10 +19,11 @@
  * 排序归属服务端（分页确定性契约）——点击只产出下一组 sort/order 交给
  * onSessionSortChange 回调，由 app.js 带 ?sort=/?order= 重新请求 API，
  * 本组件不做客户端重排。交互范式与 model-table 列头一致：点新列默认
- * desc，再点同列切方向。v0.6.0 补齐 更新时间/Cost 两列后，后端五个
- * 排序白名单键全部有可见列头（title / time_created / time_updated /
- * tokens / cost 与五列一一对应），默认 time_updated desc 初始渲染即
- * 带 desc 箭头与 .sorted 高亮；模型/Agent/入/出无对应白名单键，不可排序。
+ * desc，再点同列切方向。v0.25.0 把 创建/更新 合并为「时间」一列（绑
+ * time_updated）后，可见排序列头为四个：title / time_updated / tokens /
+ * cost；time_created 仍留在后端 ?sort= 白名单但无独立列头入口，默认
+ * time_updated desc 初始渲染即带 desc 箭头与 .sorted 高亮；模型/Agent/
+ * 入/出无对应白名单键，不可排序。
  *
  * P2-3（v0.5.1）：默认排序无回路——非默认排序态下，脚注的排序描述
  * 同时是「恢复默认排序」入口（.sort-reset，点击走同一个
@@ -84,8 +85,11 @@ const COLUMNS = [
   { label: "会话 ID", sortKey: null, numeric: false, extraClass: "col-session-id", title: "会话 ID（session_v2.id）· 表内截断展示，悬浮看完整值，点行体进回放" },
   { label: "模型", sortKey: null, numeric: false },
   { label: "Agent", sortKey: null, numeric: false },
-  { label: "创建时间", sortKey: "time_created", numeric: true },
-  { label: "更新时间", sortKey: "time_updated", numeric: true },
+  // 创建/更新合并为一列（v0.25.0）：14 列换算成 13 列，为标题列腾出宽度。
+  // 排序仍绑 time_updated——「最近活动」是列表最常需要的排序，后端
+  // ?sort=time_updated 白名单不变；time_created 仍可从 API 侧排序，
+  // 只是不再有独立列头入口（不为它牺牲一格宽度）。
+  { label: "时间", sortKey: "time_updated", numeric: true, extraClass: "col-session-time", title: "创建 → 更新（本地时间，相对显示可悬浮看完整时刻）· 点击按最近更新排序" },
   { label: "入", sortKey: null, numeric: true, title: "入 = 纯输入 tokens.input（不含 cache.read，与 KPI 卡「入」同口径）" },
   { label: "出", sortKey: null, numeric: true, title: "出 = tokens.output（与 KPI 卡「出」同口径）" },
   { label: "Tokens", sortKey: "tokens", numeric: true },
@@ -387,8 +391,10 @@ export function renderSessionList(
       <td class="col-session-id"><span class="session-id-cell" title="${escapeHtml(session.id)}">${escapeHtml(shortenSessionId(session.id))}</span></td>
       <td><span class="model-cell"><span class="dot" style="background:${modelColor.get(session.modelId) ?? "transparent"}"></span><span class="name">${escapeHtml(session.modelId)}</span></span></td>
       <td><span class="badge">${escapeHtml(session.agent)}</span></td>
-      <td class="num" title="${formatDateTime(session.timeCreated)}">${formatRelative(session.timeCreated, now)}</td>
-      <td class="num" title="${formatDateTime(session.timeUpdated)}">${formatRelative(session.timeUpdated, now)}</td>
+      <td class="num col-session-time" title="创建 ${formatDateTime(session.timeCreated)} · 更新 ${formatDateTime(session.timeUpdated)}">
+        <span class="time-created" title="创建：${formatDateTime(session.timeCreated)}">创建 ${formatRelative(session.timeCreated, now)}</span>
+        <span class="time-updated" title="更新：${formatDateTime(session.timeUpdated)}">· 更新 ${formatRelative(session.timeUpdated, now)}</span>
+      </td>
       <td class="num" title="入 = 纯输入 tokens.input · cache.read 另计 · 与 KPI 卡「入」同口径">${formatTokens(tokensInput)}</td>
       <td class="num" title="出 = tokens.output · 与 KPI 卡「出」同口径">${formatTokens(tokensOutput)}</td>
       <td class="num primary" title="${totalCellTitle}">${formatTokens(session.tokens)}</td>
@@ -443,7 +449,7 @@ export function renderSessionList(
     ${rangeSelectorHtml}<table class="data-table session-table" aria-label="会话列表">
       <colgroup>
         <col style="width:200px"><col style="width:150px"><col style="width:140px"><col style="width:110px">
-        <col style="width:112px"><col style="width:112px">
+        <col style="width:150px">
         <col style="width:72px"><col style="width:72px"><col style="width:88px">
         <col style="width:76px"><col style="width:80px"><col style="width:64px">
         <col style="width:72px"><col style="width:76px">

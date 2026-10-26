@@ -265,6 +265,21 @@
 }
 .session-table td.col-duration { color: var(--text-dim); }
 
+/* 时间列（v0.25.0）：创建/更新合并为一列。创建与更新两个子段等宽数字
+ * 字体、整体右对齐；相对时刻紧凑显示，完整本地时刻各挂在子段 title。
+ * 「创建」段压成 dim，作为主读数的注脚不争夺视觉主次。 */
+.session-table th.col-session-time,
+.session-table td.col-session-time {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  min-width: 150px;
+}
+.session-table td.col-session-time { color: var(--text); }
+.session-table td.col-session-time .time-created { color: var(--text-dim); }
+.session-table td.col-session-time .time-updated { cursor: help; }
+
 /* Agent 排行榜（AgentStat[] → .data-table 全宽表）：主体完全复用
  * .data-table；这里只补两处代理样式——agent 名走等宽数字字体对齐
  * model-cell .name 的读感；偏好工具为 10.5px 描边 chip（badge 的描边

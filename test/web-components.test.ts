@@ -1006,22 +1006,23 @@ test("renderSessionList renders sortable headers, keeps wire order and states th
   const container = freshContainer()
 
   // Default state (time_updated desc — the wire default). Since v0.6.0 the
-  // default key has its own visible column (更新时间), so the initial
-  // render marks that header sorted with the desc arrow; the footnote
-  // still names the server sort as plain text (no reset entry).
+  // default key has its own visible column (更新时间, merged into 时间 since
+  // v0.25.0), so the initial render marks that header sorted with the desc
+  // arrow; the footnote still names the server sort as plain text (no reset
+  // entry).
   const noopSortChange = () => {}
   renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", noopSortChange)
   const sortableHeaders = container.querySelectorAll("th.sortable")
-  assert.equal(sortableHeaders.length, 5, "title / created-time / updated-time / tokens / cost columns are sortable")
+  assert.equal(sortableHeaders.length, 4, "title / time / tokens / cost columns are sortable (v0.25.0 merged the two time columns)")
   assert.deepEqual(
     sortableHeaders.map((headerCell) => headerCell.dataset.sortKey),
-    ["title", "time_created", "time_updated", "tokens", "cost"],
+    ["title", "time_updated", "tokens", "cost"],
     "every backend ?sort= whitelist key maps to exactly one visible column header",
   )
   const defaultSortedHeaders = container.querySelectorAll("th.sorted")
   assert.equal(defaultSortedHeaders.length, 1, "the default sort marks exactly its own column")
   assert.equal(defaultSortedHeaders[0].dataset.sortKey, "time_updated")
-  assert.match(container.innerHTML, /更新时间\s*<span class="sort-arrow">▼<\/span>/)
+  assert.match(container.innerHTML, /时间\s*<span class="sort-arrow">▼<\/span>/)
   assert.match(container.innerHTML, /按最近更新时间倒序/)
   // No client-side re-sorting: rows render in the payload (server) order.
   assert.deepEqual(
@@ -1068,14 +1069,27 @@ test("renderSessionList renders the updated-time and cost cells and routes their
 
   renderSessionList(container, newColumnPayload, null, "time_updated", "desc", captureSortChange)
 
-  // Updated-time cell: same formatting contract as the created-time column —
-  // relative display + full datetime title. The 1970 epochs are far older
-  // than a day, so formatRelative degrades to the deterministic MM-dd form.
+  // Merged time cell (v0.25.0): 创建 + 更新 in one column. Both epochs render
+  // relatively, each in its own sub-span with a full-datetime hover title;
+  // the cell's own title carries both full timestamps. The 1970 epochs are far
+  // older than a day, so formatRelative degrades to the deterministic MM-dd.
   assert.ok(
     container.innerHTML.includes(
-      `<td class="num" title="${formatDateTime(61_000)}">${formatRelative(61_000)}</td>`,
+      `<td class="num col-session-time" title="创建 ${formatDateTime(1000)} · 更新 ${formatDateTime(61_000)}">`,
     ),
-    "the updated-time cell must mirror the created-time formatting exactly",
+    "the merged time cell must carry both full timestamps in its title",
+  )
+  assert.ok(
+    container.innerHTML.includes(
+      `<span class="time-created" title="创建：${formatDateTime(1000)}">创建 ${formatRelative(1000)}</span>`,
+    ),
+    "the created-time sub-span renders relatively with a full-datetime hover title",
+  )
+  assert.ok(
+    container.innerHTML.includes(
+      `<span class="time-updated" title="更新：${formatDateTime(61_000)}">· 更新 ${formatRelative(61_000)}</span>`,
+    ),
+    "the updated-time sub-span renders relatively with a full-datetime hover title",
   )
 
   // Cost cell: KPI-card convention ($ + raw value) for a real cost, and the
@@ -1138,11 +1152,11 @@ test("renderSessionList renders the v0.13.0 入/出 columns beside the folded To
   // whitelist keys — the v0.13.0 入/出 pair, the v0.20.0
   // 命中率/Reasoning/步数/墙钟 and the v0.22.0 会话 ID column join the
   // non-sortable display columns.
-  assert.equal(container.querySelectorAll("th").length, 14, "the v0.22.0 session table has fourteen columns")
+  assert.equal(container.querySelectorAll("th").length, 13, "the v0.25.0 session table has thirteen columns (the two time columns merged into one)")
   assert.deepEqual(
     container.querySelectorAll("th.sortable").map((headerCell) => headerCell.dataset.sortKey),
-    ["title", "time_created", "time_updated", "tokens", "cost"],
-    "the display-only columns must not add server-sort keys (whitelist unchanged)",
+    ["title", "time_updated", "tokens", "cost"],
+    "the display-only columns must not add server-sort keys (whitelist unchanged; time_created has no visible column since v0.25.0)",
   )
 
   // v0.22.0 会话 ID column: sits right after 标题 (identity before everything
@@ -1188,12 +1202,12 @@ test("renderSessionList renders the v0.13.0 入/出 columns beside the folded To
     "命中率/Reasoning/步数/墙钟 must render between the folded Tokens total and Cost",
   )
 
-  // Column order: the 入/出 pair sits between 更新时间 and the folded Tokens
-  // total — parts adjacent to their sum, Cost stays last.
+  // Column order: the 入/出 pair sits between the merged 时间 column and the
+  // folded Tokens total — parts adjacent to their sum, Cost stays last.
   assert.match(
     container.innerHTML,
-    /更新时间[\s\S]*?>\s*入\s*<\/th>[\s\S]*?>\s*出\s*<\/th>[\s\S]*?>\s*Tokens\s*<\/th>[\s\S]*?>\s*Cost\s*<\/th>/,
-    "入/出 must render between the updated-time column and the folded Tokens total",
+    />\s*时间[\s\S]*?>\s*入\s*<\/th>[\s\S]*?>\s*出\s*<\/th>[\s\S]*?>\s*Tokens\s*<\/th>[\s\S]*?>\s*Cost\s*<\/th>/,
+    "入/出 must render between the merged time column and the folded Tokens total",
   )
 
   // Non-sortable headers carry the calibration tooltip instead of 点击排序.
