@@ -122,6 +122,14 @@
 - **`test/search-queries.test.ts`**、**`test/session-day-filter.test.ts`**（新增）：搜索主查询与本地日过滤的 SQL 语义测试（真 `node:sqlite` 内存夹具）。
 - 全量 594 用例通过；`npm run check` exit 0。
 
+## [0.25.1] - 2026-10-29 · 里程碑 A 热修：日历日过滤的时区口径
+
+### Fixed
+
+- **`?day=` 服务端日界改用本地日午夜（`parseDayStartMs`）**：冒烟发现 `?day=2026-10-29` 服务端返回 0 条，但该本地日实有 10 个会话——根因是 `parseDayStartMs` 用 `Date.UTC` 算日界（午夜 UTC），与前端日历热力图 `dateKeyToEpoch`（本地日午夜）错开整个时区偏移，点某日格子把会话列表过滤到「空」。现改 `new Date(year, month-1, day).getTime()`（本地午夜），与热力图日点击口径对齐。
+- **`parseDayStartMs` 导出并加回归锁**（`test/api-routes.test.ts`）：断言本地午夜而非 UTC（时区漂移守卫）+ 空/畸形日期退化返回 null。
+- 全量 596 用例通过；`npm run check` exit 0。
+
 ## [0.23.0] - 2026-10-19
 
 ### Added
