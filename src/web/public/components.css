@@ -395,6 +395,38 @@
   box-shadow: inset -1px 0 0 var(--border), inset 0 -1px 0 var(--border);
 }
 
+/* 会话列表标题列冻结（v0.25.1 · 意见三同款）：.session-body 即横向滚动
+ * 容器（同 .model-body 的两轴共用 scrollport），首列「标题」td/th
+ * sticky left:0——横滚时标题钉住，右侧列滑走。铺底沿用模型榜分层：
+ * 普通行 --panel、hover --panel-2、选中 --panel-accent-tint；右缘 1px
+ * 分隔线提示右侧还有内容（border-collapse 下走 inset box-shadow）。
+ * 层叠：corner th（标题表头）z4 > 其余表头 z2（session 表头整体按
+ * --session-toolbar-height 下移）> 首列 td z1 > 普通单元格。 */
+.session-body .data-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--panel);
+  border-bottom: 0;
+  box-shadow: inset -1px 0 0 var(--border), inset 0 -1px 0 var(--border);
+  transition: background 0.12s;
+}
+.session-body .data-table tbody tr:hover td:first-child {
+  background: var(--panel-2);
+}
+.session-body .data-table tbody tr.selected td:first-child,
+.session-body .data-table tbody tr.selected:hover td:first-child {
+  background: var(--panel-accent-tint);
+}
+.session-body .data-table tbody tr:last-child td:first-child {
+  box-shadow: inset -1px 0 0 var(--border);
+}
+.session-body .data-table thead th:first-child {
+  left: 0;
+  z-index: 4;
+  box-shadow: inset -1px 0 0 var(--border), inset 0 -1px 0 var(--border);
+}
+
 /* ---------- 状态占位 ---------- */
 .state-view {
   display: flex;
