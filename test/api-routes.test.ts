@@ -14,6 +14,7 @@ import {
   INSIGHT_VERSION,
   INTERNAL_ERROR_MESSAGE,
   INVALID_RANGE_MESSAGE,
+  parseDayStartMs,
   SESSION_EMPTY_MESSAGE,
   SESSION_NOT_FOUND_MESSAGE,
   type ApiRequestContext,
@@ -1338,4 +1339,25 @@ test("/api/search answers 200 with the contract shape when the db is live (v0.24
   } finally {
     clearResultCache()
   }
+})
+
+test("parseDayStartMs pins the local calendar-day midnight (not UTC), matching the frontend dateKeyToEpoch", () => {
+  // The calendar heatmap renders sessions by their LOCAL calendar date
+  // (format.js dateKeyToEpoch uses new Date(year, month-1, day), local
+  // midnight). A day-click must filter the same local-day window, so
+  // parseDayStartMs must return local midnight — NOT Date.UTC (midnight
+  // UTC), which drifts a whole timezone offset away and would return 0
+  // sessions for a local day that visibly has sessions.
+  const localMidnight = new Date(2026, 9, 7).getTime()
+  const utcMidnight = Date.UTC(2026, 9, 7, 0, 0, 0)
+  assert.equal(parseDayStartMs("2026-10-07"), localMidnight, "the day start is the local calendar-day midnight")
+  if (localMidnight !== utcMidnight) {
+    assert.notEqual(parseDayStartMs("2026-10-07"), utcMidnight, "the day start must NOT be midnight UTC (timezone drift guard)")
+  }
+})
+
+test("parseDayStartMs degrades to null for empty or malformed dates", () => {
+  assert.equal(parseDayStartMs(""), null, "an empty day param applies no filter")
+  assert.equal(parseDayStartMs("not-a-date"), null, "a non-date string applies no filter")
+  assert.equal(parseDayStartMs("2026-13-40"), null, "an out-of-range month/day applies no filter")
 })
