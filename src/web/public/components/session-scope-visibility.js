@@ -36,6 +36,9 @@ export const SESSION_SCOPE_HIDDEN_SECTION_IDS = [
   "panel-session-outcomes",
   "panel-agents",
   "panel-directories",
+  // Milestone A 跨会话全文搜索：「全部会话」口径，单会话作用域下搜索对象
+  // 只剩一个会话，退化成无意义单点，故随分布卡一并隐藏。
+  "panel-search",
 ];
 
 /** 作用域激活时保留的 section id（清单化是为了测试能断言「全集且互斥」）。 */

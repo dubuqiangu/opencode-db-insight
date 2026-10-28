@@ -4,7 +4,7 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 每个里程碑完成后 push 并在此追加一条记录，方便回溯。
 
-## [Unreleased]
+## [0.24.0] - 2026-10-21
 
 ### Added
 
@@ -94,6 +94,33 @@
 - **宽表固定列宽**：`session-list.js`（13 列）、`model-table.js`（11 列）、`agent-table.js`（4 列）的 `<table>` 各自补 `<colgroup>`；`components.css` 的 `.data-table` 改为 `table-layout: fixed`，单元格加 `overflow: hidden; text-overflow: ellipsis`。
   原因：`white-space: nowrap` 配自动布局时，长模型 ID / 长会话标题会挤占数字列，列宽随内容漂移。参考 billion-context `src/web/page.ts` 的 `<colgroup>` 写法。
   每张表的第一列保持无宽度以吃掉剩余空间，避免固定布局下表格不满宽。
+
+## [0.25.0] - 2026-10-29 · 里程碑 A：跨会话全文搜索 + 日历日点击过滤
+
+### Added
+
+- **跨会话全文搜索**（`GET /api/search`，`src/db/search-queries.ts` + `src/db/message-text-extract.ts` 新增）：跨全部会话搜索消息正文 / 工具入出参 / 思考过程。
+  - 后端按 user/assistant 消息行解析 `data` JSON，经 `message-text-extract.ts` 提取可搜索文本（与回放页 `replay-message-text.js` 同源，不存在「搜得到却渲染不出来」的错位）。
+  - 子串模式大小写不敏感；正则模式构造不区分大小写的 `RegExp`，语法非法返回 `{ hits:[], total:0, error:"invalid regex" }`（200，不抛 500）。
+  - 命中上限 200（按 `messageId` 去重），`total` 是真实全量匹配数；空 `q` 返回空载荷（200）。
+  - `snippet` 是首个命中点附近 ~120 字符的窗口，文本先 `escapeHtml` 再把命中段包进 `<mark>`——「除 `<mark>` 外无其他标签」的安全富文本，闭环消息文本的 XSS 面。
+  - 前端 `search-panel.js`（新增，纯渲染组件）把 `query + mode` 上抛给 `onSearch`，命中行点击深链到 `#/session/<sessionId>`；`data-source.fetchSearch` 与 `mock-data.getMockSearchResults` 提供真实 / 离线两条取数路径。
+  - 会话作用域激活时 `panel-search` 随分布卡一并隐藏（搜索是「全部会话」口径）。
+
+- **日历日点击过滤**（`?day=YYYY-MM-DD`，`src/db/queries.ts` `querySessionList` 增 `dayStartMs` 本地日过滤）：点击日历热力图的某日格子，把下方会话列表过滤到该本地日；脚注标注「过滤到 <date> 的会话」，点击即清除。
+  - 过滤走服务端参数（非客户端行过滤），与 `directory` / `range` AND 叠加；畸形日期静默不过滤。
+  - `session-sort-controller` 缓存键扩为 6 维（`sort:order:directory:range:day:sessionScope`）；`session-csv-export` 导出路径带 `day` 联动。
+
+### Fixed
+
+- **`session-list.js` 的 `SESSIONS_CSV_EXPORT_AVAILABLE` 导入路径**：原从 `session-csv-export.js` 引一个不存在的导出导致 SyntaxError（28 个会话列表测试全挂）；改从 `data-source.js` 引，并同步修好 `web-session-scope.test.ts` 的 6 参 `fetchSessionsPage` 桩（scope 落在错位参数上）。
+
+### Test
+
+- **`test/web-search-panel.test.ts`**（新增）：idle / 禁用态 / 表单提交路由 / loading / 命中行 / 空态 / 正则错误 / 外部文本转义 / snippet 透传 9 个用例。
+- **`test/web-components.test.ts`**：补日历热力图 `onDaySelect` 点击（2 例）与会话列表 `dayFilter` 脚注标注 / 清除（1 例）。
+- **`test/search-queries.test.ts`**、**`test/session-day-filter.test.ts`**（新增）：搜索主查询与本地日过滤的 SQL 语义测试（真 `node:sqlite` 内存夹具）。
+- 全量 594 用例通过；`npm run check` exit 0。
 
 ## [0.23.0] - 2026-10-19
 

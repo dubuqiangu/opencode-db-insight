@@ -235,6 +235,14 @@ const SESSION_DIRECTORY_FILTER_SQL = "directory = ?"
  */
 const SESSION_RANGE_FILTER_SQL = "time_updated >= ?"
 
+/**
+ * Calendar-day window condition (v0.24.0): a closed `time_updated >= ?
+ * AND time_updated < ?` pair bounding one local calendar day. Both
+ * thresholds are computed server-side per request (dayStartMs and
+ * dayStartMs + 86400000) and only ever reach SQLite as bind parameters.
+ */
+const SESSION_DAY_FILTER_SQL = "time_updated >= ? AND time_updated < ?"
+
 /** One day in milliseconds, for the ?range= window presets. */
 export const SESSION_RANGE_WINDOW_MS_PER_DAY = 86_400_000
 
@@ -325,6 +333,14 @@ export function resolveSessionRange(
  * test/session-range-filter.test.ts): directory, range threshold,
  * limit, offset.
  *
+ * Calendar-day filter (v0.24.0): a numeric `dayStartMs` (the local
+ * calendar day start, computed in api.ts from ?day=YYYY-MM-DD) adds a
+ * closed `time_updated >= ? AND time_updated < ?` pair — the session
+ * falls within [dayStartMs, dayStartMs + 86400000). It AND-composes
+ * with the directory and range filters. This is the ONLY place the
+ * day filter lives server-side. Bind order (v0.24.0): directory,
+ * range threshold, day-start, day-end, limit, offset.
+ *
  * Step enrichment switch (v0.19.1, P2-4): `includeStepModelIds`
  * defaults to true (the dashboard sessions page consumes modelIds for
  * the client-side model drill-down). Callers that never read
@@ -340,6 +356,7 @@ export function querySessionList(
   sortOrderValue: string | null | undefined = DEFAULT_SESSION_SORT_ORDER,
   directoryValue: string | null | undefined = null,
   rangeStartMs: number | null | undefined = null,
+  dayStartMs: number | null = null,
   includeStepModelIds: boolean = true,
 ): SessionSummary[] | null {
   if (db === null) return null
@@ -351,10 +368,13 @@ export function querySessionList(
   const primaryDirectionSql = safeSortOrder === "asc" ? "ASC" : "DESC"
   const hasDirectoryFilter = typeof directoryValue === "string" && directoryValue !== ""
   const hasRangeFilter = typeof rangeStartMs === "number" && Number.isFinite(rangeStartMs)
+  const hasDayFilter = typeof dayStartMs === "number" && Number.isFinite(dayStartMs)
+  const dayEndMs = hasDayFilter ? dayStartMs + SESSION_RANGE_WINDOW_MS_PER_DAY : null
 
   // Filter conditions compose in a fixed order (directory first, then
-  // the range window) so the bind-parameter order is deterministic:
-  // [directory,] [range threshold,] limit, offset.
+  // the range window, then the calendar-day window) so the bind
+  // parameter order is deterministic: [directory,] [range threshold,]
+  // [day-start, day-end,] limit, offset.
   const sessionFilterConditionsSql: string[] = []
   const sessionFilterBindValues: unknown[] = []
   if (hasDirectoryFilter) {
@@ -364,6 +384,10 @@ export function querySessionList(
   if (hasRangeFilter) {
     sessionFilterConditionsSql.push(SESSION_RANGE_FILTER_SQL)
     sessionFilterBindValues.push(rangeStartMs)
+  }
+  if (hasDayFilter) {
+    sessionFilterConditionsSql.push(SESSION_DAY_FILTER_SQL)
+    sessionFilterBindValues.push(dayStartMs, dayEndMs)
   }
   // The "\n       " prefix keeps the filtered shapes byte-identical to
   // the pre-0.9.0 statements (locked by the directory-filter and

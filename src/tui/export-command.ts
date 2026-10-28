@@ -122,6 +122,7 @@ export async function pickSessionForExport(
     undefined,
     null,
     null,
+    null,
     false,
   )
   if (recentSessions === null || recentSessions.length === 0) return null

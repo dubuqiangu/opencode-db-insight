@@ -28,6 +28,8 @@ export type InsightRoute =
   | { routeName: "tool-error-trend" }
   | { routeName: "session-outcomes" }
   | { routeName: "refresh" }
+  // v0.24.0 跨会话搜索端点：无路径参数，q/mode 走查询串（在 api.ts 读）。
+  | { routeName: "search" }
   | { routeName: "sessionMessages"; sessionId: string }
   | { routeName: "sessionSystemPrompt"; sessionId: string }
   | { routeName: "sessionExport"; sessionId: string }
@@ -84,7 +86,9 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
     // "refresh" is the cache-control plane (v0.14.0), not a panel, but
     // it shares the same two-segment shape — and like the panel routes
     // it never carries path parameters.
-    case "refresh": {
+    case "refresh":
+    // v0.24.0 跨会话搜索端点：两段形状，q/mode 走查询串，不吃 ?session=。
+    case "search": {
       if (pathSegments.length !== 2) return null
       // routeSegment is narrowed to one of the literal two-segment
       // route names listed above (matchApiRoute only reaches the body

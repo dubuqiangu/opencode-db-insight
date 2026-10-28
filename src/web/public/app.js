@@ -28,6 +28,7 @@ import {
   fetchChildShare,
   fetchToolErrorTrend,
   fetchSessionOutcomes,
+  fetchSearch,
   fetchRefresh,
   fetchSessionSummaryById,
   SessionScopeNotFoundError,
@@ -53,6 +54,7 @@ import { renderDurationDistributionCard } from "./components/duration-distributi
 import { renderChildShareCard } from "./components/child-share-card.js";
 import { renderToolErrorTrendCard } from "./components/tool-error-trend-card.js";
 import { renderSessionOutcomeCard } from "./components/session-outcome-card.js";
+import { renderSearchPanel } from "./components/search-panel.js";
 import {
   renderSessionScopeChip,
   flashSessionScopeVanishedNotice,
@@ -72,6 +74,18 @@ const state = {
   range: "30",
   modelFilter: null,
   directoryFilter: null,
+  // 日历日下钻（Milestone A）：YYYY-MM-DD 或 null。点热力图某日 → 会话
+  // 列表按该日过滤（服务端 ?day= 精确匹配 timeUpdated 所在本地日），与
+  // directory/range 三过滤 AND 叠加。
+  dayFilter: null,
+  // 全文搜索状态（Milestone A）：app.js 拥有 fetch，search-panel 只渲。
+  search: {
+    status: "idle", // idle | loading | done | error
+    query: "",
+    mode: "substring",
+    payload: null,
+    error: null,
+  },
   // 会话作用域（v0.20.0）：null = 全部会话（缺省）。非空 = 看板各聚合
   // 只统计该会话（?session= 透传），title 供顶栏 chip 展示。进入/退出
   // 都走 enterSessionScope / exitSessionScope（缓存重置 + 全量重载在那
@@ -165,6 +179,7 @@ const heatmapRangeSwitchElement = document.getElementById("heatmap-range-switch"
 const tocNavElement = document.getElementById("toc-nav");
 const sessionListElement = document.getElementById("session-list");
 const sessionFilterChipElement = document.getElementById("session-filter-chip");
+const searchPanelElement = document.getElementById("search-panel");
 const sessionScopeChipElement = document.getElementById("session-scope-chip");
 const distributionCardElement = document.getElementById("session-distribution");
 const stepDistributionCardElement = document.getElementById("session-step-distribution");
@@ -313,8 +328,10 @@ function enterSessionScope(sessionId, sessionTitle) {
   state.sessionScopeTitle = sessionTitle === "" ? sessionId : sessionTitle;
   // 模型/目录下钻与作用域正交但口径错位（下钻过滤会把锁定行滤没），
   // 进入即清零——模型表高亮、目录面板选中态、面板 chip 一并复位。
+  // 日期过滤（Milestone A）同口径：单会话视图下按日过滤没有对象，一并清零。
   state.modelFilter = null;
   state.directoryFilter = null;
+  state.dayFilter = null;
   renderModelTable(modelTableElement, state.cache.models ?? [], null, onModelSelected);
   renderDirectoryPanel(directoryPanelElement, state.cache.directories ?? null, null, onDirectorySelected);
   renderSessionFilterChip();
@@ -437,7 +454,7 @@ const loadCalendarSection = createSimpleSectionLoader(
   "calendar",
   calendarHeatmapElement,
   async () => (state.cache.calendarTrend = await fetchTrend(TREND_CALENDAR_WINDOW_DAYS, state.sessionScopeId)),
-  (calendarTrend) => renderCalendarHeatmap(calendarHeatmapElement, calendarTrend),
+  (calendarTrend) => renderCalendarHeatmap(calendarHeatmapElement, calendarTrend, { onDaySelect: onDaySelected }),
 );
 
 async function loadToolsSection() {
@@ -577,9 +594,9 @@ const SESSION_LIST_PAGE_LIMIT = 15;
  */
 const sessionSortController = createSessionSortController({
   containerElement: sessionListElement,
-  fetchSessionsPage: (sortKey, sortOrder, directory, range, sessionScopeId) => {
+  fetchSessionsPage: (sortKey, sortOrder, directory, range, day, sessionScopeId) => {
     if (sessionScopeId !== null) return fetchScopedSessionListPage(sessionScopeId);
-    return fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder, directory, range);
+    return fetchSessions(SESSION_LIST_PAGE_LIMIT, 0, sortKey, sortOrder, directory, range, day);
   },
   getModelFilter: () => state.modelFilter,
   onSessionScopeChange: enterSessionScope,
@@ -926,6 +943,47 @@ async function loadSessionOutcomesSection() {
   }
 }
 
+/* ---------- 全文搜索（Milestone A） ---------- */
+
+/** 渲染搜索面板当前状态（idle/loading/done/error 由 search-panel 内部出文案）。 */
+function renderSearchPanelState() {
+  renderSearchPanel(searchPanelElement, state.search, submitSearch);
+}
+
+/**
+ * 搜索提交（search-panel 的 onSearch 回调，Enter 与按钮共用）：app.js 拥有
+ * fetch，这里把 query + mode 转成 GET /api/search 请求并回填 state.search，
+ * 再由 renderSearchPanelState 渲染。简单序列守卫：晚到的响应不得覆盖更新的
+ * 搜索（query/mode 任一变化即弃渲染）。搜索不随自动刷新重跑——它显式由用户
+ * 触发，自动重查只会制造意外开销。
+ */
+async function submitSearch(query, mode) {
+  state.search.status = "loading";
+  state.search.query = query;
+  state.search.mode = mode;
+  renderSearchPanelState();
+  try {
+    const searchPayload = await fetchSearch(query, mode, state.sessionScopeId);
+    if (state.search.query !== query || state.search.mode !== mode) return;
+    state.search.payload = searchPayload;
+    state.search.error = null;
+    state.search.status = "done";
+  } catch (error) {
+    if (state.search.query !== query || state.search.mode !== mode) return;
+    state.search.error = error instanceof Error ? error.message : String(error);
+    state.search.status = "error";
+  }
+  renderSearchPanelState();
+}
+
+/**
+ * 搜索面板加载：渲染当前状态，不自动重查（搜索是用户触发，初始为 idle 态）。
+ * 归入 always-on 列表（不随作用域隐藏），每次刷新只重渲当前结果以保持同步。
+ */
+function loadSearchSection() {
+  renderSearchPanelState();
+}
+
 /* ---------- 模型 / 目录下钻过滤 ---------- */
 function onModelSelected(modelId) {
   state.modelFilter = modelId;
@@ -948,6 +1006,17 @@ function onDirectorySelected(directoryPath) {
 }
 
 /**
+ * 日历日下钻（Milestone A）：点热力图某日 → 会话列表按该日过滤（服务端
+ * ?day= 精确匹配 timeUpdated 所在本地日），toggle 语义同模型/目录（点
+ * 选中日 → null）。与目录/时间范围/模型过滤正交可叠加。
+ */
+function onDaySelected(dateKey) {
+  state.dayFilter = dateKey;
+  renderSessionFilterChip();
+  sessionSortController.changeDay(dateKey);
+}
+
+/**
  * 会话面板头部的过滤态可视化：目录与模型各一枚 filter-chip，各带独立
  * 清除 ✕（形态与既有模型 chip 完全一致，v0.7.0 只是把它扩成枚举）。
  */
@@ -957,6 +1026,12 @@ function renderSessionFilterChip() {
     chipParts.push(`
       <span class="filter-chip">目录：${escapeHtml(state.directoryFilter)}
         <button type="button" data-clear-filter="directory" title="取消目录过滤" aria-label="取消目录过滤">✕</button>
+      </span>`);
+  }
+  if (state.dayFilter !== null) {
+    chipParts.push(`
+      <span class="filter-chip">日期：${escapeHtml(state.dayFilter)}
+        <button type="button" data-clear-filter="day" title="取消日期过滤" aria-label="取消日期过滤">✕</button>
       </span>`);
   }
   if (state.modelFilter !== null) {
@@ -970,6 +1045,8 @@ function renderSessionFilterChip() {
     clearButton.addEventListener("click", () => {
       if (clearButton.dataset.clearFilter === "directory") {
         onDirectorySelected(null);
+      } else if (clearButton.dataset.clearFilter === "day") {
+        onDaySelected(null);
       } else {
         onModelSelected(null);
       }
@@ -1112,6 +1189,7 @@ async function refreshAllSections() {
       sessionSortController.refreshCurrentView(),
       loadCompactionSection(),
       loadTodoSection(),
+      loadSearchSection(),
       // 作用域激活时以下面板整体隐藏（applySessionScopePanelVisibility），
       // 跳过取数——隐藏面板的请求是纯浪费，失败计数也会误导顶栏。
       ...(roundSessionScopeId === null ? [
@@ -1244,6 +1322,7 @@ async function startInitialLoad() {
   sessionSortController.load();
   loadCompactionSection();
   loadTodoSection();
+  loadSearchSection();
   // 作用域缺省为 null，正常全量初载；若初载前用户已点行内按钮进入作用域
   //（竞态窗口极小），isSessionScopeActive 的守卫与 refreshAllSections 的
   // 补一轮机制会追平，这里不必重复判定。
@@ -1280,7 +1359,7 @@ function init() {
   onSchemeChange(() => {
     if (state.cache.overview !== undefined) renderKpiRow(kpiRowElement, state.cache.overview);
     if (state.cache.rangeTrend[state.range] !== undefined) renderTrendSectionFromCache();
-    if (state.cache.calendarTrend !== undefined) renderCalendarHeatmap(calendarHeatmapElement, state.cache.calendarTrend);
+    if (state.cache.calendarTrend !== undefined) renderCalendarHeatmap(calendarHeatmapElement, state.cache.calendarTrend, { onDaySelect: onDaySelected });
     // 时段热力 / 压缩迷你趋势用 cssVar 内联着色，主题切换后重读配色
     if (state.cache.hourHeatmap !== undefined) renderHourHeatmap(hourHeatmapElement, state.cache.hourHeatmap);
     if (state.cache.compaction !== undefined) renderCompactionPanel(compactionPanelElement, state.cache.compaction);

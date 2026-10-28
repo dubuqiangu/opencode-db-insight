@@ -37,6 +37,7 @@ import {
   resolveSessionSortOrder,
   sessionExistsInSessionV2,
 } from "../db/queries.ts"
+import { queryCrossSessionSearch } from "../db/search-queries.ts"
 import {
   queryCompactionStats,
   queryHourHeatmap,
@@ -280,6 +281,26 @@ function healthResponse(requestContext: ApiRequestContext): ApiResponsePayload {
   }
 }
 
+/** A local calendar day's start in epoch-ms, or null for missing/empty/malformed dates. */
+const DAY_PARAM_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Parse ?day=YYYY-MM-DD into the local calendar-day start epoch-ms
+ * (Date.UTC — no timezone drift). Missing, empty or malformed dates
+ * return null (no filter, degrade silently like sort/order).
+ */
+function parseDayStartMs(dayParamValue: string): number | null {
+  if (dayParamValue === "" || !DAY_PARAM_PATTERN.test(dayParamValue)) return null
+  const year = Number(dayParamValue.slice(0, 4))
+  const month = Number(dayParamValue.slice(5, 7))
+  const day = Number(dayParamValue.slice(8, 10))
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return null
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  return Date.UTC(year, month - 1, day)
+}
+
 /**
  * Parse one bounded positive-integer window parameter and return both things
  * its caller must keep in lockstep (P2-6 clamp-before-key discipline): the
@@ -425,6 +446,24 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         )
         return { statusCode: 200, body: agentStats }
       }
+      case "search": {
+        // v0.24.0 跨会话搜索端点。mode 校验：只有 "regex" 是正则，其余
+        // （缺失/空/其它）一律降级为 substring（degrade，不 400）。空/缺
+        // q 由 queryCrossSessionSearch 答空载荷（200）。缓存键带 mode+query
+        // 两个维度。
+        const searchQuery = requestContext.searchParams.get("q") ?? ""
+        const rawSearchMode = requestContext.searchParams.get("mode") ?? ""
+        const searchMode: "substring" | "regex" =
+          rawSearchMode === "regex" ? "regex" : "substring"
+        const searchResult = cachedResult(
+          buildCacheKey("search", [searchMode, searchQuery]),
+          () => queryCrossSessionSearch(database, searchQuery, searchMode),
+        )
+        if (searchResult === null) {
+          return { statusCode: 503, body: { error: DATABASE_UNAVAILABLE_MESSAGE } }
+        }
+        return { statusCode: 200, body: searchResult }
+      }
       case "sessions": {
         const sessionLimit = parsePositiveIntegerParam(requestContext.searchParams, "limit", 50)
         const sessionOffset = parseNonNegativeIntegerParam(requestContext.searchParams, "offset", 0)
@@ -459,6 +498,14 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
           sessionRangeResolution.rangeKind === "window"
             ? sessionRangeResolution.rangeStartMs
             : null
+        // Calendar-day filter (v0.24.0): a well-formed ?day=YYYY-MM-DD
+        // pins the local calendar-day window [dayStartMs, dayStartMs +
+        // 86400000) via Date.UTC (no timezone drift). Missing, empty or
+        // malformed dates degrade to no filter (silent, like sort/order).
+        // The cache key carries the RAW day string ("" for no filter), not
+        // the computed threshold — same discipline as range/directory.
+        const sessionDayParamValue = requestContext.searchParams.get("day") ?? ""
+        const sessionDayStartMs = parseDayStartMs(sessionDayParamValue)
         // The cache key carries the RAW range word ("" for a missing
         // parameter), not the computed threshold: the threshold moves
         // every millisecond, so keying on it would spray a
@@ -472,6 +519,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             sessionSortOrder,
             sessionDirectoryFilter,
             sessionRangeParamValue,
+            sessionDayParamValue,
           ]),
           () =>
             querySessionList(
@@ -482,6 +530,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
               sessionSortOrder,
               sessionDirectoryFilter,
               sessionRangeStartMs,
+              sessionDayStartMs,
             ),
         )
         return { statusCode: 200, body: sessionPage }
@@ -716,6 +765,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             DEFAULT_SESSION_SORT_ORDER,
             exportDirectoryFilter,
             exportRangeStartMs,
+            null,
             false,
           )
           // Unreachable with a non-null db; kept as belt-and-braces so a

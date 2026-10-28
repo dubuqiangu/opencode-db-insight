@@ -1,16 +1,21 @@
 /**
  * 会话列表排序控制器（P2-2，v0.5.1 从 app.js 抽出）：持有 sort/order/
- * directory/range 状态、Map 缓存、请求序列守卫，把 session-list 的
- * 列头/重置/范围回调与目录下钻转成带 ?sort=/?order=/?directory=/?range=
- * 的 API 请求。app.js 只装配（注入 fetchSessionsPage 等依赖），本模块不
- * 感知全局 state——竞态行为由 test/web-components.test.ts 的控制器竞态
- * 测试锁住：晚到响应不落 DOM（token + 四维快照双保险）、切换任一维度
- * 弹掉旧请求、同组合重叠请求早 token 弃渲染。
+ * directory/range/day 状态、Map 缓存、请求序列守卫，把 session-list 的
+ * 列头/重置/范围回调与目录下钻、日历日下钻转成带 ?sort=/?order=/
+ * ?directory=/?range=/?day= 的 API 请求。app.js 只装配（注入
+ * fetchSessionsPage 等依赖），本模块不感知全局 state——竞态行为由
+ * test/web-components.test.ts 的控制器竞态测试锁住：晚到响应不落 DOM
+ * （token + 快照双保险）、切换任一维度弹掉旧请求、同组合重叠请求早
+ * token 弃渲染。
  *
  * v0.7.0 扩维：目录→会话下钻过滤。directory 是服务端参数（与模型
  * 客户端行过滤正交），入控制器受控状态。
  * v0.9.0 扩维：时间范围（?range=7d|30d|90d，timeUpdated 口径）同模式
  * 入控制器受控状态——单一真源在此，app/session-list 不另存副本。
+ *
+ * Milestone A 扩维：日历日（?day=YYYY-MM-DD）同模式入受控状态——热力图
+ * 点某日 → 会话列表按该日过滤（服务端精确匹配 timeUpdated 所在本地日），
+ * 与 directory/range 三者 AND 叠加。
  *
  * v0.20.0 扩维：会话作用域（changeSessionScope）——缓存键追加 scope
  * 段（见 sessionSortCacheKey），作用域载荷与全量载荷绝不共享条目；
@@ -18,9 +23,9 @@
  * fetchSessionsPage 闭包按 scope 参数决定。
  *
  * 缓存语义（v0.9.1，ora-5 审查 P2 修复）＝**稳定维度缓存 + 时间窗视图
- * 直取**：sort/order/directory 是稳定量——同键永远同义，可缓存；range
- * 非空是唯一随墙钟移动的维度，09:00 的「最近 7 天」与 18:00 的「最近
- * 7 天」是两个集合，「同键」不再蕴含「同义」。因此：
+ * 直取**：sort/order/directory/day 是稳定量——同键永远同义，可缓存；
+ * range 非空是唯一随墙钟移动的维度，09:00 的「最近 7 天」与 18:00 的
+ * 「最近 7 天」是两个集合，「同键」不再蕴含「同义」。因此：
  * - 非空 range 的视图一律绕过缓存**读与写**——进入即重新请求，成功也
  *   不落缓存（Map 只服务稳定维度，避免无意义积压）；
  * - 判定按「当前视图是否含时间窗」而非「哪个动作触发」：range 视图下
@@ -32,15 +37,16 @@
  * 处方不引入时间戳/TTL 记账：range 切换是低频显式动作，重取代价远低于
  * 整类时间一致性问题的记账复杂度。
  *
- * 缓存键 = `sort:order:directory:range`。注入性（键可逆、组合无碰撞）：
- * sort/order/range 取值来自固定词表（不含冒号），directory 做 URL 编码
- * 入键——路径里的 ":"（盘符 D:/）编码后不再产生分段歧义，任意两组合
- * 映射到不同键。非空 range 条目永不写入，其键段只参与判别。
+ * 缓存键 = `sort:order:directory:range:day:sessionScope`。注入性（键可逆、
+ * 组合无碰撞）：sort/order/range 取值来自固定词表（不含冒号），directory
+ * 与 day、sessionScope 做 URL 编码入键——路径里的 ":"（盘符 D:/）编码后
+ * 不再产生分段歧义，任意两组合映射到不同键。非空 range 条目永不写入，
+ * 其键段只参与判别。
  *
  * 缓存键假设（N-2 钉住）：今天 fetchSessionsPage 闭包内 limit/offset
  * 为常量单页（app.js 的 SESSION_LIST_PAGE_LIMIT / 0），现有键足够区分
  * 条目。若将来分页参数化（limit/offset 可变），键必须扩为
- * `limit:offset:sort:order:directory:range`，否则不同页会共享同一条目。
+ * `limit:offset:sort:order:directory:range:day`，否则不同页会共享同一条目。
  * 缓存用 Map 而非普通对象：键永远来自本模块写入的组合值，Map 顺带杜绝
  * 原型链键的查表歧义。
  */
@@ -55,17 +61,17 @@ import {
 } from "../data-source.js";
 
 /**
- * sessions 缓存键：sort/order/directory/range/sessionScope 五维组合
+ * sessions 缓存键：sort/order/directory/range/day/sessionScope 六维组合
  * （后端缓存键 sessions:[limit,offset,sort,order,directory,range] 的前端
  * 对应；v0.20.0 scope 段与后端 ?session= 聚合缓存键的 session 维度同一
  * 分离纪律——不同作用域的载荷绝不能共享条目，否则退出作用域会吃到
  * 单会话口径的陈旧缓存）。directory 为 null（无过滤）时以空串占位，
  * 与 "" 按后端契约同为「不过滤」——两端对空串的语义一致，键也归一；
- * range / sessionScope 同理（""/null = 全部）。只有 range 为空串的条目
- * 会被写入（见模块头缓存语义）。
+ * range / day / sessionScope 同理（""/null = 全部）。只有 range 为空串
+ * 的条目会被写入（见模块头缓存语义）。
  */
-function sessionSortCacheKey(sortKey, sortOrder, directory, range, sessionScopeId) {
-  return `${sortKey}:${sortOrder}:${encodeURIComponent(directory ?? "")}:${range ?? ""}:${encodeURIComponent(sessionScopeId ?? "")}`;
+function sessionSortCacheKey(sortKey, sortOrder, directory, range, day, sessionScopeId) {
+  return `${sortKey}:${sortOrder}:${encodeURIComponent(directory ?? "")}:${range ?? ""}:${encodeURIComponent(day ?? "")}:${encodeURIComponent(sessionScopeId ?? "")}`;
 }
 
 /**
@@ -73,7 +79,7 @@ function sessionSortCacheKey(sortKey, sortOrder, directory, range, sessionScopeI
  *
  * 依赖注入（app.js 装配，测试替身可换）：
  * - containerElement：会话列表容器（app.js 的 #session-list）
- * - fetchSessionsPage(sortKey, sortOrder, directory, range, sessionScopeId)
+ * - fetchSessionsPage(sortKey, sortOrder, directory, range, day, sessionScopeId)
  *   → Promise<sessionPayload>：单页请求闭包，limit/offset 由装配方钉死
  *   （见头部 N-2 注释）；sessionScopeId 非 null 时由闭包决定取数来源
  *   （作用域视图 = 单会话载荷，不走 ?sort= 分页请求）
@@ -122,6 +128,10 @@ export function createSessionSortController({
     order: DEFAULT_SESSION_SORT_ORDER,
     directory: null,
     range: DEFAULT_SESSION_RANGE,
+    // Milestone A 日历日下钻：YYYY-MM-DD 或 null（不过滤）。入缓存键
+    // （见 sessionSortCacheKey），与 directory/range 同为服务端过滤维度，
+    // AND 叠加。
+    day: null,
     // v0.20.0 会话作用域：null = 全部会话。入缓存键（见
     // sessionSortCacheKey），不与无作用域条目混存。
     sessionScope: null,
@@ -149,13 +159,15 @@ export function createSessionSortController({
         sessionScopeId: viewState.sessionScope,
         onSessionScopeChange,
       },
+      isScopeLocked ? null : viewState.day,
+      isScopeLocked ? null : changeDay,
     );
   }
 
   function renderCurrent() {
     if (viewState.range === "") {
       const cachedSessionPayload = viewState.cache.get(
-        sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, "", viewState.sessionScope),
+        sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, "", viewState.day, viewState.sessionScope),
       );
       if (cachedSessionPayload !== undefined) {
         // 稳定视图：缓存即真相，命中直渲。
@@ -177,7 +189,7 @@ export function createSessionSortController({
 
   function renderCurrentIfLoaded() {
     if (viewState.range !== "") return; // 时间窗视图不入缓存，恒 no-op（见模块头已知代价）
-    if (!viewState.cache.has(sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, "", viewState.sessionScope))) return;
+    if (!viewState.cache.has(sessionSortCacheKey(viewState.key, viewState.order, viewState.directory, "", viewState.day, viewState.sessionScope))) return;
     renderCurrent();
   }
 
@@ -195,6 +207,7 @@ export function createSessionSortController({
     const requestSortOrder = viewState.order;
     const requestDirectory = viewState.directory;
     const requestRange = viewState.range;
+    const requestDay = viewState.day;
     const requestSessionScope = viewState.sessionScope;
     try {
       const sessionPayload = await fetchSessionsPage(
@@ -202,12 +215,13 @@ export function createSessionSortController({
         requestSortOrder,
         requestDirectory,
         requestRange,
+        requestDay,
         requestSessionScope,
       );
       // 时间窗条目不写缓存：同键不蕴含同义（墙钟移动），Map 只服务稳定维度。
       if (requestRange === "") {
         viewState.cache.set(
-          sessionSortCacheKey(requestSortKey, requestSortOrder, requestDirectory, "", requestSessionScope),
+          sessionSortCacheKey(requestSortKey, requestSortOrder, requestDirectory, "", requestDay, requestSessionScope),
           sessionPayload,
         );
       }
@@ -216,6 +230,7 @@ export function createSessionSortController({
         || requestSortOrder !== viewState.order
         || requestDirectory !== viewState.directory
         || requestRange !== viewState.range
+        || requestDay !== viewState.day
         || requestSessionScope !== viewState.sessionScope) return;
       renderSessionPage(sessionPayload);
       markSectionSucceeded();
@@ -233,6 +248,7 @@ export function createSessionSortController({
         || requestSortOrder !== viewState.order
         || requestDirectory !== viewState.directory
         || requestRange !== viewState.range
+        || requestDay !== viewState.day
         || requestSessionScope !== viewState.sessionScope) return;
       renderError(containerElement, error, load);
       markSectionFailed();
@@ -244,13 +260,14 @@ export function createSessionSortController({
    * （首次未见过的稳定组合，或一切含时间窗的视图）→ 先上骨架（不闪
    * 旧组合的数据）再请求。
    */
-  function applyNextView(nextSortKey, nextSortOrder, nextDirectory, nextRange) {
+  function applyNextView(nextSortKey, nextSortOrder, nextDirectory, nextRange, nextDay) {
     viewState.key = nextSortKey;
     viewState.order = nextSortOrder;
     viewState.directory = nextDirectory;
     viewState.range = nextRange;
+    viewState.day = nextDay;
     if (nextRange === ""
-      && viewState.cache.has(sessionSortCacheKey(nextSortKey, nextSortOrder, nextDirectory, "", viewState.sessionScope))) {
+      && viewState.cache.has(sessionSortCacheKey(nextSortKey, nextSortOrder, nextDirectory, "", nextDay, viewState.sessionScope))) {
       renderCurrent();
       // R1：缓存命中同样记成功——此前视图的加载失败计数不得残留顶栏
       //（renderCurrent 纯渲染不碰计数，网络成功路径在 load() 里已记）。
@@ -261,22 +278,32 @@ export function createSessionSortController({
     }
   }
 
-  /** 排序切换（列头点击/重置共用）：directory/range 维持当前值。 */
+  /** 排序切换（列头点击/重置共用）：directory/range/day 维持当前值。 */
   function changeSort(nextSortKey, nextSortOrder) {
     if (viewState.key === nextSortKey && viewState.order === nextSortOrder) return;
-    applyNextView(nextSortKey, nextSortOrder, viewState.directory, viewState.range);
+    applyNextView(nextSortKey, nextSortOrder, viewState.directory, viewState.range, viewState.day);
   }
 
-  /** 目录下钻/取消：sort/range 维持当前值。 */
+  /** 目录下钻/取消：sort/range/day 维持当前值。 */
   function changeDirectory(nextDirectory) {
     if (viewState.directory === nextDirectory) return;
-    applyNextView(viewState.key, viewState.order, nextDirectory, viewState.range);
+    applyNextView(viewState.key, viewState.order, nextDirectory, viewState.range, viewState.day);
   }
 
-  /** 时间范围切换（v0.9.0）：sort/directory 维持当前值。 */
+  /** 时间范围切换（v0.9.0）：sort/directory/day 维持当前值。 */
   function changeRange(nextRange) {
     if (viewState.range === nextRange) return;
-    applyNextView(viewState.key, viewState.order, viewState.directory, nextRange);
+    applyNextView(viewState.key, viewState.order, viewState.directory, nextRange, viewState.day);
+  }
+
+  /**
+   * 日历日下钻/取消（Milestone A）：点热力图某日 → 会话列表按该日过滤
+   * （服务端 ?day=YYYY-MM-DD 精确匹配 timeUpdated 所在日历日），sort/
+   * directory/range 维持当前值。toggle 语义由调用方先做（点同一日 → null）。
+   */
+  function changeDay(nextDay) {
+    if (viewState.day === nextDay) return;
+    applyNextView(viewState.key, viewState.order, viewState.directory, viewState.range, nextDay);
   }
 
   /**
@@ -287,7 +314,7 @@ export function createSessionSortController({
   function changeSessionScope(nextSessionScopeId) {
     if (viewState.sessionScope === nextSessionScopeId) return;
     viewState.sessionScope = nextSessionScopeId;
-    applyNextView(viewState.key, viewState.order, viewState.directory, viewState.range);
+    applyNextView(viewState.key, viewState.order, viewState.directory, viewState.range, viewState.day);
   }
 
   /**
@@ -307,6 +334,7 @@ export function createSessionSortController({
     changeSort,
     changeDirectory,
     changeRange,
+    changeDay,
     changeSessionScope,
     renderCurrent,
     renderCurrentIfLoaded,

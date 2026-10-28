@@ -878,6 +878,7 @@ export function getMockSessions(
   sortOrderValue = "desc",
   directoryFilter = null,
   rangeFilter = "",
+  dayFilter = null,
 ) {
   const safeSortKey = Object.hasOwn(SESSION_SORT_FIELD_BY_KEY, sortKeyValue)
     ? sortKeyValue
@@ -894,9 +895,16 @@ export function getMockSessions(
     throw new Error(`unknown range "${String(rangeFilter)}"（契约词表：7d|30d|90d，缺省/空=全量）`);
   }
   const rangeCutoffMs = rangeDays === null ? 0 : Date.now() - rangeDays * 86_400_000;
+  // day（Milestone A）：YYYY-MM-DD 精确匹配 timeUpdated 所在本地日历日；
+  // 空/缺省 = 不过滤。非法非空值抛错（镜像后端 400 防御，同 range 纪律）。
+  const dayKey = dayFilter === null || dayFilter === "" ? null : String(dayFilter);
+  if (dayKey !== null && !/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
+    throw new Error(`invalid day "${dayKey}"（契约：YYYY-MM-DD）`);
+  }
   const baseSessions = sessionsPayload.sessions.filter((session) =>
     (!isDirectoryFiltered || session.directory === directoryFilter)
-    && (rangeDays === null || session.timeUpdated >= rangeCutoffMs));
+    && (rangeDays === null || session.timeUpdated >= rangeCutoffMs)
+    && (dayKey === null || isSessionOnLocalDay(session.timeUpdated, dayKey)));
   const sortField = SESSION_SORT_FIELD_BY_KEY[safeSortKey];
   const directionSign = safeSortOrder === "asc" ? 1 : -1;
   const sortedSessions = [...baseSessions].sort((left, right) => {
@@ -910,11 +918,24 @@ export function getMockSessions(
     // 与后端相同的 id ASC 决胜：方向无关，恒为升序
     return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   });
-  const isAnyFilterActive = isDirectoryFiltered || rangeDays !== null;
+  const isAnyFilterActive = isDirectoryFiltered || rangeDays !== null || dayKey !== null;
   return {
     total: isAnyFilterActive ? null : sessionsPayload.total,
     sessions: sortedSessions,
   };
+}
+
+/** epoch 毫秒 → 本地日 YYYY-MM-DD（与 format.js 的 epochToDateKey 同口径）。 */
+function epochToLocalDateKey(epochMilliseconds) {
+  const date = new Date(epochMilliseconds);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const dayOfMonth = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${dayOfMonth}`;
+}
+
+/** epoch 毫秒所在本地日是否等于 dayKey（YYYY-MM-DD）。 */
+function isSessionOnLocalDay(epochMilliseconds, dayKey) {
+  return epochToLocalDateKey(epochMilliseconds) === dayKey;
 }
 // 按需构建（同 getMockTrend）：热力窗口必须与 trend 同 days 才守恒
 export function getMockHourHeatmap(days) { return buildHourHeatmap(days); }
@@ -942,4 +963,58 @@ export function getMockDirectoryStats(limit = 10) {
     ...directoryStatsPayload,
     directories: directoryStatsPayload.directories.slice(0, boundedLimit),
   };
+}
+
+/* ------------------------------------------------------------
+ * GET /api/search?q&mode —— Milestone A 全文搜索 mock 缝
+ * 镜像真实 wire：{ query, mode, hits: [{ sessionId, sessionTitle,
+ * messageId, messageType, snippet, hitCount }], total }。
+ * 命中由 sessionsPayload 派生（同一份确定性数据，不做真正的全文索引）：
+ * 子串模式按 title 包含匹配，正则模式按 new RegExp 测试 title；
+ * snippet 用后端同款高亮契约（命中词包 <mark>），mock 负责保证文本已
+ * 转义、<mark> 外无标签，search-panel 按契约原样透传。非法正则抛错
+ * （镜像后端 400 防御），与 range 词表外抛错同纪律。
+ * ------------------------------------------------------------ */
+export function getMockSearchResults(query = "", mode = "substring") {
+  const queryText = String(query ?? "");
+  if (queryText === "") {
+    return { query: queryText, mode, hits: [], total: 0 };
+  }
+  let matchesTitle;
+  if (mode === "regex") {
+    try {
+      const queryRegExp = new RegExp(queryText, "i");
+      matchesTitle = (titleText) => queryRegExp.test(titleText);
+    } catch (error) {
+      throw new Error(`invalid regular expression: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else {
+    matchesTitle = (titleText) => titleText.toLowerCase().includes(queryText.toLowerCase());
+  }
+  const hits = [];
+  for (const sessionRecord of sessionsPayload.sessions) {
+    if (!matchesTitle(sessionRecord.title)) continue;
+    const escapedTitle = escapeHtmlForMock(sessionRecord.title);
+    const escapedQuery = escapeHtmlForMock(queryText);
+    hits.push({
+      sessionId: sessionRecord.id,
+      sessionTitle: sessionRecord.title,
+      messageId: `msg_mock_${sessionRecord.id}`,
+      messageType: "text",
+      snippet: `…${escapedTitle.slice(0, 20)} <mark>${escapedQuery}</mark> ${escapedTitle.slice(20, 60)}…`,
+      hitCount: 1 + Math.floor(random() * 4),
+    });
+  }
+  return { query: queryText, mode, hits, total: hits.length };
+}
+
+/** mock 侧最小 HTML 转义（snippet 高亮契约要求文本已转义、<mark> 外无标签）。 */
+function escapeHtmlForMock(textValue) {
+  return String(textValue).replace(/[&<>"']/g, (char) => {
+    if (char === "&") return "&amp;";
+    if (char === "<") return "&lt;";
+    if (char === ">") return "&gt;";
+    if (char === '"') return "&quot;";
+    return "&#39;";
+  });
 }
