@@ -286,10 +286,12 @@ const DAY_PARAM_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 /**
  * Parse ?day=YYYY-MM-DD into the local calendar-day start epoch-ms
- * (Date.UTC — no timezone drift). Missing, empty or malformed dates
- * return null (no filter, degrade silently like sort/order).
+ * (new Date(year, month-1, day) — local midnight, matching the frontend
+ * dateKeyToEpoch so a heatmap day-click filters the same local-day window
+ * the heatmap itself renders). Missing, empty or malformed dates return
+ * null (no filter, degrade silently like sort/order).
  */
-function parseDayStartMs(dayParamValue: string): number | null {
+export function parseDayStartMs(dayParamValue: string): number | null {
   if (dayParamValue === "" || !DAY_PARAM_PATTERN.test(dayParamValue)) return null
   const year = Number(dayParamValue.slice(0, 4))
   const month = Number(dayParamValue.slice(5, 7))
@@ -298,7 +300,7 @@ function parseDayStartMs(dayParamValue: string): number | null {
     return null
   }
   if (month < 1 || month > 12 || day < 1 || day > 31) return null
-  return Date.UTC(year, month - 1, day)
+  return new Date(year, month - 1, day).getTime()
 }
 
 /**
