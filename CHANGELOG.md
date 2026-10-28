@@ -47,6 +47,8 @@
 
 ### Fixed
 
+- **会话列表标题列冻结**（v0.25.1）：横向滚动时「标题」列钉住不动，右侧列滑走——与模型排行榜的「模型」列冻结同款。`.session-body` 本就把横滚（`.table-body overflow-x`）与纵滚（`overflow-y`）合为同一 scrollport，首列 `td:first-child` / 表头 `th:first-child` 走 `position: sticky; left: 0`，铺 `--panel` 实底、右缘 inset box-shadow 分隔线；corner 表头 z4 压住按 `--session-toolbar-height` 下移的其余表头（z2）。实测：横滚 300px 后标题列 X 坐标不变，会话 ID 列随之平移 300px。
+
 - **脱敏规则因左边界写法失效，带 ANSI 色码的工具输出整段漏掉**。真实输出形如 `KSCSNKLI_API_KEY  : \x1b[0msk-...`，
   色码结尾的 `m` 是单词字符，`\bsk-` 不成立，规则空转。实测同一批 8 个会话：修复前残留 **31 处**，
   修复后 **0 处**（原始 792 处全部命中）。左边界改为「前面不是字母数字下划线，或前面刚结束一个 ANSI 转义序列」，
