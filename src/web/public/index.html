@@ -66,6 +66,7 @@
           <button type="button" data-toc-target="panel-agents">Agent leaderboard</button>
           <button type="button" data-toc-target="panel-sessions">Sessions</button>
           <button type="button" data-toc-target="panel-directories">Directories</button>
+          <button type="button" data-toc-target="panel-search">Search</button>
         </nav>
 
         <section id="kpi-row" class="kpi-row reveal d1" aria-label="关键指标"></section>
@@ -280,6 +281,18 @@
             </header>
             <div class="panel-body table-body session-body">
               <div id="session-list"></div>
+            </div>
+          </article>
+
+          <article id="panel-search" class="panel reveal d5">
+            <header class="panel-head">
+              <div>
+                <h2>全文搜索</h2>
+                <p class="panel-sub">跨全部会话搜索消息正文 / 工具入出参 / 思考过程</p>
+              </div>
+            </header>
+            <div class="panel-body table-body">
+              <div id="search-panel"></div>
             </div>
           </article>
 

@@ -89,6 +89,7 @@ import {
   getMockDirectoryStats,
   getMockToolErrorTrend,
   getMockSessionOutcomes,
+  getMockSearchResults,
 } from "./mock-data.js";
 import { getMockSessionMessages, getMockSessionSystemPrompt } from "./mock-replay-data.js";
 
@@ -193,12 +194,23 @@ function directoryQueryParam(directory) {
 }
 
 /**
+ * ?day= 参数段（Milestone A，不含 ?/& 前缀）；null / "" → ""。
+ * 后端契约：GET /api/sessions?day=YYYY-MM-DD 按本地日过滤会话（精确
+ * 匹配 timeUpdated 所在日历日）；缺省/空 = 不过滤。与 directoryQueryParam
+ * 同为参数编码单点——fetchSessions 与 CSV 导出地址共用，杜绝两处
+ * encodeURIComponent 各自漂移。
+ */
+function dayQueryParam(day) {
+  return day === null || day === "" ? "" : `day=${encodeURIComponent(day)}`;
+}
+
+/**
  * GET /api/export/sessions.csv 的下载地址（v0.8.0 起；v0.9.0 增 range）。
  * 多参数拼接单点在此：directory / range 两段统一拼成一个 query string，
  * 调用方绝不自行拼 ? 和 &。
  */
-export function sessionsExportCsvPath(directory = null, range = DEFAULT_SESSION_RANGE) {
-  const exportParamSegments = [directoryQueryParam(directory), rangeQueryParam(range)]
+export function sessionsExportCsvPath(directory = null, range = DEFAULT_SESSION_RANGE, day = null) {
+  const exportParamSegments = [directoryQueryParam(directory), rangeQueryParam(range), dayQueryParam(day)]
     .filter((paramSegment) => paramSegment !== "");
   const queryString = exportParamSegments.join("&");
   const csvExportPath = `${API_BASE}/export/sessions.csv`;
@@ -496,10 +508,12 @@ export async function fetchToolHealth(sessionScopeId = null) {
 }
 
 /**
- * GET /api/sessions?limit&offset&sort&order&directory&range —— 会话列表
+ * GET /api/sessions?limit&offset&sort&order&directory&range&day —— 会话列表
  * （真实源 total 未知）。directory 为 null/"" 时不携带该参数：默认请求
  * 路径与 0.6.1 逐字节一致（后端对缺省与空串同为「不过滤」，两端归一）。
  * range（v0.9.0）同语义：""/null = 全量，过滤口径 timeUpdated。
+ * day（Milestone A）同语义：null/"" = 不过滤，非空时按本地日精确过滤
+ * timeUpdated 所在日历日。
  */
 export async function fetchSessions(
   limit = 15,
@@ -508,8 +522,9 @@ export async function fetchSessions(
   sortOrder = DEFAULT_SESSION_SORT_ORDER,
   directory = null,
   range = DEFAULT_SESSION_RANGE,
+  day = null,
 ) {
-  if (USE_MOCK) return resolveWithLatency(getMockSessions(sortKey, sortOrder, directory, range));
+  if (USE_MOCK) return resolveWithLatency(getMockSessions(sortKey, sortOrder, directory, range, day));
   // 默认组合不携带 sort/order 参数：默认请求路径与 0.4.1 逐字节一致
   // （后端对缺省与显式默认解析结果相同，省参数还少一次字符串拼接）。
   let requestPath = `/sessions?limit=${limit}&offset=${offset}`;
@@ -519,8 +534,40 @@ export async function fetchSessions(
   if (directoryParam !== "") requestPath += `&${directoryParam}`;
   const rangeParam = rangeQueryParam(range);
   if (rangeParam !== "") requestPath += `&${rangeParam}`;
+  const dayParam = dayQueryParam(day);
+  if (dayParam !== "") requestPath += `&${dayParam}`;
   const sessionPage = await fetchJson(requestPath);
   return normalizeSessionPage(sessionPage);
+}
+
+/**
+ * GET /api/search?q=<query>&mode=<mode>（Milestone A 全文搜索）——跨全部
+ * 会话搜索消息正文 / 工具入出参 / 思考过程。mode ∈ substring|regex（与
+ * search-panel.SEARCH_MODE_OPTIONS 词表一一对应）。
+ *
+ * 返回形状（后端契约）：{ query, mode, hits: [{ sessionId, sessionTitle,
+ * messageId, messageType, snippet, hitCount }], total }。snippet 是后端
+ * 已转义并把命中词包进 <mark> 的安全富文本（search-panel 按契约原样透传）。
+ *
+ * 搜索本身不依赖会话作用域——在 always-on 列表运行；sessionScopeId 参数
+ * 保留给后端可能扩展的 ?session= 作用域语义（缺省 null = 全部会话）。
+ *
+ * USE_MOCK 走 mock-data.js 的 getMockSearchResults 缝（同 getMock* 纪律）：
+ * 离线预览能看到多命中 / 多模式 / 空结果的完整面板路径。
+ */
+export async function fetchSearch(query, mode = "substring", sessionScopeId = null) {
+  if (USE_MOCK) return resolveWithLatency(getMockSearchResults(query, mode));
+  const requestPath = `/search?q=${encodeURIComponent(query)}&mode=${encodeURIComponent(mode)}`;
+  const searchPayload = await fetchSessionScopedJson(requestPath, sessionScopeId);
+  if (searchPayload === null || typeof searchPayload !== "object" || Array.isArray(searchPayload)) {
+    throw new Error("/api/search 返回空数据");
+  }
+  // 形状校验：hits 必须存在且为数组（缺失/非数组 = 契约破坏，走错误态），
+  // 其余字段（query/mode/total）search-panel 有缺省兜底。
+  if (!Array.isArray(searchPayload.hits)) {
+    throw new Error("/api/search 返回形状不符");
+  }
+  return searchPayload;
 }
 
 /* ---------------- 看板数据（v0.2-A 新区块） ---------------- */

@@ -262,12 +262,13 @@ interface ScopedPageRequest {
   sortOrder: string
   directory: string | null
   range: string
+  day: string | null
   sessionScopeId: string | null
   resolve: (payload: { total: null; sessions: ScopeFixtureSummary[] }) => void
   reject: (error: Error) => void
 }
 
-/** Deferred page-request harness carrying the fifth (scope) argument. */
+/** Deferred page-request harness carrying the day (5th) and scope (6th) args. */
 function createScopedPageHarness() {
   const pendingRequests: ScopedPageRequest[] = []
   const fetchSessionsPage = (
@@ -275,10 +276,11 @@ function createScopedPageHarness() {
     sortOrder: string,
     directory: string | null,
     range: string,
+    day: string | null,
     sessionScopeId: string | null,
   ) =>
     new Promise<{ total: null; sessions: ScopeFixtureSummary[] }>((resolve, reject) => {
-      pendingRequests.push({ sortKey, sortOrder, directory, range, sessionScopeId, resolve, reject })
+      pendingRequests.push({ sortKey, sortOrder, directory, range, day, sessionScopeId, resolve, reject })
     })
   return {
     fetchSessionsPage,
@@ -732,6 +734,7 @@ test("session-scope-visibility: the hidden/kept section lists are the expected d
     "panel-session-outcomes",
     "panel-agents",
     "panel-directories",
+    "panel-search",
   ])
   assert.deepEqual(SESSION_SCOPE_KEPT_SECTION_IDS, [
     "kpi-row",

@@ -2169,6 +2169,33 @@ test("renderSessionList renders the range switch, keeps it across states and rou
   assert.match(container.innerHTML, /最近 7d没有会话更新/)
 })
 
+test("renderSessionList annotates the day filter in the footnote and routes its reset (Milestone A)", async () => {
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+  const container = freshContainer()
+  const dayResetEvents: Array<string | null> = []
+  const captureDayChange = (dateKey: string | null) => dayResetEvents.push(dateKey)
+
+  // A day filter with a reset callback: the footnote marks the date and the
+  // entry is clickable (calls onDayChange(null), the sort-reset paradigm).
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "", null, {}, "2026-03-15", captureDayChange)
+  assert.match(container.innerHTML, /过滤到 2026-03-15 的会话/, "the footnote names the active day filter")
+  const dayResetEntry = container.querySelector(".day-reset")
+  assert.ok(dayResetEntry !== null, "a clickable day-reset entry is rendered when a reset callback exists")
+  dayResetEntry!.click()
+  assert.deepEqual(dayResetEvents, [null], "clicking the day-reset clears the filter via onDayChange(null)")
+
+  // Pure display (no reset callback): the footnote stays plain text and no
+  // clickable entry is produced.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "", null, {}, "2026-03-15", null)
+  assert.match(container.innerHTML, /过滤到 2026-03-15 的会话/, "the plain-text footnote still names the day filter")
+  assert.ok(container.querySelector(".day-reset") === null, "no clickable entry without a reset callback")
+
+  // No day filter: the footnote carries no day marker at all.
+  renderSessionList(container, sessionSortFixturePayload(), null, "time_updated", "desc", null, null, "", null, {}, null, captureDayChange)
+  assert.ok(!container.innerHTML.includes("过滤到"), "an absent day filter leaves the footnote clean")
+  assert.ok(container.querySelector(".day-reset") === null, "no reset entry when there is no day filter")
+})
+
 test("session-sort-controller: range switches keep the other filters and reuse their dimension untouched", async () => {
   const { createSessionSortController } = await import(
     "../src/web/public/components/session-sort-controller.js"
@@ -4034,6 +4061,34 @@ test("renderCalendarHeatmap wires per-cell hover tooltips with date, token total
   assert.ok(tooltipHtml.includes(">7</span>"), "the day step count is formatted into the tooltip")
   lastDayCell.fire("mouseleave")
   assert.equal(sharedTooltipElement.hidden, true, "leaving the cell hides the tooltip again")
+})
+
+test("renderCalendarHeatmap routes a cell click to onDaySelect with the date key (Milestone A)", async () => {
+  const { renderCalendarHeatmap } = await import("../src/web/public/components/calendar-heatmap.js")
+  const container = freshContainer()
+  const selectedDayKeys: Array<string | null> = []
+  renderCalendarHeatmap(container, { points: calendarTrendFixture([100, 200, 300], "2026-01-07") }, {
+    onDaySelect: (dateKey: string) => selectedDayKeys.push(dateKey),
+  })
+
+  const dayCells = container.querySelectorAll("rect.heatmap-cell")
+  assert.equal(dayCells.length, 3, "the fixture renders one cell per day")
+  // The first fixture day is 2026-01-07 (Wednesday), so the week column
+  // carries cells for 01-07 / 01-08 / 01-09.
+  dayCells[1]!.click()
+  dayCells[2]!.click()
+  assert.deepEqual(selectedDayKeys, ["2026-01-08", "2026-01-09"], "clicking a cell reports its date key")
+})
+
+test("renderCalendarHeatmap without an onDaySelect callback stays inert (no click wiring)", async () => {
+  const { renderCalendarHeatmap } = await import("../src/web/public/components/calendar-heatmap.js")
+  const container = freshContainer()
+  renderCalendarHeatmap(container, { points: calendarTrendFixture([100, 200], "2026-01-07") })
+
+  const dayCells = container.querySelectorAll("rect.heatmap-cell")
+  // Firing a click on an unwired cell must not throw, and nothing observes it.
+  dayCells[0]!.click()
+  assert.equal(dayCells.length, 2, "the heatmap still renders its cells")
 })
 
 /* ------------- token-funnel panel (v0.1.0) ------------- */

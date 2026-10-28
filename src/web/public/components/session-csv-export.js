@@ -1,12 +1,12 @@
 /**
- * 会话面板的 CSV 导出入口（v0.8.0；v0.9.0 增时间范围联动）：
- * 脚注里的一枚文字链接动作。
+ * 会话面板的 CSV 导出入口（v0.8.0；v0.9.0 增时间范围联动；Milestone A
+ * 增日历日联动）：脚注里的一枚文字链接动作。
  *
  * 下载机制选了**原生锚点**：`<a href download>`——同源 attachment 由
  * 浏览器原生处理（后端 Content-Disposition: attachment 双保险），
  * 不动全局地址、不经过 window.open（会被弹窗拦截）、不动态拼 URL 再
  * 脚本触发。href 在渲染期经 data-source.sessionsExportCsvPath 单点
- * 构造（directory / range 参数编码与拼接都只在 data-source 一处）。
+ * 构造（directory / range / day 参数编码与拼接都只在 data-source 一处）。
  *
  * 可用性：mock 预览模式隐藏入口（dev 无真实路由，点了 404）。可用性
  * 是渲染期常量，初始渲染即定，无"先显后藏"闪现；isAvailable 作为
@@ -29,20 +29,33 @@ export function sessionsCsvExportEntryHtml(
   directoryFilter,
   rangeFilter = "",
   isAvailable = SESSIONS_CSV_EXPORT_AVAILABLE,
+  dayFilter = null,
 ) {
   if (!isAvailable) return "";
   const hasDirectoryFilter = directoryFilter !== null && directoryFilter !== "";
   const rangeLabelText = sessionRangeLabel(rangeFilter);
   const hasRangeFilter = rangeFilter !== null && rangeFilter !== "" && rangeLabelText !== null;
+  const hasDayFilter = dayFilter !== null && dayFilter !== "";
+  // Milestone A：日期过滤与服务端视图联动——目录/时间范围/日期三过滤都
+  // 反映进导出范围 title（导出端点与 /api/sessions 同维度契约）。无日期
+  // 时 title 与既有字符串逐字节一致（既有测试锚定）。
   let scopeTitle;
   if (hasDirectoryFilter && hasRangeFilter) {
-    scopeTitle = `导出当前目录下最近 ${rangeLabelText}有更新的会话为 CSV（服务端过滤视图，与列表分页无关）`;
+    scopeTitle = hasDayFilter
+      ? `导出当前目录下最近 ${rangeLabelText}有更新、日期 ${dayFilter}的会话为 CSV（服务端过滤视图，与列表分页无关）`
+      : `导出当前目录下最近 ${rangeLabelText}有更新的会话为 CSV（服务端过滤视图，与列表分页无关）`;
   } else if (hasDirectoryFilter) {
-    scopeTitle = "导出当前目录过滤下的会话为 CSV（服务端全量九列，与列表分页无关）";
+    scopeTitle = hasDayFilter
+      ? `导出当前目录下、日期 ${dayFilter}的会话为 CSV（服务端过滤视图，与列表分页无关）`
+      : "导出当前目录过滤下的会话为 CSV（服务端全量九列，与列表分页无关）";
   } else if (hasRangeFilter) {
-    scopeTitle = `导出最近 ${rangeLabelText}有更新的会话为 CSV（服务端过滤视图，与列表分页无关）`;
+    scopeTitle = hasDayFilter
+      ? `导出最近 ${rangeLabelText}有更新、日期 ${dayFilter}的会话为 CSV（服务端过滤视图，与列表分页无关）`
+      : `导出最近 ${rangeLabelText}有更新的会话为 CSV（服务端过滤视图，与列表分页无关）`;
+  } else if (hasDayFilter) {
+    scopeTitle = `导出日期 ${dayFilter}的会话为 CSV（服务端过滤视图，与列表分页无关）`;
   } else {
     scopeTitle = "导出全部会话为 CSV（九列）";
   }
-  return `<a class="export-csv" href="${escapeHtml(sessionsExportCsvPath(directoryFilter, rangeFilter))}" download="sessions.csv" title="${scopeTitle}">导出 CSV</a>`;
+  return `<a class="export-csv" href="${escapeHtml(sessionsExportCsvPath(directoryFilter, rangeFilter, dayFilter))}" download="sessions.csv" title="${scopeTitle}">导出 CSV</a>`;
 }

@@ -66,6 +66,8 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/child-share",
     "/api/tool-error-trend",
     "/api/session-outcomes",
+    // v0.24.0 跨会话搜索端点：两段路由，db 缺失时同样走 503 短接。
+    "/api/search",
     "/api/session/ses_example/messages",
     "/api/session/ses_example/system-prompt",
     "/api/export/sessions.csv",
@@ -761,6 +763,7 @@ test("wall-clock duration is part of the basic shape: present even with step enr
       undefined,
       undefined,
       undefined,
+      null,
       false,
     )!
     assert.equal(basicRows.length, 1)
@@ -1286,6 +1289,52 @@ test("the sessions route rejects unknown range words with a loud 400 and filters
       "ses_range_route_fresh",
       "ses_range_route_stale",
     ])
+  } finally {
+    clearResultCache()
+  }
+})
+
+test("/api/search answers 200 with the contract shape when the db is live (v0.24.0)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [
+        buildFakeSessionSummary({ id: "ses_search_route", title: "搜索路由会话" }),
+      ],
+      messagesBySessionId: {
+        ses_search_route: [
+          { type: "user", data: { text: "hello from the search fixture" } },
+          { type: "assistant", data: { text: "acknowledged" } },
+        ],
+      },
+      systemPromptBySessionId: {},
+    })
+
+    const searchRoute = matchApiRoute("/api/search")
+    assert.notEqual(searchRoute, null)
+    const apiResponse = handleApiRequest({
+      route: searchRoute!,
+      searchParams: new URLSearchParams("q=hello&mode=substring"),
+      database: fakeDatabase,
+      databasePath: "test://wired-database",
+      serverPort: 18789,
+    })
+    assert.equal(apiResponse.statusCode, 200)
+    const searchBody = apiResponse.body as {
+      query: string
+      mode: string
+      hits: Array<{ sessionId: string; sessionTitle: string; messageId: string; messageType: string; snippet: string; hitCount: number }>
+      total: number
+    }
+    assert.equal(searchBody.query, "hello")
+    assert.equal(searchBody.mode, "substring")
+    assert.equal(searchBody.total, 1)
+    assert.equal(searchBody.hits.length, 1)
+    assert.equal(searchBody.hits[0].sessionId, "ses_search_route")
+    assert.equal(searchBody.hits[0].sessionTitle, "搜索路由会话")
+    assert.equal(searchBody.hits[0].messageType, "user")
+    assert.ok(searchBody.hits[0].snippet.includes("hello"))
+    assert.equal(searchBody.hits[0].hitCount, 1)
   } finally {
     clearResultCache()
   }

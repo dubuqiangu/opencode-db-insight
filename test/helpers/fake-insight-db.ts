@@ -571,6 +571,30 @@ export function createFakeInsightDatabase(
           get: () => undefined,
         }
       }
+      // v0.24.0 GET /api/search 全量扫描：type IN ('user','assistant')。
+      // 返回这两类消息行（data 保持 JSON.stringify 的 wire 形状，搜索侧
+      // 自己 JSON.parse），供 queryCrossSessionSearch 构建可搜索文本。
+      if (sql.includes("type IN ('user', 'assistant')")) {
+        return {
+          all: () =>
+            Object.entries(scenario.messagesBySessionId)
+              .flatMap(([sessionId, messageFixtures]) =>
+                messageFixtures
+                  .filter(
+                    (messageFixture) =>
+                      messageFixture.type === "user" || messageFixture.type === "assistant",
+                  )
+                  .map((messageFixture, messageIndex) => ({
+                    id: messageFixture.id ?? `search_msg_${messageIndex}`,
+                    session_id: sessionId,
+                    type: messageFixture.type,
+                    seq: messageFixture.seq ?? messageIndex,
+                    data: JSON.stringify(messageFixture.data),
+                  })),
+              ),
+          get: () => undefined,
+        }
+      }
       const isPerSessionQuery = sql.includes("session_id = ?")
       const hasTimeFloor = sql.includes("time_created >= ?")
       return {

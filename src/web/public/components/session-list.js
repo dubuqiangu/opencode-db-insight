@@ -63,6 +63,7 @@ import {
   DEFAULT_SESSION_SORT_KEY,
   DEFAULT_SESSION_SORT_ORDER,
   DEFAULT_SESSION_RANGE,
+  SESSIONS_CSV_EXPORT_AVAILABLE,
   SESSION_RANGE_OPTIONS,
   sessionRangeLabel,
 } from "../data-source.js";
@@ -272,6 +273,11 @@ function bindSessionRangeSelector(container, onSessionRangeChange) {
  * 选择器与 CSV 导出入口一并锁定不渲染，行内「只看此会话」按钮也不出
  * 现）；onSessionScopeChange(sessionId, sessionTitle) 是行内按钮回调，
  * null 时不渲染按钮（纯展示用法）。
+ * dayFilter / onDayChange（Milestone A）：当前日历日过滤（YYYY-MM-DD，
+ * 服务端 ?day= 精确匹配 timeUpdated 所在本地日）与清除回调——dayFilter
+ * 非空时脚注标注「过滤到 <date> 的会话」，onDayChange(null) 由该脚注
+ * 入口触发（点击清除，与 sort-reset 同款交互范式）；onDayChange 为 null
+ * 时脚注纯文本（纯展示用法）。
  */
 export function renderSessionList(
   container,
@@ -284,11 +290,14 @@ export function renderSessionList(
   rangeFilter = DEFAULT_SESSION_RANGE,
   onSessionRangeChange = null,
   renderOptions = {},
+  dayFilter = null,
+  onDayChange = null,
 ) {
   const sessionScopeId = renderOptions.sessionScopeId ?? null;
   const onSessionScopeChange = renderOptions.onSessionScopeChange ?? null;
   const isScopeLocked = sessionScopeId !== null;
   const hasDirectoryFilter = directoryFilter !== null && directoryFilter !== "";
+  const hasDayFilter = dayFilter !== null && dayFilter !== "";
   const rangeLabelText = sessionRangeLabel(rangeFilter);
   const hasRangeFilter = rangeFilter !== null && rangeFilter !== "" && rangeLabelText !== null;
   // 选择器贯穿三态（加载/空态/表格）：空结果时用户仍能切回更宽范围。
@@ -321,7 +330,15 @@ export function renderSessionList(
     // 空结果被误读成"库是空的"。
     let emptyTitle;
     let emptyHint;
-    if (modelFilter !== null && hasDirectoryFilter && hasRangeFilter) {
+    if (hasDayFilter) {
+      // Milestone A：日期过滤优先说明。与目录/时间范围/模型三过滤 AND 叠加，
+      // 「可能不是原因」要说清楚，避免空结果被误读成"该日没数据"。
+      const otherFiltersActive = modelFilter !== null || hasDirectoryFilter || hasRangeFilter;
+      emptyTitle = `该日期（${escapeHtml(dayFilter)}）没有会话记录`;
+      emptyHint = otherFiltersActive
+        ? "日期与目录/时间范围/模型的过滤是叠加的，试试取消其中一个"
+        : "这个日期没有会话，试试点击其他热力格子";
+    } else if (modelFilter !== null && hasDirectoryFilter && hasRangeFilter) {
       emptyTitle = `没有 ${escapeHtml(modelFilter)} 在该目录下且最近 ${rangeLabelText}有更新的会话`;
       emptyHint = "目录、时间范围与模型的过滤是叠加的，试试取消其中一个";
     } else if (modelFilter !== null && hasDirectoryFilter) {
@@ -417,6 +434,14 @@ export function renderSessionList(
   // v0.7.0/v0.9.0：目录与时间范围都是服务端参数，先于客户端模型过滤说
   if (hasDirectoryFilter) footNoteParts.push(`目录：${escapeHtml(directoryFilter)}`);
   if (hasRangeFilter) footNoteParts.push(`最近 ${rangeLabelText}`);
+  // Milestone A：日历日过滤（服务端 ?day=）。onDayChange 非空时脚注即清除
+  // 入口（点击取消，与 sort-reset 同款交互范式）；纯展示用法保持纯文本。
+  if (hasDayFilter) {
+    const dayNoteText = `过滤到 ${escapeHtml(dayFilter)} 的会话`;
+    footNoteParts.push(onDayChange === null
+      ? dayNoteText
+      : `<span class="day-reset" title="清除日期过滤">${dayNoteText}</span>`);
+  }
   if (modelFilter !== null) footNoteParts.push(`已过滤掉 ${hiddenAfterFilterCount} 条非 ${escapeHtml(modelFilter)} 会话`);
   if (remainingCount > 0) footNoteParts.push(`还有 ${remainingCount} 条更早的会话未展示`);
   if (sessionPayload.total === null || sessionPayload.total === undefined) {
@@ -442,7 +467,7 @@ export function renderSessionList(
   // 不吃 ?session=，此刻入口导出的是全量列表，与锁定视图口径错位。
   const csvExportEntryHtml = isScopeLocked
     ? ""
-    : sessionsCsvExportEntryHtml(directoryFilter, rangeFilter);
+    : sessionsCsvExportEntryHtml(directoryFilter, rangeFilter, SESSIONS_CSV_EXPORT_AVAILABLE, dayFilter);
   if (csvExportEntryHtml !== "") footNoteParts.push(csvExportEntryHtml);
 
   container.innerHTML = `
@@ -480,6 +505,16 @@ export function renderSessionList(
         } else {
           onSessionSortChange(clickedSortKey, "desc");
         }
+      });
+    }
+  }
+
+  // Milestone A：日期过滤的清除入口（脚注 .day-reset，点击取消过滤）。
+  if (onDayChange !== null) {
+    const dayResetEntry = container.querySelector(".day-reset");
+    if (dayResetEntry !== null) {
+      dayResetEntry.addEventListener("click", () => {
+        onDayChange(null);
       });
     }
   }

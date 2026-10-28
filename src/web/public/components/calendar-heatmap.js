@@ -2,6 +2,9 @@
  * 52 周日历热力图（GitHub 式，手写 SVG，周一为每周第一列）。
  * 按日 token 总量分 5 档着色（0 + 非零日分位的 4 档），hover 显示
  * 日期与数值。数据复用 trend 接口（日总量 = input + read + output）。
+ *
+ * Milestone A：options.onDaySelect(dateKey)——点击某日格子把该日
+ * YYYY-MM-DD 上抛（app 层据此过滤下方会话列表）；null 时不挂交互。
  */
 
 import { formatTokens, formatCount, dateKeyToEpoch, epochToDateKey, escapeHtml } from "../format.js";
@@ -50,11 +53,12 @@ function dateKeyToUtcEpoch(dateKey) {
  * 不用 86_400_000 毫秒步进——DST 切换日一年有两天不是 24 小时，
  * 固定毫秒步进会让格子与日期错位（与 daily-buckets 的日期 key 口径对齐）。
  */
-export function renderCalendarHeatmap(container, trendData) {
+export function renderCalendarHeatmap(container, trendData, options = {}) {
   if (trendData === null || trendData.points.length === 0) {
     renderEmpty(container, "没有历史日历数据", "数据库里还没有 assistant 消息记录");
     return;
   }
+  const onDaySelect = options.onDaySelect ?? null;
 
   const dayEntries = trendData.points.map((point) => ({
     date: point.date,
@@ -108,7 +112,7 @@ export function renderCalendarHeatmap(container, trendData) {
       const y = MONTH_LABEL_HEIGHT + dayOfWeek * CELL_STEP;
 
       svgParts.push(
-        `<rect class="heatmap-cell" data-date-index="${dayIndex}" x="${x}" y="${y}" width="${CELL_SIZE}" height="${CELL_SIZE}" rx="2.5" fill="${fillColor}"/>`,
+        `<rect class="heatmap-cell" data-date-index="${dayIndex}" data-date-key="${cellDateKey}" x="${x}" y="${y}" width="${CELL_SIZE}" height="${CELL_SIZE}" rx="2.5" fill="${fillColor}"/>`,
       );
 
       if (dayOfWeek === 0 && cellMonth !== lastLabeledMonth) {
@@ -137,5 +141,12 @@ export function renderCalendarHeatmap(container, trendData) {
       title: entry.date,
       rows: [{ label: "token 总量", value: formatTokens(entry.total) }, { label: "步骤数", value: String(entry.steps) }],
     }));
+    // Milestone A：点某日 → 上抛该日 date key（YYYY-MM-DD），app 层据此
+    // 过滤下方会话列表（?day= 服务端参数）。onDaySelect 为 null 时不挂交互。
+    if (onDaySelect !== null) {
+      cell.addEventListener("click", () => {
+        onDaySelect(cell.dataset.dateKey);
+      });
+    }
   }
 }
