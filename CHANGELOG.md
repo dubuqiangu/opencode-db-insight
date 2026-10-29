@@ -130,6 +130,15 @@
 - **`parseDayStartMs` 导出并加回归锁**（`test/api-routes.test.ts`）：断言本地午夜而非 UTC（时区漂移守卫）+ 空/畸形日期退化返回 null。
 - 全量 596 用例通过；`npm run check` exit 0。
 
+## [0.25.2] - 2026-10-29 —— 修复：`/api/health` 自报版本与 `package.json` 脱节
+
+### Fixed
+
+- **`INSIGHT_VERSION` 停留在 0.24.0**：`src/web/api.ts` 的版本常量未随 0.25.0/0.25.1 同步，
+  `/api/health` 与 TUI 端口发现的版本核对都基于该常量，运行看板因此自报 `0.24.0`（叠加旧代码）。
+  本次将常量升至与 `package.json` 一致的 `0.25.2`，版本口径恢复同步。
+- 全部 596 项测试通过，`npm run check` exit 0。
+
 ## [0.23.0] - 2026-10-19
 
 ### Added
