@@ -139,6 +139,29 @@
   本次将常量升至与 `package.json` 一致的 `0.25.2`，版本口径恢复同步。
 - 全部 596 项测试通过，`npm run check` exit 0。
 
+## [0.26.0] - 2026-10-31 · 里程碑 B：模型排行榜按变体细分 + 环比
+
+### Added
+
+- **模型排行榜按变体复合行细分**（复合键 `modelId + providerId + variant`）：
+  - 真实库里同一 `modelId` 常横跨多个 provider / variant（实测 21 个），此前只按 `modelId` 分组会把它们并成一行、指标互相污染。现在后端 `src/db/aggregate-queries.ts` 的 `queryModelMetrics` 与 `src/stats/model-metrics.ts` 的 `computeModelMetrics` 都按复合键分组，键以 `\u0000` 分隔避免拼接碰撞，空值 / 空变体归 `""`。
+  - 前端 `model-table.js` 行键同步为复合键，旧 wire（宿主更新窗口期缺 `variant`）归一为 `""`，绝不把 `undefined` 拼进行键；模型名后跟随变体 chip，空变体不渲染。
+  - `test/sql-aggregation-parity.test.ts` 的 SQL 与 JS 深比较 parity 锁保持绿色。
+  - 真实库冒烟：171 复合行、复合键唯一（171 == 行数）、21 个 modelId 横跨多变体。
+
+- **模型排行榜环比（上一等长窗口）**：
+  - `queryModelMetrics` 增 `windowOffset` 参数：`offset=0` 时 SQL 与 JS 上下界逐字节不变（保持 parity、不改变既有语义）；`offset=k≥1` 时把同一 n 天窗口整体前移 k 个窗口长度并加排他上界。
+  - 新增 `queryModelMetricsComparison` 组合当前窗口与上一等长窗口，`attachPreviousWindowTokens` 按复合键挂 `previousTokens`（无基数记 0）。
+  - 前端总 token 单元格内联环比角标，沿用 KPI 卡的 ▲/▼/持平 与 `.delta/.up/.down/.flat`；无基数时渲染「— 环比」。列数仍为 11，不新增列。
+  - `?days=0` 与全历史请求无上一窗口，全部渲染「— 环比」。真实库冒烟：days=7 → 19 行 / 5 有基数，days=30 → 9 有基数，全历史 → 全 0。
+
+### Test
+
+- `test/model-metrics.test.ts`：复合分组（同 modelId 跨 variant / 跨 provider 各自成行、缺 variant 归空）与 `attachPreviousWindowTokens`（匹配键继承、新模型记 0、消失模型不产出、重复键求和）。
+- `test/model-metrics-days-window.test.ts`：真实 `node:sqlite` 双窗口夹具，断言环比基数来自上一等长窗口、仅当前窗口出现的模型基数记 0、`offset-0` 结果与 `queryModelMetrics` 一致。
+- `test/web-components.test.ts`：变体 chip 与复合行键唯一性、环比角标四种形态（▲ / ▼ / 持平 / —）、11 列不变。
+- 全量 608 用例通过；`npm run check` exit 0。
+
 ## [0.23.0] - 2026-10-19
 
 ### Added
