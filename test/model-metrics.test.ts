@@ -6,8 +6,11 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import {
+  attachPreviousWindowTokens,
+  compositeModelKey,
   computeModelMetrics,
   nearestRankPercentile,
+  type ModelMetric,
 } from "../src/stats/model-metrics.ts"
 import { makeAssistantStepRow, makeTokenUsage } from "./helpers/step-factories.ts"
 
@@ -216,4 +219,88 @@ test("nearestRankPercentile clamps the rank into the sample for extreme fraction
   assert.equal(nearestRankPercentile([10], 0.95), 10)
   assert.equal(nearestRankPercentile([10, 20], 0), 10) // rank clamped up to 1
   assert.equal(nearestRankPercentile([10, 20], 1), 20)
+})
+
+/* ---------------- 环比基数（attachPreviousWindowTokens，B-part-2） ---------------- */
+
+/** 最小 ModelMetric 夹具：只声明比对用到的字段，其余给零值。 */
+function modelMetricFixture(overrides: Partial<ModelMetric>): ModelMetric {
+  return {
+    modelId: "model/alpha",
+    providerId: "provider",
+    variant: "",
+    steps: 1,
+    tokens: 100,
+    tokenShare: 1,
+    hitRate: 0,
+    outputPerStep: 0,
+    contextAvg: 0,
+    contextMedian: 0,
+    contextP95: 0,
+    reasoningShare: 0,
+    firstSeen: 0,
+    lastSeen: 0,
+    ...overrides,
+  }
+}
+
+test("compositeModelKey joins modelId+providerId+variant with the \\u0000 delimiter and never emits undefined", () => {
+  assert.equal(
+    compositeModelKey({ modelId: "glm-5.3", providerId: "futureppo", variant: "high" }),
+    "glm-5.3\u0000futureppo\u0000high",
+  )
+  assert.equal(
+    compositeModelKey({ modelId: "m", providerId: "", variant: "" }),
+    "m\u0000\u0000",
+  )
+  // 缺字段（旧 wire / 运行时脏值）归一为 ""，绝不能拼进 "undefined"。
+  assert.equal(
+    compositeModelKey({
+      modelId: "m",
+      providerId: undefined,
+      variant: undefined,
+    } as unknown as { modelId: string; providerId: string; variant: string }),
+    "m\u0000\u0000",
+  )
+})
+
+test("attachPreviousWindowTokens copies previousTokens for matching composite keys and 0 for fresh models", () => {
+  const currentMetrics = [
+    modelMetricFixture({ modelId: "model/alpha", providerId: "p", variant: "high", tokens: 300 }),
+    modelMetricFixture({ modelId: "model/beta", providerId: "p", variant: "", tokens: 100 }),
+  ]
+  const previousMetrics = [
+    modelMetricFixture({ modelId: "model/alpha", providerId: "p", variant: "high", tokens: 200 }),
+  ]
+
+  const comparison = attachPreviousWindowTokens(currentMetrics, previousMetrics)
+  assert.equal(comparison.length, 2, "every current row survives, disappeared models add nothing")
+  const alpha = comparison.find((row) => row.modelId === "model/alpha")!
+  assert.equal(alpha.tokens, 300, "the current-window total is untouched")
+  assert.equal(alpha.previousTokens, 200, "matching composite key copies the previous-window total")
+  const beta = comparison.find((row) => row.modelId === "model/beta")!
+  assert.equal(beta.previousTokens, 0, "a model absent from the previous window gets 0")
+})
+
+test("attachPreviousWindowTokens drops previous-only models and sums duplicate previous rows", () => {
+  const currentMetrics = [
+    modelMetricFixture({ modelId: "model/alpha", providerId: "p", variant: "", tokens: 100 }),
+    modelMetricFixture({ modelId: "model/fresh", providerId: "p", variant: "", tokens: 10 }),
+  ]
+  // 同一复合键在上一窗口拆成两行（管线正常唯一，这里兜底求和），
+  // 外加一个只存在于上一窗口、当前窗口缺席的模型。
+  const previousMetrics = [
+    modelMetricFixture({ modelId: "model/alpha", providerId: "p", variant: "", tokens: 30 }),
+    modelMetricFixture({ modelId: "model/alpha", providerId: "p", variant: "", tokens: 70 }),
+    modelMetricFixture({ modelId: "model/gone", providerId: "p", variant: "", tokens: 999 }),
+  ]
+
+  const comparison = attachPreviousWindowTokens(currentMetrics, previousMetrics)
+  assert.deepEqual(
+    comparison.map((row) => row.modelId),
+    ["model/alpha", "model/fresh"],
+    "a previous-only model is absent from the current-window output",
+  )
+  assert.equal(comparison[0].previousTokens, 100, "duplicate previous rows sum into one base")
+  assert.equal(comparison[1].previousTokens, 0)
 })

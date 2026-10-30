@@ -54,6 +54,7 @@ export {
   queryOverview,
   queryDailyTrend,
   queryModelMetrics,
+  queryModelMetricsComparison,
   queryAgentStats,
 } from "./aggregate-queries.ts"
 

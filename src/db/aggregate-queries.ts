@@ -32,6 +32,7 @@ import {
   buildScanFloorEpochMs,
   buildSessionFilterSqlFragments,
   buildWindowStartEpochMs,
+  DAY_MS,
 } from "./scan-conventions.ts"
 import { hitRate } from "../stats/hit-rate.ts"
 import {
@@ -41,7 +42,13 @@ import {
   type DailyTrendPoint,
   type DailyTrendSample,
 } from "../stats/daily-buckets.ts"
-import { computeModelMetrics, type ModelMetric, type ModelUsageSample } from "../stats/model-metrics.ts"
+import {
+  attachPreviousWindowTokens,
+  computeModelMetrics,
+  type ModelMetric,
+  type ModelMetricComparison,
+  type ModelUsageSample,
+} from "../stats/model-metrics.ts"
 import {
   computeAgentStats,
   type AgentSessionMembershipSample,
@@ -267,11 +274,18 @@ export function queryDailyTrend(
  *
  * v0.20.0 ?session= 过滤：sessionFilterId 非空时 step 扫描前置
  * session_id = ?（共享片段），排行的行只来自目标会话。缺省不过滤。
+ *
+ * 环比（windowOffset，B-part-2）：默认 0 = 现行窗口，SQL 与 JS 上下界
+ * 逐字节不变（无上界，下界 = buildWindowStartEpochMs）。windowOffset=k≥1
+ * 表示把同一 n 天窗口整体再往前挪 k 个窗口长度，取「上一等长窗口」——
+ * floor/L 各回退 k*n 天，并新增排他上界 U_k = 当前窗口起点再回退
+ * (k-1) 个窗口；只有带 days 的请求才有意义（days 未定时恒为 0）。
  */
 export function queryModelMetrics(
   db: SqliteReadConnection | null,
   days?: number,
   sessionFilterId: string | null = null,
+  windowOffset = 0,
 ): ModelMetric[] | null {
   if (db === null) return null
 
@@ -283,6 +297,29 @@ export function queryModelMetrics(
   const windowStartEpochMs = boundedDays === undefined ? null : buildWindowStartEpochMs(boundedDays)
   const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
+  // 环比整窗平移：windowOffset=k≥1 时 floor/L 各回退 k*n 天，并给出排他
+  // 上界 U_k（当前窗口起点再回退 k-1 个窗口）。k=0 时三者保持现行值、
+  // 上界为 null——SQL 与 JS 逐字节不变（缺省逐字节不变契约）。
+  let shiftedScanFloorMs = scanFloorMs
+  let shiftedWindowStartMs = windowStartEpochMs
+  let exclusiveWindowEndMs: number | null = null
+  if (
+    boundedDays !== undefined &&
+    scanFloorMs !== null &&
+    windowStartEpochMs !== null &&
+    Number.isFinite(windowOffset) &&
+    windowOffset > 0
+  ) {
+    const windowOffsetSteps = Math.floor(windowOffset)
+    const offsetSpanMs = windowOffsetSteps * boundedDays * DAY_MS
+    shiftedScanFloorMs = scanFloorMs - offsetSpanMs
+    shiftedWindowStartMs = windowStartEpochMs - offsetSpanMs
+    exclusiveWindowEndMs = windowStartEpochMs - (windowOffsetSteps - 1) * boundedDays * DAY_MS
+  }
+
+  const sqlFloorClause = shiftedScanFloorMs === null ? "" : " AND time_created >= ?"
+  const sqlCeilingClause = exclusiveWindowEndMs === null ? "" : " AND time_created < ?"
+
   const rawRows = db
     .prepare(
       `SELECT time_created,
@@ -290,11 +327,12 @@ export function queryModelMetrics(
                                 '$.tokens.input', '$.tokens.output', '$.tokens.reasoning',
                                 '$.tokens.cache.read', '$.tokens.cache.write') AS usage_fields
        FROM session_message
-       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}${scanFloorMs === null ? "" : " AND time_created >= ?"}`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}${sqlFloorClause}${sqlCeilingClause}`,
     )
     .all(
       ...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]),
-      ...(scanFloorMs === null ? [] : [scanFloorMs]),
+      ...(shiftedScanFloorMs === null ? [] : [shiftedScanFloorMs]),
+      ...(exclusiveWindowEndMs === null ? [] : [exclusiveWindowEndMs]),
     )
 
   const modelSamples: ModelUsageSample[] = []
@@ -305,7 +343,10 @@ export function queryModelMetrics(
     // Reclaim the floor's +1-day DST slack: steps older than the local
     // midnight of the window's oldest day drop out here, so a days=7
     // leaderboard counts exactly 7 local days — not 8.
-    if (windowStartEpochMs !== null && timeCreated < windowStartEpochMs) continue
+    if (shiftedWindowStartMs !== null && timeCreated < shiftedWindowStartMs) continue
+    // 环比的排他上界（仅 windowOffset≥1 存在）：落在本窗口起点及以后的
+    // step 属于更晚的窗口，必须剔除，否则相邻窗口会重复计数。
+    if (exclusiveWindowEndMs !== null && timeCreated >= exclusiveWindowEndMs) continue
     const [
       modelIdValue,
       providerIdValue,
@@ -332,6 +373,35 @@ export function queryModelMetrics(
     })
   }
   return computeModelMetrics(modelSamples)
+}
+
+/**
+ * 模型排行榜的环比载荷（GET /api/models）：在现行窗口榜行上逐行附上
+ * 「上一等长窗口」的同键 token 合计（previousTokens，环比基数）。
+ *
+ * - db 为空 → null（与其余聚合一致）；
+ * - days 未定义（全历史）→ 没有「上一等长窗口」，直接返回现行行、
+ *   previousTokens 一律 0（前端渲染 "— 环比"）；
+ * - 否则 current = 现行窗口，previous = windowOffset=1 的等长前一窗口，
+ *   用 attachPreviousWindowTokens 按复合键对齐。
+ *
+ * 注意：offset=0 的 queryModelMetrics 结果与改动前逐字节一致（parity
+ * 测试锁），缺省逐字节不变契约由 queryModelMetrics 自身保证。
+ */
+export function queryModelMetricsComparison(
+  db: SqliteReadConnection | null,
+  days: number | undefined,
+  sessionFilterId: string | null = null,
+): ModelMetricComparison[] | null {
+  if (db === null) return null
+  const currentMetrics = queryModelMetrics(db, days, sessionFilterId)
+  if (currentMetrics === null) return null
+  if (days === undefined) {
+    // 全历史无前一等长窗口可比：环比基数归 0。
+    return currentMetrics.map((currentMetric) => ({ ...currentMetric, previousTokens: 0 }))
+  }
+  const previousMetrics = queryModelMetrics(db, days, sessionFilterId, 1)
+  return attachPreviousWindowTokens(currentMetrics, previousMetrics ?? [])
 }
 
 /**

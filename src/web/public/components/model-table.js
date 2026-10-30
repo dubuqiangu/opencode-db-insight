@@ -89,6 +89,32 @@ function compositeModelKey(modelMetric) {
 }
 
 /**
+ * token 环比角标（B-part-2）：对比「上一等长窗口」的 token 合计。
+ * - previousTokens 缺失 / 非有限 / <= 0：没有可比基数，渲染 "— 环比"；
+ * - 否则 ratio = (tokens - previousTokens) / previousTokens，方向取符号，
+ *   数值 = |ratio × 100| 一位小数，方向 0 渲染 "持平"。
+ * 沿用 kpi-card.js 的 ▲/▼/持平 与 CSS 类名（.delta/.up/.down/.flat）。
+ * 内容都是数字/固定文案，无需转义。
+ */
+function renderPeriodDeltaBadge(metric) {
+  const previousTokens = metric.previousTokens;
+  if (!Number.isFinite(previousTokens) || previousTokens <= 0) {
+    return `<span class="delta flat">— 环比</span>`;
+  }
+  const ratio = (metric.tokens - previousTokens) / previousTokens;
+  if (!Number.isFinite(ratio)) {
+    return `<span class="delta flat">— 环比</span>`;
+  }
+  if (ratio === 0) {
+    return `<span class="delta flat">持平</span>`;
+  }
+  const arrow = ratio > 0 ? "▲" : "▼";
+  const directionClass = ratio > 0 ? "up" : "down";
+  const ratioText = Math.abs(ratio * 100).toFixed(1) + "%";
+  return `<span class="delta ${directionClass}">${arrow} ${ratioText}</span>`;
+}
+
+/**
  * 渲染模型排行榜。
  * onSelectModel(modelId | null)：行点击下钻；再次点击同一行取消。
  */
@@ -131,7 +157,7 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
         <td class="primary"><span class="model-cell"><span class="dot" style="background:${modelColor}"></span><span class="name">${escapeHtml(metric.modelId)}</span>${variantChip}</span></td>
         <td>${escapeHtml(metric.providerId)}</td>
         <td class="num">${formatCount(metric.steps)}</td>
-        <td class="num primary">${formatTokens(metric.tokens)}</td>
+        <td class="num primary">${formatTokens(metric.tokens)}${renderPeriodDeltaBadge(metric)}</td>
         <td class="num">${formatPercent(metric.tokenShare, 2)}</td>
         <td class="num">${hitRateCell(metric)}</td>
         <td class="num">${formatTokens(metric.outputPerStep)}</td>
