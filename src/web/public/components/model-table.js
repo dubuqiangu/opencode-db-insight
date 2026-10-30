@@ -77,6 +77,18 @@ function hitRateCell(metric) {
 }
 
 /**
+ * 复合下钻键：modelId + providerId + variant。榜单行已是复合粒度，下钻/选中/
+ * 配色都必须按复合行唯一键区分（同一 modelId 不同 provider/variant 是独立行）。
+ */
+function compositeModelKey(modelMetric) {
+  // 旧 wire（宿主更新窗口期）可能缺 variant：缺失/非字符串一律归一为 ""，
+  // 绝不能把 undefined 拼进行键——否则下钻与选中判定会对不上真实行。
+  const providerId = String(modelMetric.providerId ?? "");
+  const variant = String(modelMetric.variant ?? "");
+  return `${modelMetric.modelId}\u0000${providerId}\u0000${variant}`;
+}
+
+/**
  * 渲染模型排行榜。
  * onSelectModel(modelId | null)：行点击下钻；再次点击同一行取消。
  */
@@ -94,7 +106,7 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
   const tokenRankColor = new Map(
     [...modelMetrics]
       .sort((left, right) => right.tokens - left.tokens)
-      .map((metric, rank) => [metric.modelId, palette[rank % palette.length]]),
+      .map((metric, rank) => [compositeModelKey(metric), palette[rank % palette.length]]),
   );
 
   const headCells = COLUMNS.map((column) => {
@@ -107,11 +119,16 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
   }).join("");
 
   const rowsHtml = sortModels(modelMetrics).map((metric) => {
-    const isSelected = metric.modelId === selectedModelId;
-    const modelColor = tokenRankColor.get(metric.modelId) ?? "transparent";
+    const modelKey = compositeModelKey(metric);
+    const isSelected = modelKey === selectedModelId;
+    const modelColor = tokenRankColor.get(modelKey) ?? "transparent";
+    const variantChip =
+      metric.variant === ""
+        ? ""
+        : `<span class="model-variant">${escapeHtml(metric.variant)}</span>`;
     return `
-      <tr data-model="${escapeHtml(metric.modelId)}" class="${isSelected ? "selected" : ""}" title="点击过滤下方会话列表">
-        <td class="primary"><span class="model-cell"><span class="dot" style="background:${modelColor}"></span><span class="name">${escapeHtml(metric.modelId)}</span></span></td>
+      <tr data-model="${escapeHtml(modelKey)}" class="${isSelected ? "selected" : ""}" title="点击过滤下方会话列表">
+        <td class="primary"><span class="model-cell"><span class="dot" style="background:${modelColor}"></span><span class="name">${escapeHtml(metric.modelId)}</span>${variantChip}</span></td>
         <td>${escapeHtml(metric.providerId)}</td>
         <td class="num">${formatCount(metric.steps)}</td>
         <td class="num primary">${formatTokens(metric.tokens)}</td>
@@ -128,7 +145,7 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
   container.innerHTML = `
     <table class="data-table model-table" aria-label="模型排行榜">
       <colgroup>
-        <col style="width:180px"><col style="width:120px">
+        <col style="width:200px"><col style="width:120px">
         <col style="width:64px"><col style="width:88px"><col style="width:76px">
         <col style="width:88px"><col style="width:76px"><col style="width:84px">
         <col style="width:84px"><col style="width:80px"><col style="width:120px">

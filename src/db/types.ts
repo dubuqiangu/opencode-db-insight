@@ -45,6 +45,8 @@ export interface AssistantStepRow {
   timeCreated: number
   modelId: string
   providerId: string
+  /** model variant (wire "variant"); missing/empty maps to "". */
+  variant: string
   agent: string
   tokens: TokenUsage
   /** Name of every tool call part contained in this message. */

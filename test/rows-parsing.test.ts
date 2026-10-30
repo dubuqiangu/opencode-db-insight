@@ -70,6 +70,7 @@ test("parseAssistantStepRow extracts model, tokens, agent and tool names from a 
   assert.equal(stepRow!.sessionId, "ses_1")
   assert.equal(stepRow!.modelId, "z-ai/glm-5.3")
   assert.equal(stepRow!.providerId, "futureppo")
+  assert.equal(stepRow!.variant, "high")
   assert.equal(stepRow!.agent, "fixer")
   assert.deepEqual(stepRow!.tokens, {
     input: 272,
@@ -115,11 +116,12 @@ test("parseAssistantStepRow falls back to the legacy tool key and the unknown mo
 
 test("parseSessionModelColumn reads the wire providerID key and falls back to unknown", () => {
   const parsedModel = parseSessionModelColumn(JSON.stringify({ id: "space-bunny-free", providerID: "opencode" }))
-  assert.deepEqual(parsedModel, { modelId: "space-bunny-free", providerId: "opencode" })
+  assert.deepEqual(parsedModel, { modelId: "space-bunny-free", providerId: "opencode", variant: "" })
 
   assert.deepEqual(parseSessionModelColumn("{broken json"), {
     modelId: "unknown",
     providerId: "",
+    variant: "",
   })
-  assert.deepEqual(parseSessionModelColumn(null), { modelId: "unknown", providerId: "" })
+  assert.deepEqual(parseSessionModelColumn(null), { modelId: "unknown", providerId: "", variant: "" })
 })

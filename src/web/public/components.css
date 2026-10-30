@@ -207,6 +207,17 @@
   font-family: var(--font-num);
   font-size: 12px;
 }
+/* 模型变体 chip（B-part-1）：跟在模型名后的小徽标，空变体不渲染。 */
+.model-variant {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex: none;
+}
 .badge {
   font-size: 10px;
   padding: 1px 6px;

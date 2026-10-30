@@ -10,6 +10,8 @@ import { hitRate, totalUsageTokens } from "./hit-rate.ts"
 export interface ModelMetric {
   modelId: string
   providerId: string
+  /** model variant ("high"/"max"/"default"/"" — empty displays as "—"). */
+  variant: string
   steps: number
   /** Σ total usage (input+output+cache.read) across this model's steps. */
   tokens: number
@@ -44,6 +46,8 @@ export interface ModelUsageSample {
   timeCreated: number
   modelId: string
   providerId: string
+  /** model variant ("high"/"max"/"default"/"" — empty maps to ""). */
+  variant: string
   tokens: TokenUsage
 }
 
@@ -59,9 +63,10 @@ export function nearestRankPercentile(sortedAscending: number[], fraction: numbe
 }
 
 /**
- * Aggregate assistant steps into per-model metrics, sorted by total tokens
- * descending. Each model's providerId comes from its first step that
- * actually carries one (empty providerIds are skipped, P2-17).
+ * Aggregate assistant steps into per-(modelId, providerId, variant) metrics,
+ * sorted by total tokens descending. Each composite group's providerId comes
+ * from its first step that actually carries one (empty providerIds are
+ * skipped, P2-17).
  */
 export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric[] {
   const stepRowsByModel = new Map<string, ModelUsageSample[]>()
@@ -71,16 +76,21 @@ export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric
   let totalTokensAllModels = 0
   for (const sampleRow of sampleRows) {
     totalTokensAllModels += totalUsageTokens(sampleRow.tokens)
-    const existingRows = stepRowsByModel.get(sampleRow.modelId)
+    // 复合分组键：modelId + providerId + variant。同一 modelId 可真实横跨
+    // 多个 (providerId, variant) 组合，故不能只用 modelId 分组；空值与空
+    // 变体均归 ""，键内用 \u0000 分隔避免碰撞。
+    const groupKey =
+      sampleRow.modelId + "\u0000" + sampleRow.providerId + "\u0000" + sampleRow.variant
+    const existingRows = stepRowsByModel.get(groupKey)
     if (existingRows === undefined) {
-      stepRowsByModel.set(sampleRow.modelId, [sampleRow])
+      stepRowsByModel.set(groupKey, [sampleRow])
     } else {
       existingRows.push(sampleRow)
     }
   }
 
   const modelMetrics: ModelMetric[] = []
-  for (const [modelId, modelStepRows] of stepRowsByModel) {
+  for (const [, modelStepRows] of stepRowsByModel) {
     let tokenSum = 0
     let inputSum = 0
     let cacheReadSum = 0
@@ -105,12 +115,15 @@ export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric
     const stepCount = modelStepRows.length
     contextsPerStep.sort((left: number, right: number) => left - right)
     const reasoningDenominator = reasoningSum + outputSum
+    // 复合分组下组内已按 provider 划分：providerId 取组内首个非空值（P2-17 保留）。
     const firstNonEmptyProviderId =
       modelStepRows.find((stepRow) => stepRow.providerId !== "")?.providerId ?? ""
+    const firstStepRow = modelStepRows[0]
 
     modelMetrics.push({
-      modelId,
+      modelId: firstStepRow.modelId,
       providerId: firstNonEmptyProviderId,
+      variant: firstStepRow.variant,
       steps: stepCount,
       tokens: tokenSum,
       // Raw 0..1 share; 0 for every model when the denominator is ≤ 0

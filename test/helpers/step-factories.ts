@@ -18,6 +18,7 @@ export function makeAssistantStepRow(overrides: Partial<AssistantStepRow> = {}):
     timeCreated: Date.now(),
     modelId: "model/sample",
     providerId: "provider-sample",
+    variant: "",
     agent: "build",
     tokens: makeTokenUsage(),
     toolNames: [],
