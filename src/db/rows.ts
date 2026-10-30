@@ -99,6 +99,8 @@ export function parseAssistantStepRow(rawRow: Record<string, unknown>): Assistan
   const modelId = rawModelId === "" ? UNKNOWN_MODEL_ID : rawModelId
   // Wire key is "providerID" (camelCase with capital D), per session_v2.model JSON.
   const providerId = modelRecord === null ? "" : coerceText(modelRecord["providerID"])
+  // Model variant (wire "variant"); missing/empty maps to "".
+  const variant = modelRecord === null ? "" : coerceText(modelRecord["variant"])
 
   const tokensRecord = readRecordField(parsedData, "tokens")
   const cacheRecord = tokensRecord === null ? null : readRecordField(tokensRecord, "cache")
@@ -130,6 +132,7 @@ export function parseAssistantStepRow(rawRow: Record<string, unknown>): Assistan
     timeCreated: coerceNumber(rawRow["time_created"]),
     modelId,
     providerId,
+    variant,
     agent: readAgentName(parsedData["agent"]),
     tokens,
     toolNames,
@@ -140,13 +143,19 @@ export function parseAssistantStepRow(rawRow: Record<string, unknown>): Assistan
  * Parse the `session_v2.model` JSON column: {"id","providerID","variant"}.
  * Missing/unparseable maps to the "unknown" model.
  */
-export function parseSessionModelColumn(rawModel: unknown): { modelId: string; providerId: string } {
+export function parseSessionModelColumn(rawModel: unknown): {
+  modelId: string
+  providerId: string
+  /** model variant; missing/empty maps to "". */
+  variant: string
+} {
   const modelRecord = asRecord(parseJsonText(rawModel))
-  if (modelRecord === null) return { modelId: UNKNOWN_MODEL_ID, providerId: "" }
+  if (modelRecord === null) return { modelId: UNKNOWN_MODEL_ID, providerId: "", variant: "" }
   const rawModelId = coerceText(modelRecord["id"])
   return {
     modelId: rawModelId === "" ? UNKNOWN_MODEL_ID : rawModelId,
     providerId: coerceText(modelRecord["providerID"]),
+    variant: coerceText(modelRecord["variant"]),
   }
 }
 

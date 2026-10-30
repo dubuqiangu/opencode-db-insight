@@ -110,21 +110,60 @@ test("computeModelMetrics tracks firstSeen/lastSeen across the model's steps", (
 })
 
 test("computeModelMetrics takes the model's first non-empty providerId (P2-17)", () => {
-  // Some steps carry no providerId at all; the metric must not adopt the
-  // empty value but keep scanning for the first step that has one.
+  // 复合分组后 providerId 是键的一部分：同一 modelId 的不同 provider 各自成行，
+  // 每行只看自己组内的 provider。全空的组降级为 ""，不臆造名字。
   const mixedProviderRows = [
     makeAssistantStepRow({ modelId: "model/sample", providerId: "" }),
     makeAssistantStepRow({ modelId: "model/sample", providerId: "provider-second" }),
     makeAssistantStepRow({ modelId: "model/sample", providerId: "provider-third" }),
   ]
-  assert.equal(computeModelMetrics(mixedProviderRows)[0].providerId, "provider-second")
+  const mixedProviders = computeModelMetrics(mixedProviderRows)
+    .map((modelMetric) => modelMetric.providerId)
+    .sort((left, right) => left.localeCompare(right))
+  assert.deepEqual(mixedProviders, ["", "provider-second", "provider-third"])
 
-  // All steps empty → the metric degrades to "" rather than inventing a name.
   const emptyProviderRows = [
     makeAssistantStepRow({ modelId: "model/sample", providerId: "" }),
     makeAssistantStepRow({ modelId: "model/sample", providerId: "" }),
   ]
-  assert.equal(computeModelMetrics(emptyProviderRows)[0].providerId, "")
+  assert.deepEqual(computeModelMetrics(emptyProviderRows).map((metric) => metric.providerId), [""])
+})
+
+test("computeModelMetrics groups by composite modelId+providerId+variant", () => {
+  // 同一 modelId 的真实 variant 横跨：必须按复合键各自成行，而不是并成一行。
+  const sameModelTwoVariants = [
+    makeAssistantStepRow({ modelId: "z-ai/glm-5.3", providerId: "futureppo", variant: "high" }),
+    makeAssistantStepRow({ modelId: "z-ai/glm-5.3", providerId: "futureppo", variant: "high" }),
+    makeAssistantStepRow({ modelId: "z-ai/glm-5.3", providerId: "futureppo", variant: "default" }),
+  ]
+  const variantRows = computeModelMetrics(sameModelTwoVariants)
+  assert.equal(variantRows.length, 2, "同一 modelId 的两个 variant 各成一行")
+  assert.deepEqual(
+    variantRows.map((modelMetric) => [modelMetric.modelId, modelMetric.providerId, modelMetric.variant, modelMetric.steps]),
+    [
+      ["z-ai/glm-5.3", "futureppo", "high", 2],
+      ["z-ai/glm-5.3", "futureppo", "default", 1],
+    ],
+  )
+
+  // provider 也是复合键的一段：同 modelId+同 variant、不同 provider → 两行。
+  const sameModelTwoProviders = [
+    makeAssistantStepRow({ modelId: "z-ai/glm-5.3", providerId: "futureppo", variant: "high" }),
+    makeAssistantStepRow({ modelId: "z-ai/glm-5.3", providerId: "furryvg", variant: "high" }),
+  ]
+  assert.equal(computeModelMetrics(sameModelTwoProviders).length, 2)
+
+  // 缺失 variant（undefined）归 ""，不与 "high" 合并，也不丢行。
+  const missingVariantRows = [
+    makeAssistantStepRow({ modelId: "z-ai/glm-5.3", providerId: "futureppo", variant: "high" }),
+    makeAssistantStepRow({ modelId: "z-ai/glm-5.3", providerId: "futureppo", variant: "" }),
+  ]
+  const missingVariantRowsMetrics = computeModelMetrics(missingVariantRows)
+  assert.equal(missingVariantRowsMetrics.length, 2)
+  assert.deepEqual(
+    missingVariantRowsMetrics.map((modelMetric) => modelMetric.variant).sort(),
+    ["", "high"],
+  )
 })
 
 test("computeModelMetrics sets tokenShare to each model's raw fraction of all models' tokens", () => {

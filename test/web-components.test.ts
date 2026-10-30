@@ -3422,6 +3422,7 @@ function modelMetricFixture(overrides: Record<string, unknown>) {
   return {
     modelId: "model-example-alpha",
     providerId: "provider-example",
+    variant: "",
     steps: 120,
     tokens: 10_000,
     hitRate: 0.95,
@@ -3453,7 +3454,8 @@ function modelBodyRowOrder(container: StubElement): Array<string | undefined> {
   return container
     .querySelectorAll("tr")
     .filter((rowElement) => rowElement.dataset.model !== undefined)
-    .map((rowElement) => rowElement.dataset.model)
+    // data-model 是复合键（modelId\0providerId\0variant）；此处按行序只取模型名段。
+    .map((rowElement) => rowElement.dataset.model!.split("\u0000")[0])
 }
 
 /**
@@ -3478,6 +3480,33 @@ async function pinModelSortState(
     clickModelColumnHeader(stateContainer, columnKey)
   }
 }
+
+test("renderModelTable shows the variant chip and keys rows by composite modelId+providerId+variant", async () => {
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+  // 同一 modelId 的两个 variant 是两行（复合键）；空 variant 不渲染 chip。
+  const variantMetrics = [
+    modelMetricFixture({ modelId: "glm-5.3", providerId: "z-ai", variant: "high", tokens: 900 }),
+    modelMetricFixture({ modelId: "glm-5.3", providerId: "z-ai", variant: "max", tokens: 700 }),
+    modelMetricFixture({ modelId: "phi-5", providerId: "microsoft", variant: "", tokens: 500 }),
+  ]
+
+  const container = freshContainer()
+  renderModelTable(container, variantMetrics, null, noopModelSelect)
+
+  const chipTexts = (container.innerHTML.match(/<span class="model-variant">([^<]*)<\/span>/g) ?? [])
+  assert.deepEqual(chipTexts.length, 2, "只有两个非空 variant 渲染 chip")
+  assert.ok(container.innerHTML.includes('<span class="model-variant">high</span>'))
+  assert.ok(container.innerHTML.includes('<span class="model-variant">max</span>'))
+
+  // 复合行键唯一：同一 modelId 的两行 data-model 不同（区分 provider 与 variant）。
+  const rowKeys = container
+    .querySelectorAll("tr")
+    .filter((rowElement) => rowElement.dataset.model !== undefined)
+    .map((rowElement) => rowElement.dataset.model!)
+  assert.equal(new Set(rowKeys).size, rowKeys.length, "复合键下每行唯一")
+  assert.ok(rowKeys.includes("glm-5.3\u0000z-ai\u0000high"))
+  assert.ok(rowKeys.includes("glm-5.3\u0000z-ai\u0000max"))
+})
 
 test("renderModelTable renders the v0.12.0 token 占比 column next to 总 token", async () => {
   const { renderModelTable } = await import("../src/web/public/components/model-table.js")

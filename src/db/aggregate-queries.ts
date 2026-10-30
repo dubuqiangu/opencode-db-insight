@@ -286,7 +286,7 @@ export function queryModelMetrics(
   const rawRows = db
     .prepare(
       `SELECT time_created,
-              json_extract(data, '$.model.id', '$.model.providerID',
+              json_extract(data, '$.model.id', '$.model.providerID', '$.model.variant',
                                 '$.tokens.input', '$.tokens.output', '$.tokens.reasoning',
                                 '$.tokens.cache.read', '$.tokens.cache.write') AS usage_fields
        FROM session_message
@@ -309,6 +309,7 @@ export function queryModelMetrics(
     const [
       modelIdValue,
       providerIdValue,
+      variantValue,
       inputValue,
       outputValue,
       reasoningValue,
@@ -320,6 +321,7 @@ export function queryModelMetrics(
       timeCreated,
       modelId: modelId === "" ? UNKNOWN_MODEL_ID : modelId,
       providerId: coerceText(providerIdValue),
+      variant: coerceText(variantValue),
       tokens: {
         input: coerceNumber(inputValue),
         output: coerceNumber(outputValue),
