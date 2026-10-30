@@ -12,9 +12,12 @@
  *                        [{ modelId, values }] 序列由 data-source 的
  *                        normalizeTrendPayload 统一完成，mock 与真实
  *                        路径共用同一适配）
- *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts ModelMetric；
- *                        v0.12.0 起含 tokenShare：窗口 token 占比 0..1，
- *                        mock 以 tokens/Σtokens 自洽生成，Σ 恒为 1）
+ *   GET /api/models    → buildModelMetrics()（stats/model-metrics.ts
+ *                        ModelMetricComparison；v0.12.0 起含 tokenShare：
+ *                        窗口 token 占比 0..1，mock 以 tokens/Σtokens
+ *                        自洽生成，Σ 恒为 1；B-part-2 起含 previousTokens：
+ *                        上一等长窗口的同键 token 合计，按模型序号确定性
+ *                        生成，首行强制 0 以覆盖 "— 环比" 降级）
  *   GET /api/agents    → buildAgentStats()（stats/agent-fingerprint.ts AgentStat）
  *   GET /api/sessions  → buildSessions()（types.ts SessionSummary 列表）；
  *                        getMockSessions(sort, order, directory, range)
@@ -317,12 +320,17 @@ function buildModelMetrics() {
     const activeDays = Math.max(1, lastActiveDay - firstActiveDay + 1);
     const contextAvg = Math.round(contextPool.reduce((sum, value) => sum + value, 0) / contextPool.length);
 
+    // B-part-2 环比基数：按模型序号确定性生成 0.6–1.4 的伪随机因子，
+    // 首行（modelIndex 0）强制 0 —— 至少一行覆盖 "— 环比" 降级分支。
+    const priorWindowFactor = modelIndex === 0 ? 0 : 0.6 + ((modelIndex * 37) % 81) / 100;
+
     return {
       modelId: model.modelId,
       providerId: model.providerId,
       variant: model.variant ?? "",
       steps,
       tokens,
+      previousTokens: Math.round(tokens * priorWindowFactor),
       hitRate: model.hitRate,
       outputPerStep: Math.round((tokens * 0.06) / steps),
       contextAvg,

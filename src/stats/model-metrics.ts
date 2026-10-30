@@ -63,6 +63,22 @@ export function nearestRankPercentile(sortedAscending: number[], fraction: numbe
 }
 
 /**
+ * 复合行键：modelId + providerId + variant，分隔符 \u0000（与前端
+ * model-table.js 的 compositeModelKey 同一分隔符——下钻/环比按同一键
+ * 对齐）。缺字段/空值一律归一为 ""，恒为全字符串，绝不产出 "undefined"。
+ */
+export function compositeModelKey(metric: {
+  modelId: string
+  providerId: string
+  variant: string
+}): string {
+  const modelId = metric.modelId ?? ""
+  const providerId = metric.providerId ?? ""
+  const variant = metric.variant ?? ""
+  return `${modelId}\u0000${providerId}\u0000${variant}`
+}
+
+/**
  * Aggregate assistant steps into per-(modelId, providerId, variant) metrics,
  * sorted by total tokens descending. Each composite group's providerId comes
  * from its first step that actually carries one (empty providerIds are
@@ -78,9 +94,8 @@ export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric
     totalTokensAllModels += totalUsageTokens(sampleRow.tokens)
     // 复合分组键：modelId + providerId + variant。同一 modelId 可真实横跨
     // 多个 (providerId, variant) 组合，故不能只用 modelId 分组；空值与空
-    // 变体均归 ""，键内用 \u0000 分隔避免碰撞。
-    const groupKey =
-      sampleRow.modelId + "\u0000" + sampleRow.providerId + "\u0000" + sampleRow.variant
+    // 变体均归 ""，键内用 \u0000 分隔避免碰撞（见 compositeModelKey）。
+    const groupKey = compositeModelKey(sampleRow)
     const existingRows = stepRowsByModel.get(groupKey)
     if (existingRows === undefined) {
       stepRowsByModel.set(groupKey, [sampleRow])
@@ -142,4 +157,38 @@ export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric
 
   modelMetrics.sort((left: ModelMetric, right: ModelMetric) => right.tokens - left.tokens)
   return modelMetrics
+}
+
+/** 环比榜行：ModelMetric 加一个「上一等长窗口」的 token 合计。 */
+export interface ModelMetricComparison extends ModelMetric {
+  /**
+   * 同一复合键在「上一等长窗口」的 token 合计；该窗口无此模型时为 0
+   * （无环比基数，前端渲染 "— 环比"）。
+   */
+  previousTokens: number
+}
+
+/**
+ * 给当前窗口的榜行逐行附上「上一等长窗口」的同键 token 合计（环比基数）：
+ * 先按 compositeModelKey 聚合 previousMetrics（同一键若重复出现则求和——
+ * SQL/JS 管线正常只产生唯一键，这里仍做求和兜底），再逐行映射
+ * currentMetrics，找不到对应键的 previousTokens 归 0。当前窗口缺席、
+ * 仅上一窗口出现的模型不会出现在输出里（它本就不是当前榜行）。
+ */
+export function attachPreviousWindowTokens(
+  currentMetrics: ModelMetric[],
+  previousMetrics: ModelMetric[],
+): ModelMetricComparison[] {
+  const previousTokensByKey = new Map<string, number>()
+  for (const previousMetric of previousMetrics) {
+    const previousKey = compositeModelKey(previousMetric)
+    previousTokensByKey.set(
+      previousKey,
+      (previousTokensByKey.get(previousKey) ?? 0) + previousMetric.tokens,
+    )
+  }
+  return currentMetrics.map((currentMetric) => ({
+    ...currentMetric,
+    previousTokens: previousTokensByKey.get(compositeModelKey(currentMetric)) ?? 0,
+  }))
 }

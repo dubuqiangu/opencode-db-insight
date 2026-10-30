@@ -14,6 +14,7 @@ import {
   queryAgentStats,
   queryDailyTrend,
   queryModelMetrics,
+  queryModelMetricsComparison,
   queryOverview,
   querySessionList,
   querySessionMessages,
@@ -48,6 +49,7 @@ test("every query answers null when no database connection is available", () => 
   assert.equal(queryOverview(null), null)
   assert.equal(queryDailyTrend(null, 7), null)
   assert.equal(queryModelMetrics(null), null)
+  assert.equal(queryModelMetricsComparison(null, 7), null)
   assert.equal(queryAgentStats(null), null)
   assert.equal(querySessionList(null, 10, 0), null)
   assert.equal(querySessionMessages(null, "ses_x"), null)
@@ -97,6 +99,17 @@ test("queryModelMetrics returns leaderboard rows sorted by tokens with consisten
   }
   for (let index = 1; index < modelMetrics!.length; index += 1) {
     assert.ok(modelMetrics![index - 1].tokens >= modelMetrics![index].tokens)
+  }
+})
+
+test("queryModelMetricsComparison carries a finite previousTokens on live windowed rows", {
+  skip: skipReason,
+}, () => {
+  const comparisonRows = queryModelMetricsComparison(liveDatabase, 30)
+  assert.ok(Array.isArray(comparisonRows))
+  for (const comparisonRow of comparisonRows!) {
+    assert.ok(Number.isFinite(comparisonRow.previousTokens))
+    assert.ok(comparisonRow.previousTokens >= 0)
   }
 })
 

@@ -3638,6 +3638,52 @@ test("renderModelTable degrades absent and NaN tokenShare (old-wire window) with
   )
 })
 
+test("renderModelTable renders the 环比 badge inside the tokens cell and keeps 11 sortable columns", async () => {
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+  const comparisonMetrics = [
+    modelMetricFixture({ modelId: "model-example-up", tokens: 1000, previousTokens: 500 }),
+    modelMetricFixture({ modelId: "model-example-down", tokens: 500, previousTokens: 1000 }),
+    modelMetricFixture({ modelId: "model-example-flat", tokens: 1000, previousTokens: 1000 }),
+    modelMetricFixture({ modelId: "model-example-none", tokens: 1000, previousTokens: 0 }),
+  ]
+
+  const container = freshContainer()
+  renderModelTable(container, comparisonMetrics, null, noopModelSelect)
+
+  // The 环比 badge is inline in the tokens cell — no new column, still 11 sortable.
+  assert.equal(container.querySelectorAll("th.sortable").length, 11, "the 环比 badge adds no column")
+  assert.ok(
+    container.innerHTML.includes('<span class="delta up">▲ 100.0%</span>'),
+    "(1000-500)/500 → up 100.0%",
+  )
+  assert.ok(
+    container.innerHTML.includes('<span class="delta down">▼ 50.0%</span>'),
+    "(500-1000)/1000 → down 50.0%",
+  )
+  assert.ok(
+    container.innerHTML.includes('<span class="delta flat">持平</span>'),
+    "equal totals → 持平",
+  )
+  assert.ok(
+    container.innerHTML.includes('<span class="delta flat">— 环比</span>'),
+    "previousTokens 0 → no base, — 环比",
+  )
+  assert.ok(
+    container.innerHTML.includes('<td class="num primary">1K<span class="delta up">'),
+    "the badge is appended after the token text in the same cell",
+  )
+
+  // Old wire (no previousTokens at all) degrades the same way, without crashing.
+  const oldWireContainer = freshContainer()
+  renderModelTable(
+    oldWireContainer,
+    [modelMetricFixture({ modelId: "model-example-old" })],
+    null,
+    noopModelSelect,
+  )
+  assert.ok(oldWireContainer.innerHTML.includes('<span class="delta flat">— 环比</span>'))
+})
+
 test("getMockModelMetrics mirrors the v0.12.0 tokenShare wire: per-model tokens/Σtokens, Σ shares = 1", async () => {
   const { getMockModelMetrics } = await import("../src/web/public/mock-data.js")
   const { renderModelTable } = await import("../src/web/public/components/model-table.js")
@@ -3669,6 +3715,22 @@ test("getMockModelMetrics mirrors the v0.12.0 tokenShare wire: per-model tokens/
   assert.ok(
     !container.innerHTML.includes('<td class="num">—</td>'),
     "no share degrades on the mock path — all shares are real numbers",
+  )
+
+  // B-part-2: every mock row carries a finite previousTokens, and at least one
+  // row is 0 so the "— 环比" degradation branch is exercised on the mock path.
+  assert.ok(
+    mockMetrics.every((metric) =>
+      Number.isFinite(metric.previousTokens) && metric.previousTokens >= 0),
+    "every mock row carries a finite non-negative previousTokens",
+  )
+  assert.ok(
+    mockMetrics.some((metric) => metric.previousTokens === 0),
+    "at least one mock row has no previous-window base",
+  )
+  assert.ok(
+    container.innerHTML.includes('<span class="delta flat">— 环比</span>'),
+    "the zero-base row renders the — 环比 badge",
   )
 })
 

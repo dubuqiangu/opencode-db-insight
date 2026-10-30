@@ -25,7 +25,7 @@ import {
   DEFAULT_SESSION_SORT_ORDER,
   queryAgentStats,
   queryDailyTrend,
-  queryModelMetrics,
+  queryModelMetricsComparison,
   queryOverview,
   querySessionList,
   querySessionMessages,
@@ -425,12 +425,12 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             : Math.min(modelWindowDays, MAX_TREND_DAYS)
         const modelMetrics = cachedResult(
           buildCacheKey(
-            "queryModelMetrics",
+            "queryModelMetricsComparison",
             boundedModelWindowDays === undefined
               ? [sessionFilterId ?? ""]
               : [boundedModelWindowDays, sessionFilterId ?? ""],
           ),
-          () => queryModelMetrics(database, boundedModelWindowDays, sessionFilterId),
+          () => queryModelMetricsComparison(database, boundedModelWindowDays, sessionFilterId),
         )
         return { statusCode: 200, body: modelMetrics }
       }
