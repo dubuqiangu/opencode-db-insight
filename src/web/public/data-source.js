@@ -510,7 +510,7 @@ export async function fetchToolHealth(sessionScopeId = null) {
 
 /**
  * GET /api/tool-tokens —— 每工具 token 归因（ToolTokenStat[]，tokens 降序；
- * 🟡 估算，字节比例归因见 DESIGN §5）。会话感知（吃 ?session=，镜像
+ * 🟡 估算，自包含分词估算权重见 DESIGN §5）。会话感知（吃 ?session=，镜像
  * tool-health）。USE_MOCK 走 getMockToolTokens 缝（同 getMock* 纪律）；
  * 真实响应非数组也归 []，让条形图的 token 块安静降级而不是炸区块。
  */

@@ -11,7 +11,7 @@
  *
  * 第四参 toolTokenStats（GET /api/tool-tokens 的 ToolTokenStat[]，可选）：
  * 在调用次数榜之下追加一块「按 token 消耗」榜（TOP10，--purple 条形）。
- * 这是**字节比例归因**（见 DESIGN §5）——🟡 估算，非 DB 字段，故块头带
+ * 这是**自包含分词估算归因**（见 DESIGN §5）——🟡 估算，非 DB 字段，故块头带
  * 估算徽标。token 缺失/为空/全零 → 不渲染该块，调用次数榜保持原样。
  * 既有调用次数行的 data-*（data-tool / data-count / data-share /
  * data-error）逐字保留；token 行用独立 class 与 data-* 命名，互不污染。
@@ -127,9 +127,9 @@ function buildToolTokenBlock(toolTokenStats) {
     <div class="tooltoken-block">
       <div class="tooltoken-head">
         <span class="tooltoken-title">按 token 消耗</span>
-        <span class="tooltoken-estimate" title="按每 part 的 state.input/state.output 字节比例归因，非 DB 字段">🟡 估算</span>
+        <span class="tooltoken-estimate" title="按每 part 的 state.input/state.output 分词估算归因，非 DB 字段">🟡 估算</span>
       </div>
-      <svg class="toolbars-svg tooltoken-svg" viewBox="0 0 ${VIEWBOX_WIDTH} ${svgHeight}" role="img" aria-label="工具 token 消耗 TOP10（字节比例估算）">${tokenRowParts.join("")}</svg>
+      <svg class="toolbars-svg tooltoken-svg" viewBox="0 0 ${VIEWBOX_WIDTH} ${svgHeight}" role="img" aria-label="工具 token 消耗 TOP10（分词估算）">${tokenRowParts.join("")}</svg>
     </div>`;
 }
 

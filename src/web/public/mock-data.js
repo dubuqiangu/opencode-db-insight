@@ -397,7 +397,7 @@ function buildAgentStats() {
  * AGENT_TOOL_MIXES 的调用数确定性派生（不消耗共享随机源，基准载荷的随机
  * 序列不变）：token ≈ 调用数 × 固定系数，另加一个「无工具」桶（零工具步的
  * token）。tokens 降序、工具名升序，share = tokens / 总量——与真实后端同一
- * 形状（🟡 估算，字节比例归因见 DESIGN §5）。
+ * 形状（🟡 估算，自包含分词估算权重见 DESIGN §5）。
  */
 function buildToolTokens() {
   const totalCounts = new Map();
