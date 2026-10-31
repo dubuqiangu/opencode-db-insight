@@ -9,6 +9,9 @@
  * 契约要点：
  * - 只扫 type IN ('user','assistant')；其它类型（system / idle / synthetic /
  *   compaction ...）不在搜索范围。
+ * - 锚定 session_v2：session_id IN (SELECT id FROM session_v2)，与其余
+ *   会话级扫描同锚，排除「会话已删、消息残留」的孤儿消息。搜索保持全局，
+ *   不接受 ?session= 过滤。
  * - 子串模式大小写不敏感；正则模式构造不区分大小写的 RegExp，语法非法
  *   时返回 { hits:[], total:0, error:"invalid regex" }（200，不是 500）。
  * - 命中上限 200（按 messageId 去重）；total 是真实全量匹配数。
@@ -47,10 +50,11 @@ const SNIPPET_WINDOW_CHARS = 120
 
 /**
  * 在原始文本中构造首个命中点的 ~120 字符窗口。中心对齐命中点，两侧
- * 截断处补 "…"。返回 HTML 安全的 snippet：文本先 escapeHtml，再把首个
- * 命中段包进 <mark>（前端契约：snippet 是「除 <mark> 外无其他标签的安全
- * 富文本」，见 search-panel.js）。命中词来自外部消息文本，必须转义后才能
- * 原样透传给 innerHTML，否则消息里的 "<" 会当标签解析（XSS 面）。
+ * 截断处补 "…"。返回 HTML 安全的 snippet：把窗口的 [前段, 命中段, 后段]
+ * 三段各自 escapeHtml 后拼上 <mark> 包住命中段（前端契约：snippet 是
+ * 「除 <mark> 外无其他标签的安全富文本」，见 search-panel.js）。命中词来自
+ * 外部消息文本，必须转义后才能原样透传给 innerHTML，否则消息里的 "<" 会
+ * 当标签解析（XSS 面）。
  */
 function buildSnippetAroundMatch(
   originalText: string,
@@ -65,17 +69,15 @@ function buildSnippetAroundMatch(
   )
   const prefixEllipsis = windowStart > 0 ? "…" : ""
   const suffixEllipsis = windowEnd < originalText.length ? "…" : ""
-  // 命中段落在原始码元位置 [matchIndex, matchIndex+matchLength)。转义整段
-  // 窗口后，命中段的位置不变（escapeHtml 对 &<>"' 是 1:1 码元替换），把
-  // 该子区间包进 <mark>。命中段可能跨出窗口（窗口半径按命中长收缩后
-  // 必然包住），也可能因窗口左/右侧截断而部分可见——仍按完整命中区间包。
-  const escapedWindow = escapeHtml(originalText.slice(windowStart, windowEnd))
-  const localMatchStart = matchIndex - windowStart
-  const localMatchEnd = localMatchStart + matchLength
-  const beforeMatch = escapedWindow.slice(0, localMatchStart)
-  const matchSegment = escapedWindow.slice(localMatchStart, localMatchEnd)
-  const afterMatch = escapedWindow.slice(localMatchEnd)
-  return `${prefixEllipsis}${beforeMatch}<mark>${matchSegment}</mark>${afterMatch}${suffixEllipsis}`
+  // 三段各自独立 escapeHtml 后再拼，绝不在「转义后的窗口」上做下标运算：
+  // escapeHtml 不是 1:1 码元替换（& → &amp;、< → &lt; …），转义后窗口的
+  // 下标与原文不一致，会算错 <mark> 落点（"AT&T bar" 曾把 bar 标成 amp/p）。
+  // 命中末端先截到窗口右界，再按原文位置切三段分别转义。
+  const matchEnd = Math.min(matchIndex + matchLength, windowEnd)
+  const before = escapeHtml(originalText.slice(windowStart, matchIndex))
+  const matchSegment = escapeHtml(originalText.slice(matchIndex, matchEnd))
+  const after = escapeHtml(originalText.slice(matchEnd, windowEnd))
+  return `${prefixEllipsis}${before}<mark>${matchSegment}</mark>${after}${suffixEllipsis}`
 }
 
 /** 转义 HTML 特殊字符（< > & " '），与前端 format.js escapeHtml 同语义。 */
@@ -150,7 +152,8 @@ export function queryCrossSessionSearch(
   const rawRows = db
     .prepare(
       "SELECT id, session_id, type, seq, data FROM session_message " +
-        "WHERE type IN ('user', 'assistant')",
+        "WHERE type IN ('user', 'assistant') " +
+        "AND session_id IN (SELECT id FROM session_v2)",
     )
     .all()
 

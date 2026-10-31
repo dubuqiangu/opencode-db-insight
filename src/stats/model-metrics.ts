@@ -155,8 +155,21 @@ export function computeModelMetrics(sampleRows: ModelUsageSample[]): ModelMetric
     })
   }
 
-  modelMetrics.sort((left: ModelMetric, right: ModelMetric) => right.tokens - left.tokens)
+  // 主序 tokens 降序；tokens 平局按复合键升序稳定排序（gotcha: 仅比 tokens
+  // 时平局顺序取决于 Map 插入序，非确定）。复合键与前端下钻/环比同键。
+  modelMetrics.sort(
+    (left: ModelMetric, right: ModelMetric) =>
+      right.tokens - left.tokens ||
+      compareTextAscending(compositeModelKey(left), compositeModelKey(right)),
+  )
   return modelMetrics
+}
+
+/** 文本升序比较（码元序，与 locale 无关，供平局稳定排序用）。 */
+function compareTextAscending(left: string, right: string): number {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
 }
 
 /** 环比榜行：ModelMetric 加一个「上一等长窗口」的 token 合计。 */

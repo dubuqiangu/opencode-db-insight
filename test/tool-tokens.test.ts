@@ -312,8 +312,10 @@ test("queryToolTokens attributes by estimate weight over a controlled fixture", 
         tokens: { input: 100, output: 0, cache: { read: 0 } },
         content: [
           { type: "text", text: "prose is not a tool part" },
-          { type: "tool", name: "read", state: { output: "aaaaaaaaaa" } },
-          { type: "tool", name: "edit", state: { output: "bbbbbbbbbbbbbbbbbbbb" } },
+          // read takes the state.content[] fallback path; edit takes the
+          // state.metadata.output path — both real tool-part shapes.
+          { type: "tool", name: "read", state: { content: [{ type: "text", text: "aaaaaaaaaa" }] } },
+          { type: "tool", name: "edit", state: { metadata: { output: "bbbbbbbbbbbbbbbbbbbb" } } },
         ],
       },
     },
@@ -323,8 +325,8 @@ test("queryToolTokens attributes by estimate weight over a controlled fixture", 
       data: {
         tokens: { input: 0, output: 12, cache: { read: 0 } },
         content: [
-          { type: "tool", name: "bash", state: { output: "aaaa" } },
-          { type: "tool", name: "bash", state: { output: "bbbbbbbb" } },
+          { type: "tool", name: "bash", state: { metadata: { output: "aaaa" } } },
+          { type: "tool", name: "bash", state: { content: [{ type: "text", text: "bbbbbbbb" }] } },
         ],
       },
     },
@@ -352,19 +354,19 @@ test("queryToolTokens attributes by estimate weight over a controlled fixture", 
       type: "assistant",
       data: {
         tokens: { input: 7, output: 0, cache: { read: 0 } },
-        content: [{ type: "tool", tool: "webfetch", state: { output: "AAAA" } }],
+        content: [{ type: "tool", tool: "webfetch", state: { metadata: { output: "AAAA" } } }],
       },
     },
     {
       messageId: "msg_user",
       type: "user",
-      data: { tokens: { input: 999 }, content: [{ type: "tool", name: "bash", state: { output: "x" } }] },
+      data: { tokens: { input: 999 }, content: [{ type: "tool", name: "bash", state: { metadata: { output: "x" } } }] },
     },
     {
       messageId: "msg_orphan",
       type: "assistant",
       sessionId: "ses_orphan_not_in_session_v2",
-      data: { tokens: { input: 999 }, content: [{ type: "tool", name: "bash", state: { output: "x" } }] },
+      data: { tokens: { input: 999 }, content: [{ type: "tool", name: "bash", state: { metadata: { output: "x" } } }] },
     },
   ])
 
@@ -402,8 +404,8 @@ test("queryToolTokens reweights CJK vs ASCII using real SQLite length() semantic
       data: {
         tokens: { input: 0, output: 100, cache: { read: 0 } },
         content: [
-          { type: "tool", name: "cjk", state: { output: "你好世界" } },
-          { type: "tool", name: "ascii", state: { output: "abcdabcd" } },
+          { type: "tool", name: "cjk", state: { metadata: { output: "你好世界" } } },
+          { type: "tool", name: "ascii", state: { content: [{ type: "text", text: "abcdabcd" }] } },
         ],
       },
     },
@@ -467,7 +469,7 @@ test("queryToolTokens scopes to a single session when sessionFilterId is passed"
     "assistant",
     JSON.stringify({
       tokens: { input: 30, output: 0, cache: { read: 0 } },
-      content: [{ type: "tool", name: "alpha_tool", state: { output: "aaa" } }],
+      content: [{ type: "tool", name: "alpha_tool", state: { metadata: { output: "aaa" } } }],
     }),
   )
   insertStatement.run(
@@ -476,7 +478,7 @@ test("queryToolTokens scopes to a single session when sessionFilterId is passed"
     "assistant",
     JSON.stringify({
       tokens: { input: 70, output: 0, cache: { read: 0 } },
-      content: [{ type: "tool", name: "beta_tool", state: { output: "bbb" } }],
+      content: [{ type: "tool", name: "beta_tool", state: { content: [{ type: "text", text: "bbb" }] } }],
     }),
   )
   try {

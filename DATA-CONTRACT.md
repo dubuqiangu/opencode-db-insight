@@ -11,8 +11,8 @@
 
 | 表 | 读取次数 | 用途 |
 |---|---|---|
-| `session_v2` | 36 | 会话列表、KPI 汇总、成本/token、行为统计、目录下钻、分布、成员资格 |
-| `session_message` | 19 | 消息正文（user/assistant/tool/reasoning）、消息级历史 |
+| `session_v2` | 26 | 会话列表、KPI 汇总、成本/token、行为统计、目录下钻、分布、成员资格 |
+| `session_message` | 21 | 消息正文（user/assistant/tool/reasoning）、消息级历史、全文搜索 |
 | `todo` | 3 | 侧栏 Todos 块、状态分布 |
 | `instruction_state` | 1 | 会话系统提示词（current_values） |
 | `instruction_blob` | 1 | 系统提示词块体（hash → value） |
@@ -111,7 +111,7 @@
 
 ## 六、插件读取的 SQL 形态（已核查）
 
-- **所有消息扫描**都带 `AND session_id IN (SELECT id FROM session_v2)`，排除旧表孤儿行。
+- **所有消息扫描**都带 `AND session_id IN (SELECT id FROM session_v2)`，排除旧表孤儿行；`/api/search` 亦在其列——它是**全库全局口径、不吃 `?session=`**，但仍锚定 `session_v2`。
 - 会话列表：`FROM session_v2` + `?sort=` 白名单排序 + `?directory=` / `?range=` 过滤。
 - 消息级历史：`FROM session_message` + `type` 过滤 + `time_created >= ?`（增量）。
 - 侧栏 todo：`FROM todo WHERE session_id = ? AND session_id IN (SELECT id FROM session_v2)`；
@@ -169,3 +169,67 @@
 5. 数字自相矛盾本身就是信号——先查脚本，再怀疑数据。
 
 > 本文件描述的是**事实**，不是愿望。任何一条与代码不符时，先验证哪一边过时了，再改。
+
+---
+
+## 十、v0.22–0.28 wire 形状（补录）
+
+v0.22.0 起陆续新增的接口载荷此前未在本文登记，此处补齐形状（字段名以源码为准）。
+
+### `/api/tool-tokens` —— `ToolTokenStat[]`
+
+```json
+{ "tool": "bash", "tokens": 123456, "share": 0.42, "steps": 37 }
+```
+
+- `tool` 为工具名（`""` 表示「无工具」桶）；`tokens` 为按**分词估算**权重分摊的整数（全表 Σ 精确等于全量步 token）；`share` 为该行占全量步 token 的比例（全表 Σ=1）；`steps` 为该工具出现的步数。
+- 每 part 规模取自 `$.state.input` 与输出字段（`$.state.metadata.output` 字符串，否则 `$.state.content[]` 各 `{type:"text",text}` 拼接），**不是** `$.state.output`（真实 tool part 无该字段）。
+
+### `/api/search` —— 跨会话全文搜索
+
+```json
+{
+  "query": "关键字",
+  "mode": "substring",
+  "hits": [
+    { "sessionId": "ses_…", "sessionTitle": "…", "messageId": "msg_…",
+      "messageType": "assistant", "snippet": "…<mark>关键字</mark>…", "hitCount": 2 }
+  ],
+  "total": 41,
+  "error": "invalid regex"
+}
+```
+
+- `mode` ∈ `substring` | `regex`；子串大小写不敏感。
+- `hits` 上限 200（按 `messageId` 去重），`total` 为真实全量匹配数；空 `q` 返回空 `hits`（200）。
+- `error` 仅在正则语法非法时出现，值为 `"invalid regex"`（HTTP 仍 200，非 500）。
+- 全库全局口径、锚定 `session_v2`、不吃 `?session=`。
+
+### `/api/tool-error-trend?days=N` —— 工具错误率逐日趋势
+
+```json
+{ "days": 30, "points": [ { "date": "2026-10-31", "toolCalls": 812, "errors": 37, "errorRate": 0.0456 } ] }
+```
+
+- 按本地日分桶；缺省 30、clamp 1..366；与 `/api/tool-health` 同源抽取（跨路由 Σ `toolCalls` / Σ `errors` 恒等）。
+
+### `/api/session-outcomes` —— 失败中断会话（🟡 推断）
+
+```json
+{
+  "totalSessions": 1077, "sessionsWithSteps": 804,
+  "interruptedSessions": 197, "interruptedShare": 0.2450,
+  "byErrorType": [ { "type": "aborted", "count": 84 } ],
+  "recentInterrupted": [
+    { "sessionId": "ses_…", "title": "…", "errorType": "aborted",
+      "errorMessage": "…", "timeUpdated": 1761… }
+  ]
+}
+```
+
+- `byErrorType` 为会话级终局错误类型（Σ `count` == `interruptedSessions`，终局缺 `type` 的会话不计入任何桶但仍计入中断）；排序 count 降序 + type 升序。
+- `recentInterrupted` limit 5（`timeUpdated` 降序，`sessionId` 升序决胜）。
+
+### `/api/models` —— `previousTokens`
+
+- `days>0` 时每个复合行（`modelId + providerId + variant`）带 `previousTokens`（上一等长窗口的 tokens，无基数记 0）；`days=0` / 全历史无上一窗口，恒 0。

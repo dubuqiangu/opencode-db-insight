@@ -57,5 +57,5 @@ export function sessionsCsvExportEntryHtml(
   } else {
     scopeTitle = "导出全部会话为 CSV（九列）";
   }
-  return `<a class="export-csv" href="${escapeHtml(sessionsExportCsvPath(directoryFilter, rangeFilter, dayFilter))}" download="sessions.csv" title="${scopeTitle}">导出 CSV</a>`;
+  return `<a class="export-csv" href="${escapeHtml(sessionsExportCsvPath(directoryFilter, rangeFilter, dayFilter))}" download="sessions.csv" title="${escapeHtml(scopeTitle)}">导出 CSV</a>`;
 }

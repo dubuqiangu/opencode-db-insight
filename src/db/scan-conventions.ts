@@ -28,9 +28,17 @@ export const ASSISTANT_OBJECT_DATA_PREDICATE =
  * across DST transitions. The slack rows it lets through are dropped
  * JS-side by local-time window enforcement (the trend's date-key map,
  * the heatmap's window lower bound, compaction's recentDaily key map).
+ *
+ * nowMs is injectable so a caller computing several windows (current +
+ * previous) reads the clock ONCE and threads the same instant in — two
+ * internal Date.now() reads can straddle local midnight and put the two
+ * windows on different days. Omitted → Date.now() (behavior unchanged).
  */
-export function buildScanFloorEpochMs(boundedDays: number): number {
-  return Date.now() - (boundedDays + 1) * DAY_MS
+export function buildScanFloorEpochMs(
+  boundedDays: number,
+  nowMs: number = Date.now(),
+): number {
+  return nowMs - (boundedDays + 1) * DAY_MS
 }
 
 /**
@@ -38,9 +46,15 @@ export function buildScanFloorEpochMs(boundedDays: number): number {
  * JS-side window lower bound, the same construction bucketDailyTrend
  * uses to generate its consecutive local date keys. Together with
  * buildScanFloorEpochMs it forms the pushdown + reclaim pair.
+ *
+ * nowMs is injectable (see buildScanFloorEpochMs): one clock read shared
+ * by every window a caller computes. Omitted → Date.now() (unchanged).
  */
-export function buildWindowStartEpochMs(boundedDays: number): number {
-  const todayLocalMidnight = new Date()
+export function buildWindowStartEpochMs(
+  boundedDays: number,
+  nowMs: number = Date.now(),
+): number {
+  const todayLocalMidnight = new Date(nowMs)
   todayLocalMidnight.setHours(0, 0, 0, 0)
   const windowStartDate = new Date(todayLocalMidnight.getTime())
   windowStartDate.setDate(windowStartDate.getDate() - (boundedDays - 1))

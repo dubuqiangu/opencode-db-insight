@@ -57,6 +57,23 @@ test("data-source: fetchSessionOutcomes hits /api/session-outcomes and never car
   assert.deepEqual(requestedUrls, ["/api/session-outcomes"])
 })
 
+test("data-source: fetchSearch hits the global /api/search and never forwards a session scope", async () => {
+  const requestedUrls = stubFetchRecorder({ query: "x", mode: "regex", hits: [], total: 0 })
+  try {
+    const { fetchSearch } = await import("../src/web/public/data-source.js")
+    await fetchSearch("x", "regex")
+    // The backend /api/search is global: neither the normal call nor a stray
+    // extra 3rd argument may smuggle a misleading ?session= into the path.
+    await (fetchSearch as (...args: unknown[]) => Promise<unknown>)("x", "regex", "ses_example")
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.deepEqual(requestedUrls, [
+    "/api/search?q=x&mode=regex",
+    "/api/search?q=x&mode=regex",
+  ])
+})
+
 test("data-source: both v0.22.0 endpoints throw on a non-object body (contract break)", async () => {
   stubFetchRecorder(null)
   try {

@@ -97,6 +97,23 @@ test("computeModelMetrics groups by model and sorts groups by total tokens desce
   assert.equal(modelMetrics[1].tokens, 100)
 })
 
+test("computeModelMetrics breaks token ties by composite key ascending (deterministic order)", () => {
+  // Equal tokens for both models: without a tie-break the order follows the
+  // group-insertion Map order (non-deterministic); the composite-key
+  // ascending tie-break must put "model/alpha" before "model/zeta".
+  const stepRows = [
+    makeAssistantStepRow({ modelId: "model/zeta", providerId: "p", tokens: makeTokenUsage({ input: 100 }) }),
+    makeAssistantStepRow({ modelId: "model/alpha", providerId: "p", tokens: makeTokenUsage({ input: 100 }) }),
+  ]
+
+  const modelMetrics = computeModelMetrics(stepRows)
+  assert.deepEqual(
+    modelMetrics.map((modelMetric) => modelMetric.modelId),
+    ["model/alpha", "model/zeta"],
+  )
+  assert.equal(modelMetrics[0].tokens, modelMetrics[1].tokens)
+})
+
 test("computeModelMetrics tracks firstSeen/lastSeen across the model's steps", () => {
   const earliestTime = 1_791_000_000_000
   const middleTime = 1_791_100_000_000
@@ -141,11 +158,13 @@ test("computeModelMetrics groups by composite modelId+providerId+variant", () =>
   ]
   const variantRows = computeModelMetrics(sameModelTwoVariants)
   assert.equal(variantRows.length, 2, "同一 modelId 的两个 variant 各成一行")
+  // 两行 token 相同（均为 0）→ 由复合键升序决出确定序（"default" < "high"），
+  // 不再依赖分组的插入序。
   assert.deepEqual(
     variantRows.map((modelMetric) => [modelMetric.modelId, modelMetric.providerId, modelMetric.variant, modelMetric.steps]),
     [
-      ["z-ai/glm-5.3", "futureppo", "high", 2],
       ["z-ai/glm-5.3", "futureppo", "default", 1],
+      ["z-ai/glm-5.3", "futureppo", "high", 2],
     ],
   )
 

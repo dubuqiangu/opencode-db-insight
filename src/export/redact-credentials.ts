@@ -42,25 +42,38 @@ interface GroupedPattern {
 const WHOLE_MATCH_PATTERNS: readonly WholeMatchPattern[] = [
   // OpenAI / Anthropic 风格的 sk- key。实测真实值长度为 24 / 35 / 51。
   { label: "sk", pattern: /(?:(?<![A-Za-z0-9_])|(?<=\x1b\[[0-9;]*m)|(?<=\\u001b\[[0-9;]*m))sk-[A-Za-z0-9_-]{16,}/g, keepTailChars: 4 },
+  // Stripe 的 sk_live_/sk_test_：与上面的 sk- 只差分隔符（下划线），两条规则不冲突。
+  { label: "sk", pattern: /(?:(?<![A-Za-z0-9_])|(?<=\x1b\[[0-9;]*m)|(?<=\\u001b\[[0-9;]*m))sk_(?:live|test)_[A-Za-z0-9]{16,}/g, keepTailChars: 4 },
   // GitHub：ghp_/gho_/ghu_/ghs_/ghr_。实测真实值 40 位。
   { label: "github", pattern: /(?:(?<![A-Za-z0-9_])|(?<=\x1b\[[0-9;]*m)|(?<=\\u001b\[[0-9;]*m))gh[pousr]_[A-Za-z0-9]{16,}/g, keepTailChars: 4 },
+  // GitHub fine-grained PAT：github_pat_ 前缀，主体可含下划线。
+  { label: "github", pattern: /(?:(?<![A-Za-z0-9_])|(?<=\x1b\[[0-9;]*m)|(?<=\\u001b\[[0-9;]*m))github_pat_[A-Za-z0-9_]{20,}/g, keepTailChars: 4 },
   // Slack：xoxb-/xoxp-/xoxa-/xoxr-。
   { label: "slack", pattern: /(?:(?<![A-Za-z0-9_])|(?<=\x1b\[[0-9;]*m)|(?<=\\u001b\[[0-9;]*m))xox[bpar]-[A-Za-z0-9-]{10,}/g, keepTailChars: 4 },
+  // Slack app-level（xapp-）与其余 xoxc-/xoxd- 形态。
+  { label: "slack", pattern: /(?:(?<![A-Za-z0-9_])|(?<=\x1b\[[0-9;]*m)|(?<=\\u001b\[[0-9;]*m))xapp-[A-Za-z0-9-]{10,}/g, keepTailChars: 4 },
+  { label: "slack", pattern: /(?:(?<![A-Za-z0-9_])|(?<=\x1b\[[0-9;]*m)|(?<=\\u001b\[[0-9;]*m))xox[c-d]-[A-Za-z0-9-]{10,}/g, keepTailChars: 4 },
   // AWS access key id：固定 20 位大写字母+数字，前缀 AKIA/ASIA。
   // 尾部的 `\b` 保留：真实值恰好 20 位，加上它可以避免把更长的标识符切一半。
   // （曾经在这里删掉 `\b` 去"修"测试，其实是测试夹具写成了 24 位——不要再犯。）
   { label: "aws", pattern: /(?:(?<![A-Za-z0-9_])|(?<=\x1b\[[0-9;]*m)|(?<=\\u001b\[[0-9;]*m))(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])/g, keepTailChars: 4 },
-  // 私钥块的头：整段抹掉类型名以外的部分。
+  // 私钥整块：必须早于下面的头行兜底跑。只匹配头行会让 base64 主体和
+  // `-----END …-----` 原样留在导出里（实测泄漏），所以这里把整块一起吃掉。
+  { label: "pem", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, keepTailChars: 0 },
+  // 私钥头兜底：截断或孤立的头行（没有配对的 END）仍要被抹掉。
   { label: "pem", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g, keepTailChars: 0 },
 ]
 
 const GROUPED_PATTERNS: readonly GroupedPattern[] = [
-  // 显式赋值：token = "…" / api_key: '…' / password = "…"。
-  // 只匹配「键名 + 分隔符 + 引号」这种明确意图，不碰自然语言里的同名词。
+  // 显式赋值：token = "…" / api_key: '…' / password=…
+  // 键名是「含敏感子串的标识符」而非整词，所以能覆盖环境变量约定
+  // （AWS_SECRET_ACCESS_KEY=…、GITHUB_TOKEN=…）；引号可选以覆盖未加引号的
+  // 形态；但分隔符 [=:] 仍必须存在，值也要 ≥16 字符——自然语言里的同名词
+  // （如 "the secret sauce was tasty"）因此不会被误伤。
   {
     label: "凭据",
     pattern:
-      /(\b(?:token|secret|password|passwd|api_key|apikey|app_secret|access_key|client_secret)\b\s*[=:]\s*["'])([^"'\s]{16,})(["'])/gi,
+      /([A-Za-z0-9_]*(?:token|secret|password|passwd|api_key|apikey|app_secret|access_key|client_secret|credential)[A-Za-z0-9_]*\s*[=:]\s*["']?)([^"'\s]{16,})(["']?)/gi,
     keepTailChars: 4,
   },
   // Authorization / Bearer 头里的裸凭证。

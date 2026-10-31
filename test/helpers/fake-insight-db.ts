@@ -138,7 +138,14 @@ export function createFakeInsightDatabase(
       // Liveness probe of /api/health (P1-4).
       return { all: () => [], get: () => ({ probe: 1 }) }
     }
-    if (sql.includes("FROM session_v2")) {
+    // v0.28.1：跨会话搜索的扫描现在带 `session_id IN (SELECT id FROM session_v2)`
+    // 锚定（B1），于是 SQL 同时含 "FROM session_message" 与 "FROM session_v2"。
+    // 下面的 session_v2 分支很宽，会先把它截走，所以这里显式让路——搜索的
+    // `type IN ('user', 'assistant')` 是全仓唯一签名，据此排除不会误伤其它查询。
+    if (
+      sql.includes("FROM session_v2") &&
+      !sql.includes("type IN ('user', 'assistant')")
+    ) {
       if (sql.includes("AS total_sessions")) {
         // v0.21.0 GET /api/child-share 的整体归总：COUNT + 父子分桶 +
         // tokens 三列合计。镜像 SQL 的 COALESCE(SUM(...)) 折叠与

@@ -105,6 +105,23 @@ function createSearchFixtureDatabase(): SqliteReadWriteConnection {
     0,
     JSON.stringify({ text: "请把这段 proto 配置修一下" }),
   )
+  // Escapable char ("&") before the match — snippet <mark> must land on the
+  // real match, not on an entity expansion of an earlier character.
+  insertMessage.run(
+    "msg_ampersand",
+    "ses_search_alpha",
+    "user",
+    0,
+    JSON.stringify({ text: "AT&T bar" }),
+  )
+  // Orphan: session_id is never registered in session_v2 (会话已删、消息残留).
+  insertMessage.run(
+    "msg_orphan",
+    "ses_search_orphan",
+    "assistant",
+    0,
+    JSON.stringify({ text: "orphanmarker should not be searched" }),
+  )
   insertMessage.run(
     "msg_regex_target",
     "ses_search_beta",
@@ -222,6 +239,52 @@ test(
         total: 0,
         error: "invalid regex",
       })
+    } finally {
+      database.close()
+    }
+  },
+)
+
+test(
+  "snippet <mark> lands on the real match when an escapable char precedes it",
+  { skip: skipReason },
+  () => {
+    const database = createSearchFixtureDatabase()
+    try {
+      const result = queryCrossSessionSearch(
+        database as unknown as SqliteReadConnection,
+        "bar",
+        "substring",
+      )
+      assert.notEqual(result, null)
+      assert.equal(result!.total, 1)
+      const hit = result!.hits[0]
+      assert.equal(hit.messageId, "msg_ampersand")
+      // "AT&T" must be escaped but the mark must wrap only "bar": the old
+      // (unescaped-window index math) version produced "AT&am<mark>p;T</mark>".
+      assert.equal(hit.snippet, "AT&amp;T <mark>bar</mark>")
+      assert.ok(!hit.snippet.includes("<mark>amp"), "the mark must not swallow the &amp; entity")
+      assert.ok(!hit.snippet.includes("<mark>p"), "the mark must not land on the escaped '&' remainder")
+    } finally {
+      database.close()
+    }
+  },
+)
+
+test(
+  "search ignores orphan messages whose session_id is absent from session_v2",
+  { skip: skipReason },
+  () => {
+    const database = createSearchFixtureDatabase()
+    try {
+      const result = queryCrossSessionSearch(
+        database as unknown as SqliteReadConnection,
+        "orphanmarker",
+        "substring",
+      )
+      assert.notEqual(result, null)
+      assert.equal(result!.total, 0, "the orphan session's message must not appear in results")
+      assert.deepEqual(result!.hits, [])
     } finally {
       database.close()
     }

@@ -144,6 +144,42 @@ test("escapeCsvField follows RFC 4180: quote only structural characters", () => 
   assert.equal(escapeCsvField(""), "", "empty field stays empty, unquoted")
 })
 
+test("escapeCsvField neutralizes leading spreadsheet formula triggers (CSV injection)", () => {
+  // The five triggers Excel / LibreOffice / Sheets treat as a formula or
+  // number start: = + - @ and a leading tab.
+  assert.equal(escapeCsvField("=1+1"), "'=1+1", "leading = is prefixed with a single quote")
+  assert.equal(escapeCsvField("+1234"), "'+1234", "leading + is neutralized")
+  assert.equal(escapeCsvField("-2+3"), "'-2+3", "leading - is neutralized")
+  assert.equal(escapeCsvField("@SUM(A1)"), "'@SUM(A1)", "leading @ is neutralized")
+  assert.equal(escapeCsvField("\tpayload"), "'\tpayload", "leading tab is neutralized")
+
+  // Neutralization happens BEFORE the RFC-4180 quoting decision: a trigger
+  // field that also carries structural characters is both prefixed and wrapped.
+  assert.equal(
+    escapeCsvField('=HYPERLINK("http://example.test")'),
+    '"\'=HYPERLINK(""http://example.test"")"',
+    "a formula field with quotes is prefixed then RFC-4180 wrapped/quoted",
+  )
+
+  // Only a *leading* trigger counts: a normal field is byte-for-byte unchanged.
+  assert.equal(escapeCsvField("total=1+1"), "total=1+1", "a mid-string = does not trigger neutralization")
+  assert.equal(escapeCsvField("normal title"), "normal title", "a plain field is untouched")
+})
+
+test("renderSessionSummaryCsv neutralizes a hostile formula title in the exported row", () => {
+  const csvDocument = renderSessionSummaryCsv([
+    buildCsvFixtureSummary({ id: "ses_csv_formula", title: '=HYPERLINK("http://evil.example")' }),
+  ])
+  assert.ok(
+    csvDocument.includes(`"'=HYPERLINK(""http://evil.example"")"`),
+    "the formula title is single-quote-prefixed and RFC-4180-quoted in the document",
+  )
+  assert.ok(
+    !csvDocument.includes(`,=HYPERLINK`),
+    "the raw formula never reaches the exported document",
+  )
+})
+
 test("renderSessionSummaryCsv emits byte-exact rows for every torture shape", () => {
   const singleRowDocument = (sessionSummary: SessionSummary) =>
     renderSessionSummaryCsv([sessionSummary])

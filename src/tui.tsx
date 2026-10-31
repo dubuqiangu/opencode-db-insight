@@ -19,10 +19,24 @@ export default defineInsightPlugin({
   setup(context: any) {
     const commandsDispose = registerInsightTuiCommands(context)
     let sidebarDispose: (() => void) | undefined
+    // The sidebar registers asynchronously (dynamic import). If the plugin is
+    // torn down before that import resolves, the cleanup below runs with
+    // sidebarDispose still undefined and never disposes the slot that the
+    // late-resolving import is about to claim (plus its 1s setInterval). This
+    // flag lets the `.then` detect that race and unregister immediately —
+    // mirroring the isDisposed owner pattern in src/tui/sidebar-todo.tsx.
+    let disposed = false
 
     void import("./tui/sidebar-todo.tsx")
       .then((sidebarModule) => {
-        sidebarDispose = sidebarModule.registerSessionTodoSidebar(context)
+        const disposeSidebar = sidebarModule.registerSessionTodoSidebar(context)
+        if (disposed) {
+          // Unloaded while the import was in flight: never leave the slot
+          // claimed. Dispose the just-registered sidebar right away.
+          disposeSidebar()
+          return
+        }
+        sidebarDispose = disposeSidebar
       })
       .catch((sidebarLoadError) => {
         // Host without the solid/opentui runtime (or a slot API mismatch):
@@ -31,6 +45,7 @@ export default defineInsightPlugin({
       })
 
     return () => {
+      disposed = true
       sidebarDispose?.()
       commandsDispose?.()
     }

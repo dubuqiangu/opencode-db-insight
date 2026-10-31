@@ -107,3 +107,34 @@ test("computeAgentStats sorts agents by total tokens descending", () => {
   assert.equal(agentStats[0].agent, "busy-agent")
   assert.equal(agentStats[1].agent, "quiet-agent")
 })
+
+test("computeAgentStats breaks token and tool-count ties by name ascending (deterministic order)", () => {
+  // Equal tokens for both agents, and each carries the two same tools once —
+  // both the agent totals and the tool fingerprint must order by name-ascending
+  // rather than the Set/Map iteration order.
+  const memberships: AgentSessionMembershipSample[] = [
+    { agent: "zeta-agent", sessionId: "ses_z" },
+    { agent: "alpha-agent", sessionId: "ses_a" },
+  ]
+  const stepRows = [
+    makeAssistantStepRow({
+      agent: "zeta-agent",
+      sessionId: "ses_z",
+      tokens: makeTokenUsage({ input: 100 }),
+      toolNames: ["zebra", "ant"],
+    }),
+    makeAssistantStepRow({
+      agent: "alpha-agent",
+      sessionId: "ses_a",
+      tokens: makeTokenUsage({ input: 100 }),
+      toolNames: ["zebra", "ant"],
+    }),
+  ]
+
+  const agentStats = computeAgentStats(memberships, stepRows)
+  assert.deepEqual(
+    agentStats.map((stat) => stat.agent),
+    ["alpha-agent", "zeta-agent"],
+  )
+  assert.deepEqual(Object.keys(agentStats[0].toolFingerprint), ["ant", "zebra"])
+})

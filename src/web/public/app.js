@@ -987,6 +987,16 @@ function renderSearchPanelState() {
 }
 
 /**
+ * 后端 200 载荷里的 error 字段（当前唯一取值 "invalid regex"）→ 面向用户
+ * 的错误文案。非法正则是用户输入错误，走搜索面板的错误行而非空态。未知
+ * 取值原样透出，便于排查后端新增的错误码。
+ */
+function searchPayloadErrorMessage(payloadError) {
+  if (payloadError === "invalid regex") return "正则表达式无效，请检查语法";
+  return payloadError;
+}
+
+/**
  * 搜索提交（search-panel 的 onSearch 回调，Enter 与按钮共用）：app.js 拥有
  * fetch，这里把 query + mode 转成 GET /api/search 请求并回填 state.search，
  * 再由 renderSearchPanelState 渲染。简单序列守卫：晚到的响应不得覆盖更新的
@@ -999,11 +1009,18 @@ async function submitSearch(query, mode) {
   state.search.mode = mode;
   renderSearchPanelState();
   try {
-    const searchPayload = await fetchSearch(query, mode, state.sessionScopeId);
+    const searchPayload = await fetchSearch(query, mode);
     if (state.search.query !== query || state.search.mode !== mode) return;
+    // 后端对非法正则返回 200 + { hits:[], total:0, error }（不是 HTTP
+    // 错误），所以 error 只能从载荷里读：有 error 就走搜索面板的错误行
+    // （status="error"），否则才是正常的完成态——否则会被误渲染成空态。
+    const hasPayloadError = searchPayload !== null
+      && typeof searchPayload === "object"
+      && typeof searchPayload.error === "string"
+      && searchPayload.error !== "";
     state.search.payload = searchPayload;
-    state.search.error = null;
-    state.search.status = "done";
+    state.search.error = hasPayloadError ? searchPayloadErrorMessage(searchPayload.error) : null;
+    state.search.status = hasPayloadError ? "error" : "done";
   } catch (error) {
     if (state.search.query !== query || state.search.mode !== mode) return;
     state.search.error = error instanceof Error ? error.message : String(error);

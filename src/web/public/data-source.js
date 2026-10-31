@@ -562,16 +562,17 @@ export async function fetchSessions(
  * messageId, messageType, snippet, hitCount }], total }。snippet 是后端
  * 已转义并把命中词包进 <mark> 的安全富文本（search-panel 按契约原样透传）。
  *
- * 搜索本身不依赖会话作用域——在 always-on 列表运行；sessionScopeId 参数
- * 保留给后端可能扩展的 ?session= 作用域语义（缺省 null = 全部会话）。
+ * 搜索是**全局**的（GET /api/search 跨全部会话，后端不支持也不会有
+ * ?session= 作用域）——因此这里不接收、也不转发任何会话作用域参数，
+ * 请求路径里绝不会出现误导性的 ?session=。
  *
  * USE_MOCK 走 mock-data.js 的 getMockSearchResults 缝（同 getMock* 纪律）：
  * 离线预览能看到多命中 / 多模式 / 空结果的完整面板路径。
  */
-export async function fetchSearch(query, mode = "substring", sessionScopeId = null) {
+export async function fetchSearch(query, mode = "substring") {
   if (USE_MOCK) return resolveWithLatency(getMockSearchResults(query, mode));
   const requestPath = `/search?q=${encodeURIComponent(query)}&mode=${encodeURIComponent(mode)}`;
-  const searchPayload = await fetchSessionScopedJson(requestPath, sessionScopeId);
+  const searchPayload = await fetchSessionScopedJson(requestPath, null);
   if (searchPayload === null || typeof searchPayload !== "object" || Array.isArray(searchPayload)) {
     throw new Error("/api/search 返回空数据");
   }

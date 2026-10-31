@@ -2077,6 +2077,31 @@ test("sessionsCsvExportEntryHtml renders per availability mode with the scoped d
   )
 })
 
+test("sessionsCsvExportEntryHtml escapes a hostile day filter in the title attribute", async () => {
+  const { sessionsCsvExportEntryHtml } = await import(
+    "../src/web/public/components/session-csv-export.js"
+  )
+
+  // The day filter is user-controllable (heatmap click / ?day=): a value
+  // containing a quote must not break out of the title attribute.
+  const hostileDayFilter = '<script>alert(1)</script>" onmouseover="x'
+  const entryHtml = sessionsCsvExportEntryHtml(null, "", true, hostileDayFilter)
+
+  assert.ok(
+    !entryHtml.includes('title="导出日期 <script>'),
+    "the raw day filter never reaches the title attribute",
+  )
+  assert.ok(
+    !entryHtml.includes('" onmouseover="'),
+    "a quote in the day filter cannot inject a new attribute",
+  )
+  assert.match(
+    entryHtml,
+    /title="导出日期 &lt;script&gt;alert\(1\)&lt;\/script&gt;&quot; onmouseover=&quot;x的会话为 CSV（服务端过滤视图，与列表分页无关）"/,
+    "the day filter is HTML-escaped inside the title attribute",
+  )
+})
+
 test("renderSessionList appends the export entry whose href follows the controller's directory filter", async () => {
   const { renderSessionList } = await import(
     "../src/web/public/components/session-list.js"
@@ -4443,6 +4468,35 @@ test("renderToolBars omits the token block when token stats are absent, empty or
     assert.equal(container.querySelectorAll("g.toolbar-row").length, 4, "call-count bars are unaffected")
     assert.ok(!container.innerHTML.includes("按 token 消耗"))
   }
+})
+
+test("renderToolBars renders the token block even with zero call-count bars", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+  const container = freshContainer()
+
+  // The backend emits a tool:"" bucket for token-bearing steps that made no
+  // tool call, so zero call bars must not suppress the token block.
+  renderToolBars(container, [], null, [{ tool: "", tokens: 420, share: 1, steps: 7 }])
+
+  assert.equal(container.querySelectorAll("g.toolbar-row").length, 0, "no call-count bars")
+  assert.equal(container.querySelectorAll("g.tooltoken-row").length, 1, "the token row still renders")
+  assert.ok(container.innerHTML.includes("按 token 消耗"), "the token block header is present")
+  assert.ok(container.innerHTML.includes("（无工具）"), "the no-tool bucket label is present")
+  assert.ok(
+    !container.innerHTML.includes("没有工具调用记录"),
+    "the empty state is not shown when a token row exists",
+  )
+})
+
+test("renderToolBars still shows the empty state when both call bars and token rows are empty", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+  const container = freshContainer()
+
+  renderToolBars(container, [], null, [])
+
+  assert.match(container.innerHTML, /没有工具调用记录/)
+  assert.equal(container.querySelectorAll("g.tooltoken-row").length, 0)
+  assert.ok(!container.innerHTML.includes("按 token 消耗"))
 })
 
 test("renderToolBars wires token-row hover tooltips with estimate tokens, share and step count", async () => {
