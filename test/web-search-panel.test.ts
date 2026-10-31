@@ -21,6 +21,9 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { createContext, runInContext } from "node:vm"
 
 /* ------------------------- thin DOM shim ------------------------- */
 
@@ -388,6 +391,78 @@ test("renderSearchPanel regex-error payload renders the escaped error line", asy
 
   assert.match(container.innerHTML, /search-panel-error/, "the error line is shown")
   assert.match(container.innerHTML, /invalid regex: \[&lt;unclosed&gt;/, "the error message is escaped")
+})
+
+/* --------------------- search submit path (app.js) --------------------- */
+
+const appSourceText = readFileSync(
+  fileURLToPath(new URL("../src/web/public/app.js", import.meta.url)),
+  "utf8",
+)
+const appImportPattern = /import\s*\{([^}]+)\}\s*from\s*"[^"]+";/g
+const appImportedNames = [...appSourceText.matchAll(appImportPattern)]
+  .flatMap((match) => match[1].split(",").map((name) => name.trim()).filter(Boolean))
+// Mirror web-b-tier-wiring.test.ts: strip the import statements (they are
+// re-bound from globalThis.__imports) and drop the trailing init() call so
+// app.js loads without touching a real browser.
+const appExecutableSource =
+  `const { ${appImportedNames.join(", ")} } = globalThis.__imports;\n`
+  + appSourceText.replace(appImportPattern, "").replace(/\ninit\(\);\s*$/, "\n")
+
+/**
+ * Run app.js submitSearch in an isolated VM: stub fetchSearch to return the
+ * given payload and wire the REAL renderSearchPanel, so the assertion covers
+ * the whole payload → state.search → rendered HTML path. The bug under test:
+ * a 200 response whose body carries { error } must render the error row, not
+ * the empty state.
+ */
+async function renderSearchSubmitOutput(fetchSearchBody: unknown): Promise<StubElement> {
+  const searchPanelElement = new StubElement("div")
+  const documentStub = {
+    getElementById: (elementId: string) =>
+      elementId === "search-panel" ? searchPanelElement : new StubElement("div"),
+  }
+  const { renderSearchPanel } = await import("../src/web/public/components/search-panel.js")
+  const imports: Record<string, unknown> = Object.fromEntries(
+    appImportedNames.map((name) => [name, () => {}]),
+  )
+  imports.renderSearchPanel = renderSearchPanel
+  imports.createSessionSortController = () => ({ changeSessionScope() {} })
+  imports.sessionScopeSectionHiddenById = () => new Map()
+  imports.fetchSearch = async () => fetchSearchBody
+
+  const context = createContext({ document: documentStub, __imports: imports })
+  runInContext(appExecutableSource, context)
+  await runInContext(`submitSearch("bad[", "regex")`, context)
+  return searchPanelElement
+}
+
+test("submitSearch renders the error row for a 200 payload carrying error:'invalid regex'", async () => {
+  const container = await renderSearchSubmitOutput({
+    query: "bad[",
+    mode: "regex",
+    hits: [],
+    total: 0,
+    error: "invalid regex",
+  })
+
+  assert.match(container.innerHTML, /search-panel-error/, "the backend error surfaces as the error row")
+  assert.ok(
+    !container.innerHTML.includes("search-panel-empty"),
+    "a 200 payload carrying an error must never render the empty state",
+  )
+  assert.match(
+    container.innerHTML,
+    /正则表达式无效，请检查语法/,
+    "the mapped user-facing regex message is shown",
+  )
+})
+
+test("submitSearch keeps the empty state for a 200 payload without an error field", async () => {
+  const container = await renderSearchSubmitOutput({ query: "bad[", mode: "regex", hits: [], total: 0 })
+
+  assert.match(container.innerHTML, /search-panel-empty/, "a clean empty payload still renders the empty state")
+  assert.ok(!container.innerHTML.includes("search-panel-error"), "no error row without a payload error")
 })
 
 test("renderSearchPanel passes the backend snippet through as trusted rich text", async () => {

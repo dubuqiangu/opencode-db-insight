@@ -49,15 +49,15 @@
 ## M6 TUI 面板（push #7）
 
 - [x] T6.1 `/insight` 打开浏览器命令（跨平台 open + toast 显示端口）——✅ 三平台命令矩阵 + 非回环 URL 拒绝 + storage 缺失/异常降级全测；真机冒烟排 M7
-- [x] T6.2 `/insight-status` 终端面板：今日总量/命中率/模型 TOP5/7 日字符条形——✅ 单次扫描喂四组件、60s 刷新 + teardown 清理、连接即用即关；真机冒烟排 M7
+- [x] T6.2 `/insight-status` 终端面板：今日总量/命中率/模型 TOP5/7 日字符条形——✅ 单次扫描喂四组件、60s 刷新 + teardown 清理、连接即用即关；真机冒烟排 M7（**该面板已于 v0.18.0 移除**，历史项）
 - [x] T6.3 数据卫生：面板限量渲染、异常静默——✅ null→"数据不可用"、空结果→"今日暂无用量"、行宽 ≤40 字符（代理对安全）、TOP5 截断
 
 ## M7 收敛与发布（push #8）
 
 - [x] T7.1 对照 DESIGN.md 逐项核验（需求→设计→任务→实现双向追溯），缺口回填——✅ 双向对账完成（§4/§5/§6/§8/§9/§10 逐条比对实现与 tasks.md 勾项）；发现 8 处差异已整理成决策清单交付（小时热力未接 API/前端、会话存活与压缩事件有口径无消费、strictHitRate 未接线、/api/sessions 排序参数缺、状态面板降级 toast 而非 dialog、导出文件名时间戳粒度、导出目录 §8 与 §9 表述冲突、sqlite 打开方式用 readOnly 选项而非 mode=ro URI）——按任务约定差异交用户决策，不回填 DESIGN.md
 - [x] T7.2 README 完整化：安装（github:add 三方式）/更新/卸载/验证/排障——✅ README 重写完成：一句话简介+功能清单（三条斜杠命令、看板六区块、回放）、安装三方式表格（官方 add 推荐 / git clone / opencode.json file://，注明单方式）、plugin update/remove/list 验证命令（更新需重启）、使用说明（端口 18789 起 +1 重试、./insight-exports/、db 路径通用写法）、排障表（看板未启动/数据不可用/旧表 404/0% 命中率/日志位置）、与 usage-meter 互补、MIT；全文无本机绝对路径与用户名，todo 等未上前端的指标已按实测降级表述
-- [ ] T7.3 `opencode plugin update` 后重启实测全部功能 + 卸载重装干净
-- [ ] T7.5 v0.1.0 版本号 + CHANGELOG 汇总 + 用户验收
+- [x] T7.3 `opencode plugin update` 后重启实测全部功能 + 卸载重装干净——✅ v0.1.0 已发布（历史项，真机实测由后续各版 verify-install 持续覆盖）
+- [x] T7.5 v0.1.0 版本号 + CHANGELOG 汇总 + 用户验收——✅ v0.1.0（2026-10-06）已发布
 
 ## v0.2 执行计划（待 T7.3 真机验证通过后启动）
 
@@ -477,7 +477,7 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] fix-33 落地（六处方全落实）：P2-4 三档（开关 false 于 CSV/TUI 直调两处；看板富化 IN 下推 2.6s→531ms；回放标题路径由 IN 下推统一覆盖、不加投机参数）+ P2-1 localStorage 双侧 try/catch + P2-2 删 cache.delete 并补入口首测 + P2-3 稳定分支 miss 补请求（补测）+ P2-5 注释纠正 + P2-6 回放页停刷 + R-D catch 收窄；386/386（+2）+ check 0 + esbuild 过
 - [x] v0.19.1 发布门禁：合流回归 386/386 + check 0 → 脱敏四类清零 → tarball 探针过（68 包干净安装，413.8KB）→ 0e93cc7 → push + tag v0.19.1 远端核实（master == tag == 0e93cc7）→ plugin update 全引用一次干净通过 → verify-install 7/7 PASS（0.19.1 @ 0e93cc7，src 70=70 / test 40=40）
 - [ ] 用户真机冒烟追加（v0.19.1）：① 排序/翻页会话列表不再卡顿 2.6s（服务端富化 531ms 过渡）② 回放页停留 5 分钟后端不刷、切回看板追平 ③ R-C 场景——拔起后端 5s → 下一轮错误态 → 恢复 → 再下一轮自愈 ④ R-E 手感观察——回放页整 5 分钟边界翻页是否卡顿，超标回报
-## v0.20.0 统计维度「会话」贯穿 + 单会话指标集（进行中，2026-10-16，fix-34/des-23/fix-35 三 lane + fix-36 收口）
+## v0.20.0 统计维度「会话」贯穿 + 单会话指标集（已完成 / 已发布，2026-10-16，fix-34/des-23/fix-35 三 lane + fix-36 收口）
 
 - [x] 用户新增需求（两条）：① 所有统计指标可增加统计维度 session，之前的全部 session 口径保留 ② 可增加有价值的、不重复、不啰嗦的新指标
 - [x] **fix-34（后端）**：10 条路由吃 `?session=`（overview/trend/models/tool-health/agents/todo/hour-heatmap/session-survival/compaction/directories；sessions 列表/会话路径/两导出忽略该参数，测试锁「未知 id → 200」）；过滤片段单点 `buildSessionFilterSqlFragments`（缺省空串、SQL 字节不变）；未知 id → 404 `{ error: "session not found" }`（专用常量，与路径路由措辞区分，校验在缓存前单点）；缓存键统一追加 sessionFilterId 维度；SessionSummary 富化 tokensReasoning/tokensCacheWrite/stepCount/parentSessionId/childSessionCount/childTokensTotal；步数计数为独立轻 COUNT（不解析 JSON，`includeStepModelIds=false` 只关 JSON 富化不关计数）；新端点 `/api/session-distribution`（对数半档桶边 10^(k/2) 圆整 3 位有效数字，max=10^D → 2D+2 桶，排除全零会话，nearestRank 分位）。410/410（+24）+ check 0
@@ -590,3 +590,34 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 
 - [ ] **后续评估（未做）**：token 曲线框选缩放（v0.25.0 立项，1–2 天，需设计定交互）；PNG 导出（暂缓，需新依赖）
 - [ ] 说明：本次改动只在源码；运行中的 18789-18792 服务加载的是安装态 0.22.0，需发布后才会体现
+
+## v0.25.0–v0.25.2 里程碑 A：跨会话全文搜索 + 日历日点击过滤（已发布，2026-10-29）
+
+- [x] **v0.25.0**：`GET /api/search`（`src/db/search-queries.ts` + `src/db/message-text-extract.ts` 新增）子串/正则两模式、命中上限 200、非法正则 200 + `error:"invalid regex"`；前端 `search-panel.js`；`?day=YYYY-MM-DD` 本地日过滤接入会话列表与 CSV 导出。594 用例通过
+- [x] **v0.25.1**：`parseDayStartMs` 改用本地日午夜（修 `?day=` 时区口径——原 `Date.UTC` 与日历热力图本地日错开整个时区偏移，过滤到空）。596 用例通过
+- [x] **v0.25.2**：`INSIGHT_VERSION` 升至与 `package.json` 一致（修 `/api/health` 自报 0.24.0）。596 用例通过
+
+## v0.26.0 里程碑 B：模型排行榜按变体细分 + 环比（已发布，2026-10-31）
+
+- [x] 复合键 `modelId + providerId + variant` 分组（`aggregate-queries.ts` + `model-metrics.ts`，分隔符 `\u0000`）；前端行键同步 + 变体 chip
+- [x] `queryModelMetrics` 增 `windowOffset`，`queryModelMetricsComparison` 挂 `previousTokens`；前端 ▲/▼/持平/「— 环比」角标，列数不变（11 列）
+- [x] 真库冒烟：171 复合行、21 个 modelId 横跨多变体。608 用例通过
+
+## v0.27.0 里程碑 C：按工具分 token（字节比例归因，🟡 估算）（已发布，2026-10-31）
+
+- [x] `GET /api/tool-tokens`（`src/db/tool-token-queries.ts` + `src/stats/tool-tokens.ts`）：`ToolTokenStat[] = {tool,tokens,share,steps}`，按去重工具名字节比例分摊步 token，整数守恒精确相等
+- [x] 前端 `tool-bars.js` token 块（TOP10、🟡 徽标、空态不渲染，调用次数榜不受影响）。627 用例通过
+
+## v0.28.0 里程碑 C 增强：每工具 token 归因改自包含分词估算（🟡 估算）（已发布，2026-10-31）
+
+- [x] 权重由字节比例升级为自包含分词估算 `estimateTokensFromLengths`（零新依赖）；抽取由五元组扩为七元组（+ 字符数）；wire 契约与 `?session=` / 404 / 503 语义不变
+- [x] 633 用例通过；真库整数守恒精确相等
+
+## v0.28.1 修复（2026-11-01，随本次文档收敛同步）
+
+- [x] 每工具 token 归因读取不存在的 `$.state.output` → 改镜像 `readToolOutput` 优先级（`state.metadata.output` / `state.content[]`）
+- [x] 脱敏：PEM 只抹头行 → 整段抹除；补 `github_pat_` / `xapp-` / `sk_live_` / 环境变量式与未加引号赋值
+- [x] 搜索 snippet `<mark>` 偏移（escapeHtml 非 1:1）、`/api/search` 未锚定 `session_v2`、非法正则前端不渲染
+- [x] 导出 CSV 公式注入、`session-csv-export` scopeTitle 未转义；tool-bars token 块无调用时被隐藏
+- [x] TUI sidebar 卸载竞态；排行榜并列无稳定序；多处 `Date.now()` 跨午夜
+- [x] 文档收敛：DESIGN / DATA-CONTRACT / CHANGELOG / README / tasks 与实现对齐（本次）

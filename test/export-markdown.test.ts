@@ -106,6 +106,40 @@ test("工具调用渲染为名称加 json 参数与 text 输出围栏", () => {
   assert.ok(renderedExport.includes("全部用例通过"))
 })
 
+test("工具名里的 Markdown 特殊字符与换行被转义/折叠，不能破坏加粗标题行（BUG 4）", () => {
+  // 工具名来自线数据：含 `**`/`` ` `` 时会闭合加粗或起一段行内代码，含换行
+  // 时会把标题行拆成两行。它必须和标题走同一条转义路径。
+  const dangerousToolName = "bad**name`with\nnewline"
+  const assistantMessage = buildMessageFixture("assistant", {
+    content: [
+      {
+        type: "tool",
+        name: dangerousToolName,
+        state: {
+          status: "completed",
+          input: { probe: 1 },
+          metadata: { output: "" },
+        },
+      },
+    ],
+  })
+
+  const renderedExport = renderSessionMarkdown(
+    buildSessionSummaryFixture(),
+    [assistantMessage],
+    null,
+  )
+
+  assert.ok(
+    renderedExport.includes("**🔧 工具调用: bad\\*\\*name\\`with newline**"),
+    "星号与反引号被转义，换行折成空格",
+  )
+  assert.ok(!renderedExport.includes("bad**name"), "未转义的 ** 不能出现")
+  assert.ok(!renderedExport.includes("with\nnewline"), "换行不能留进标题行")
+  const toolHeadingCount = (renderedExport.match(/^\*\*🔧 工具调用:/gm) ?? []).length
+  assert.equal(toolHeadingCount, 1, "标题仍然只占一行")
+})
+
 test("工具输出与用户消息中的三反引号被四反引号围栏包裹，不破坏结构", () => {
   const userMessageWithFence = buildMessageFixture("user", {
     text: "示例：\n```bash\nls -la\n```",

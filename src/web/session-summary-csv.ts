@@ -7,6 +7,9 @@
  * test/session-directory-filter.test.ts).
  *
  * Escaping rules (RFC 4180):
+ * - a field starting with a spreadsheet formula trigger (=, +, -, @,
+ *   tab, CR) is prefixed with a single quote so Excel/Sheets treat it as
+ *   literal text instead of executing it (CSV injection defense);
  * - a field containing a comma, a double quote, CR or LF is wrapped in
  *   double quotes as a whole;
  * - embedded double quotes are doubled inside the wrapping;
@@ -35,15 +38,28 @@ export const SESSION_SUMMARY_CSV_FILENAME = "sessions.csv"
 const UTF8_BOM = "\uFEFF"
 
 /**
+ * Spreadsheet formula triggers: a field that *starts* with one of these
+ * is interpreted as a formula (or a number) by Excel / LibreOffice /
+ * Google Sheets, even inside a quoted CSV field. `title` is fully
+ * user-controlled, so a title like `=HYPERLINK("http://evil")` would
+ * execute on open — prefixing a single quote neutralizes it as literal
+ * text.
+ */
+const FORMULA_TRIGGER_PATTERN = /^[=+\-@\t\r]/
+
+/**
  * Escape one CSV field per RFC 4180. Only the three structural
  * characters trigger quoting — CJK text stays bare, which keeps the
- * file small and the diff readable.
+ * file small and the diff readable. Formula triggers are neutralized
+ * first (leading `'`) so the RFC-4180 quoting decision sees the final
+ * text.
  */
 export function escapeCsvField(fieldText: string): string {
-  if (/["\r\n,]/.test(fieldText)) {
-    return `"${fieldText.replace(/"/g, '""')}"`
+  const neutralizedText = FORMULA_TRIGGER_PATTERN.test(fieldText) ? `'${fieldText}` : fieldText
+  if (/["\r\n,]/.test(neutralizedText)) {
+    return `"${neutralizedText.replace(/"/g, '""')}"`
   }
-  return fieldText
+  return neutralizedText
 }
 
 /**

@@ -20,6 +20,7 @@ import { redactCredentials } from "./redact-credentials.ts"
 import {
   buildCodeFence,
   collapseToSingleLine,
+  escapeMarkdownSpecialCharacters,
   formatLocalTimestamp,
   longestBacktickRun,
   safeStringifyJson,
@@ -151,7 +152,10 @@ function readMessageText(dataRecord: Record<string, unknown>): string {
 function renderToolCallBlock(toolPartRecord: Record<string, unknown>): string {
   const toolName = readToolName(toolPartRecord)
   const stateRecord = asRecord(toolPartRecord["state"])
-  const blockLines = [`**🔧 工具调用: ${toolName}**${renderToolStatusSuffix(stateRecord)}`]
+  // 工具名来自线数据，可能含 `*`/`` ` ``/换行；先折成单行再转义，避免它
+  // 破坏加粗标题行（与标题走同一条 escapeMarkdownSpecialCharacters 路径）。
+  const safeToolName = escapeMarkdownSpecialCharacters(collapseToSingleLine(toolName))
+  const blockLines = [`**🔧 工具调用: ${safeToolName}**${renderToolStatusSuffix(stateRecord)}`]
 
   if (stateRecord !== null && stateRecord["input"] !== undefined && stateRecord["input"] !== null) {
     blockLines.push(

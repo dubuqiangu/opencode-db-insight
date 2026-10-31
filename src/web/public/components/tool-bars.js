@@ -140,72 +140,80 @@ function buildToolTokenBlock(toolTokenStats) {
  */
 export function renderToolBars(container, agentStats, toolHealthStats = null, toolTokenStats = null) {
   const topTools = agentStats === null ? [] : aggregateTopTools(agentStats, 10);
-  if (topTools.length === 0) {
+  // token 块先独立构建：后端对「有 token、无工具调用」的步会发一条 tool:""
+  // 的归因桶，因此零调用次数不代表零 token。两个来源各自决定是否出内容。
+  const toolTokenBlockHtml = buildToolTokenBlock(toolTokenStats);
+  if (topTools.length === 0 && toolTokenBlockHtml === "") {
     renderEmpty(container, "没有工具调用记录", "数据库里还没有带 tool part 的 assistant 消息");
     return;
   }
 
-  const healthByTool = toolHealthIndex(toolHealthStats);
-  const maxCount = topTools[0][1];
-  const totalCount = topTools.reduce((sum, [, count]) => sum + count, 0);
-  const svgHeight = topTools.length * ROW_HEIGHT;
-  const accentColor = cssVar("--accent");
-  const barColor = cssVar("--blue");
-  const textColor = cssVar("--text-dim");
-  const faintColor = cssVar("--text-faint");
-  const trackColor = cssVar("--border");
-  const highErrorColor = cssVar("--red");
-  const lowErrorColor = cssVar("--amber");
-  const monoFont = "ui-monospace, Consolas, monospace";
+  if (topTools.length === 0) {
+    // 只有 token 归因、没有调用次数：跳过次数榜，直接渲染 token 块。
+    container.innerHTML = toolTokenBlockHtml;
+  } else {
+    const healthByTool = toolHealthIndex(toolHealthStats);
+    const maxCount = topTools[0][1];
+    const totalCount = topTools.reduce((sum, [, count]) => sum + count, 0);
+    const svgHeight = topTools.length * ROW_HEIGHT;
+    const accentColor = cssVar("--accent");
+    const barColor = cssVar("--blue");
+    const textColor = cssVar("--text-dim");
+    const faintColor = cssVar("--text-faint");
+    const trackColor = cssVar("--border");
+    const highErrorColor = cssVar("--red");
+    const lowErrorColor = cssVar("--amber");
+    const monoFont = "ui-monospace, Consolas, monospace";
 
-  const rowParts = topTools.map(([toolName, callCount], rowIndex) => {
-    const barWidth = Math.max(2, Math.round((callCount / maxCount) * BAR_MAX_WIDTH));
-    const yCenter = rowIndex * ROW_HEIGHT + ROW_HEIGHT / 2;
-    const barY = yCenter - 7;
-    const sharePercent = ((callCount / totalCount) * 100).toFixed(1);
+    const rowParts = topTools.map(([toolName, callCount], rowIndex) => {
+      const barWidth = Math.max(2, Math.round((callCount / maxCount) * BAR_MAX_WIDTH));
+      const yCenter = rowIndex * ROW_HEIGHT + ROW_HEIGHT / 2;
+      const barY = yCenter - 7;
+      const sharePercent = ((callCount / totalCount) * 100).toFixed(1);
 
-    // 错误标注（tool-health 提供）：error > 0 才有内容；脏值按无数据处理。
-    const healthStat = healthByTool.get(toolName) ?? null;
-    const errorCount = healthStat !== null && Number.isFinite(healthStat.error) ? healthStat.error : 0;
-    const errorRate = healthStat !== null && Number.isFinite(healthStat.errorRate) ? healthStat.errorRate : null;
-    const hasErrors = errorCount > 0 && errorRate !== null && errorRate > 0;
-    const isHighError = hasErrors && errorRate >= HIGH_ERROR_RATE;
-    const errorSegmentWidth = hasErrors && barWidth > 6
-      ? Math.min(barWidth - 2, Math.max(2, Math.round(barWidth * errorRate)))
-      : 0;
-    const errorSegmentX = NAME_COLUMN_WIDTH + barWidth - errorSegmentWidth;
-    const errorTextColor = isHighError ? highErrorColor : faintColor;
+      // 错误标注（tool-health 提供）：error > 0 才有内容；脏值按无数据处理。
+      const healthStat = healthByTool.get(toolName) ?? null;
+      const errorCount = healthStat !== null && Number.isFinite(healthStat.error) ? healthStat.error : 0;
+      const errorRate = healthStat !== null && Number.isFinite(healthStat.errorRate) ? healthStat.errorRate : null;
+      const hasErrors = errorCount > 0 && errorRate !== null && errorRate > 0;
+      const isHighError = hasErrors && errorRate >= HIGH_ERROR_RATE;
+      const errorSegmentWidth = hasErrors && barWidth > 6
+        ? Math.min(barWidth - 2, Math.max(2, Math.round(barWidth * errorRate)))
+        : 0;
+      const errorSegmentX = NAME_COLUMN_WIDTH + barWidth - errorSegmentWidth;
+      const errorTextColor = isHighError ? highErrorColor : faintColor;
 
-    return `
-      <g class="toolbar-row" data-tool="${escapeHtml(toolName)}" data-count="${callCount}" data-share="${sharePercent}"${hasErrors ? ` data-error="${errorCount}" data-error-rate="${errorRate}"` : ""}>
-        <text x="0" y="${yCenter + 4}" font-size="11" fill="${textColor}" font-family="${monoFont}">${escapeHtml(clipToolName(toolName))}</text>
-        <rect class="toolbar-track" x="${NAME_COLUMN_WIDTH}" y="${barY}" width="${BAR_MAX_WIDTH}" height="14" rx="4" fill="${trackColor}" opacity="0.35"/>
-        <rect x="${NAME_COLUMN_WIDTH}" y="${barY}" width="${barWidth}" height="14" rx="4" fill="${rowIndex === 0 ? accentColor : barColor}"/>
-        ${errorSegmentWidth > 0 ? `<rect x="${errorSegmentX}" y="${barY}" width="${errorSegmentWidth}" height="14" rx="2" fill="${isHighError ? highErrorColor : lowErrorColor}"/>` : ""}
-        <text x="${VIEWBOX_WIDTH - 2}" y="${yCenter + 4}" font-size="11" fill="${rowIndex === 0 ? accentColor : textColor}" font-family="${monoFont}" text-anchor="end">${formatCount(callCount)}</text>
-        ${hasErrors ? `<text x="${VIEWBOX_WIDTH - 2}" y="${yCenter + 15}" font-size="9" fill="${errorTextColor}" font-family="${monoFont}" text-anchor="end">err ${formatPercent(errorRate, 1)}</text>` : ""}
-      </g>`;
-  });
+      return `
+        <g class="toolbar-row" data-tool="${escapeHtml(toolName)}" data-count="${callCount}" data-share="${sharePercent}"${hasErrors ? ` data-error="${errorCount}" data-error-rate="${errorRate}"` : ""}>
+          <text x="0" y="${yCenter + 4}" font-size="11" fill="${textColor}" font-family="${monoFont}">${escapeHtml(clipToolName(toolName))}</text>
+          <rect class="toolbar-track" x="${NAME_COLUMN_WIDTH}" y="${barY}" width="${BAR_MAX_WIDTH}" height="14" rx="4" fill="${trackColor}" opacity="0.35"/>
+          <rect x="${NAME_COLUMN_WIDTH}" y="${barY}" width="${barWidth}" height="14" rx="4" fill="${rowIndex === 0 ? accentColor : barColor}"/>
+          ${errorSegmentWidth > 0 ? `<rect x="${errorSegmentX}" y="${barY}" width="${errorSegmentWidth}" height="14" rx="2" fill="${isHighError ? highErrorColor : lowErrorColor}"/>` : ""}
+          <text x="${VIEWBOX_WIDTH - 2}" y="${yCenter + 4}" font-size="11" fill="${rowIndex === 0 ? accentColor : textColor}" font-family="${monoFont}" text-anchor="end">${formatCount(callCount)}</text>
+          ${hasErrors ? `<text x="${VIEWBOX_WIDTH - 2}" y="${yCenter + 15}" font-size="9" fill="${errorTextColor}" font-family="${monoFont}" text-anchor="end">err ${formatPercent(errorRate, 1)}</text>` : ""}
+        </g>`;
+    });
 
-  container.innerHTML = `
-    <svg class="toolbars-svg" viewBox="0 0 ${VIEWBOX_WIDTH} ${svgHeight}" role="img" aria-label="工具调用次数 TOP10">${rowParts.join("")}</svg>${buildToolTokenBlock(toolTokenStats)}`;
+    container.innerHTML = `
+      <svg class="toolbars-svg" viewBox="0 0 ${VIEWBOX_WIDTH} ${svgHeight}" role="img" aria-label="工具调用次数 TOP10">${rowParts.join("")}</svg>${toolTokenBlockHtml}`;
 
-  for (const row of container.querySelectorAll(".toolbar-row")) {
-    const toolName = row.dataset.tool;
-    const tooltipRows = [
-      { label: "调用次数", value: formatCount(Number(row.dataset.count)) },
-      { label: "TOP10 占比", value: row.dataset.share + "%" },
-    ];
-    if (row.dataset.error !== undefined) {
-      tooltipRows.push(
-        { label: "Errors", value: formatCount(Number(row.dataset.error)) },
-        { label: "Error rate", value: formatPercent(Number(row.dataset.errorRate), 1) },
-      );
+    for (const row of container.querySelectorAll(".toolbar-row")) {
+      const toolName = row.dataset.tool;
+      const tooltipRows = [
+        { label: "调用次数", value: formatCount(Number(row.dataset.count)) },
+        { label: "TOP10 占比", value: row.dataset.share + "%" },
+      ];
+      if (row.dataset.error !== undefined) {
+        tooltipRows.push(
+          { label: "Errors", value: formatCount(Number(row.dataset.error)) },
+          { label: "Error rate", value: formatPercent(Number(row.dataset.errorRate), 1) },
+        );
+      }
+      bindHoverTooltip(row, () => ({
+        title: toolName,
+        rows: tooltipRows,
+      }));
     }
-    bindHoverTooltip(row, () => ({
-      title: toolName,
-      rows: tooltipRows,
-    }));
   }
 
   for (const row of container.querySelectorAll(".tooltoken-row")) {

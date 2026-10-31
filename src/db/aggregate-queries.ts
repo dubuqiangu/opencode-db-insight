@@ -275,6 +275,10 @@ export function queryDailyTrend(
  * v0.20.0 ?session= 过滤：sessionFilterId 非空时 step 扫描前置
  * session_id = ?（共享片段），排行的行只来自目标会话。缺省不过滤。
  *
+ * nowMs（可选，默认 Date.now()）：窗口上/下界的时钟基准。调用方跨多次
+ * 调用（现行 + 上一窗口）需要同一时刻时由外层读一次时钟并传入，避免两次
+ * Date.now() 跨越本地午夜导致两窗错日。省略即现行为（不变）。
+ *
  * 环比（windowOffset，B-part-2）：默认 0 = 现行窗口，SQL 与 JS 上下界
  * 逐字节不变（无上界，下界 = buildWindowStartEpochMs）。windowOffset=k≥1
  * 表示把同一 n 天窗口整体再往前挪 k 个窗口长度，取「上一等长窗口」——
@@ -286,6 +290,7 @@ export function queryModelMetrics(
   days?: number,
   sessionFilterId: string | null = null,
   windowOffset = 0,
+  nowMs: number = Date.now(),
 ): ModelMetric[] | null {
   if (db === null) return null
 
@@ -293,8 +298,8 @@ export function queryModelMetrics(
     days !== undefined && Number.isFinite(days) && days > 0
       ? Math.min(Math.floor(days), MAX_TREND_DAYS)
       : undefined
-  const scanFloorMs = boundedDays === undefined ? null : buildScanFloorEpochMs(boundedDays)
-  const windowStartEpochMs = boundedDays === undefined ? null : buildWindowStartEpochMs(boundedDays)
+  const scanFloorMs = boundedDays === undefined ? null : buildScanFloorEpochMs(boundedDays, nowMs)
+  const windowStartEpochMs = boundedDays === undefined ? null : buildWindowStartEpochMs(boundedDays, nowMs)
   const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   // 环比整窗平移：windowOffset=k≥1 时 floor/L 各回退 k*n 天，并给出排他
@@ -394,13 +399,16 @@ export function queryModelMetricsComparison(
   sessionFilterId: string | null = null,
 ): ModelMetricComparison[] | null {
   if (db === null) return null
-  const currentMetrics = queryModelMetrics(db, days, sessionFilterId)
+  // 读一次时钟，两次窗口计算（现行 + 上一）共用同一时刻：否则两次内部
+  // Date.now() 可能跨越本地午夜，把两窗放到不同的「今天」上。
+  const nowMs = Date.now()
+  const currentMetrics = queryModelMetrics(db, days, sessionFilterId, 0, nowMs)
   if (currentMetrics === null) return null
   if (days === undefined) {
     // 全历史无前一等长窗口可比：环比基数归 0。
     return currentMetrics.map((currentMetric) => ({ ...currentMetric, previousTokens: 0 }))
   }
-  const previousMetrics = queryModelMetrics(db, days, sessionFilterId, 1)
+  const previousMetrics = queryModelMetrics(db, days, sessionFilterId, 1, nowMs)
   return attachPreviousWindowTokens(currentMetrics, previousMetrics ?? [])
 }
 

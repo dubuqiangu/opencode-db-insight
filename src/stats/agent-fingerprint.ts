@@ -90,10 +90,14 @@ export function computeAgentStats(
   for (const agent of agentNames) {
     const sessionSet = sessionIdsByAgent.get(agent)
     const toolCounts = toolCountsByAgent.get(agent)
+    // 工具指纹：调用数降序；平局按工具名升序稳定排序（仅比计数时平局顺序
+    // 取决于 Map 插入序，非确定）。
     const sortedToolCounts =
       toolCounts === undefined
         ? []
-        : [...toolCounts.entries()].sort((left, right) => right[1] - left[1])
+        : [...toolCounts.entries()].sort(
+            (left, right) => right[1] - left[1] || compareTextAscending(left[0], right[0]),
+          )
     agentStats.push({
       agent,
       sessions: sessionSet === undefined ? 0 : sessionSet.size,
@@ -102,6 +106,18 @@ export function computeAgentStats(
     })
   }
 
-  agentStats.sort((left: AgentStat, right: AgentStat) => right.tokens - left.tokens)
+  // 主序 tokens 降序；平局按 agent 名升序稳定排序（仅比 tokens 时平局顺序
+  // 取决于 Set/Map 迭代序，非确定）。
+  agentStats.sort(
+    (left: AgentStat, right: AgentStat) =>
+      right.tokens - left.tokens || compareTextAscending(left.agent, right.agent),
+  )
   return agentStats
+}
+
+/** 文本升序比较（码元序，与 locale 无关，供平局稳定排序用）。 */
+function compareTextAscending(left: string, right: string): number {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
 }

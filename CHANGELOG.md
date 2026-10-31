@@ -4,6 +4,134 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 每个里程碑完成后 push 并在此追加一条记录，方便回溯。
 
+## [0.28.1] - 2026-11-01
+
+### Fixed
+
+- **每工具 token 归因读取不存在的 `$.state.output`**：真实字段为 `state.metadata.output`（字符串）否则回退 `state.content[]`（`{type:"text",text}` 数组），旧实现取不到字段 → 归因权重恒为 0（回归）；改为镜像 `readToolOutput` 的优先级。
+- **导出脱敏 PEM 只抹头行、正文残留**：`-----BEGIN … PRIVATE KEY-----` 只抹掉首行，密钥正文仍留在导出文件里 → 改为整段抹除。
+- **导出脱敏漏网形态**：补 `github_pat_`、`xapp-`、`sk_live_`，以及环境变量式与未加引号赋值。
+- **搜索 snippet 的 `<mark>` 偏移错**：`escapeHtml` 并非 1:1 替换，命中段包 `<mark>` 时按原文下标定位会错位 → 改为对「命中前 / 命中段 / 命中后」三段分别转义后拼接。
+- **`/api/search` 未锚定 `session_v2`**：会命中「会话已删、消息残留」的孤儿消息 → 补 `session_id IN (SELECT id FROM session_v2)` 锚定（全库全局口径、不吃 `?session=`，但仍锚定）。
+- **非法正则后端 200 + `error` 前端不渲染**：正则语法非法时后端返回 `{hits:[],total:0,error:"invalid regex"}`（200），前端原先静默当空结果 → 改为显式提示。
+- **导出 CSV 公式注入**：以 `=` / `+` / `-` / `@` 开头的单元格会被 Excel 当公式执行 → 导出前加防护。
+- **`session-csv-export` 的 scopeTitle 未转义**：会破坏 CSV 结构 → 补转义。
+- **tool-bars token 块在无调用时被隐藏**：工具 token 归因块与调用次数榜共用可见性判定，导致无工具调用时整块消失 → 解耦，token 块独立判定。
+- **TUI sidebar 卸载竞态**：侧栏 Todos 块在注销与动态 import 竞态下可能挂进已销毁上下文 → 加 `isDisposed` 守卫。
+- **排行榜并列无稳定序**：并列时排序不确定、翻页 / 重渲顺序漂移 → 补稳定决胜键。
+- **多处 `Date.now()` 跨午夜**：跨本地午夜取「今日」边界时读数漂移 → 统一到本地日口径。
+- **文档收敛（docs-convergence）**：DESIGN / DATA-CONTRACT / CHANGELOG / README / tasks 与 0.22–0.28 实现对齐（本轮仅文档）。
+
+## [0.28.0] - 2026-10-31 · 里程碑 C 增强：每工具 token 归因改自包含分词估算（🟡 估算）
+
+### Changed
+
+- **每工具 token 归因权重由「字节比例」升级为「自包含分词估算」**（C-Y，零新依赖，wire 契约不变）：
+  - 旧口径把每个 part 的 `state.input`+`state.output` 的 UTF-8 字节数当权重，会把 CJK（UTF-8 3 字节/字符）相对 ASCII（1 字节/字符）高估约 3 倍。
+  - 新口径用自包含估算 `estimateTokensFromLengths(charCount, byteCount) = asciiChars/4 + nonAsciiChars`（`nonAsciiChars = max(0, (byteCount − charCount) / 2)`、`asciiChars = max(0, charCount − nonAsciiChars)`）：ASCII ≈ 4 字符/token、3 字节非 ASCII ≈ 1 字符/token。纯 JS 零外部依赖，**不引入 tiktoken / gpt-tokenizer 等运行时依赖**（保持零运行时依赖政策）。
+  - 估算对输入线性，故 input/output 可先各自求和再代入，结果一致；**整数守恒**（浮点 raw 分摊 + 最大余数法取整，Σ 行 tokens === Σ 步 token 精确相等）与 **🟡 估算**标签均不变。
+  - 查询层逐 part 抽取由五元组扩为七元组 `[type,name,tool,inputBytes,outputBytes,inputChars,outputChars]`：新增 `length(json_extract(...))`（字符数，code point）与既有 `length(CAST(json_extract(...) AS BLOB))`（UTF-8 字节数）并列（真 `node:sqlite` 实证 `length()` 对文本返回字符数、对 BLOB 返回字节数）。
+  - **wire 契约不变**：`ToolTokenStat {tool,tokens,share,steps}` 与 `GET /api/tool-tokens` 的会话感知 / 未知 id → 404 / db 缺 → 503 语义与 v0.27.0 完全一致；前端 `tooltoken-row` 等 class 与 `data-*` 逐字保留，仅内部权重与角标文案（「字节比例」→「分词估算」）更新。
+  - `DESIGN.md` §5 指标目录 + §6 路由表同步更新（`src/stats/tool-tokens.ts` 头注口径改写）。
+
+### Test
+
+- `test/tool-tokens.test.ts`：新增 `estimateTokensFromLengths` 纯函数面（ASCII 4 字符/token、3 字节 CJK 1 字符/token、线性可加、非正 / 非有限输入 clamp 到 0）；纯函数夹具改用 `{charCount,byteCount}` 并补 CJK-vs-ASCII 重加权用例（证明相对字节口径的改进）；真 `node:sqlite` 夹具新增 CJK 端到端用例，锁定 `length()` 字符语义。
+- 版本 0.28.0（`package.json` + `src/web/api.ts` 的 `INSIGHT_VERSION` 同步）。
+- 全量 633 用例通过；`npm run check` exit 0；真库守恒 6,497,169,959 === 6,497,169,959。
+
+## [0.27.0] - 2026-10-31 · 里程碑 C：按工具分 token（字节比例归因，🟡 估算）
+
+### Added
+
+- **每工具 token 归因端点 `GET /api/tool-tokens`**（会话感知，吃 `?session=`；db 缺 → 503，未知 session → 404）：
+  - 返回 `ToolTokenStat[]` = `{tool, tokens, share, steps}`，tokens 降序、工具名升序；全部会话口径、锚定 `session_v2`（排除孤儿消息），与 tool-health 同一两段路由形状。
+  - 口径（`src/stats/tool-tokens.ts` + `src/db/tool-token-queries.ts`）：步 token = input+output+cache.read（复用 `totalUsageTokens`）；每步按**去重工具名**的体积权重分摊，`weight = bytes(tool)/Σbytes(step)`，`bytes` = 该 part `$.state.input`+`$.state.output` 的 JSON 文本 UTF-8 字节数（查询层 `length(CAST(json_extract(...) AS BLOB))` 抽取，字段缺失 → 0）；Σbytes==0 → 等权 1/k；零工具步归 tool="" 桶（「无工具」）。
+  - **整数守恒**：浮点 raw 分摊 + 最大余数法取整，使 Σ 行 tokens === Σ 步 token **精确相等**（真库冒烟 6,461,974,210 === 6,461,974,210）。
+  - 查询层逐 assistant 消息用 `json_each` 遍历 `$.content` 抽取每 part 五元组 `[type,name,tool,inputBytes,outputBytes]`——**不用** tool-health 的快路径，因为归因需要每个 part 的两个大字段字节数，只有遍历每个 part 才拿得到。
+  - 归因是**推算**（非 DB 字段），对外标 **🟡 估算**。
+
+- **前端「按 token 消耗」块**（`src/web/public/components/tool-bars.js`）：
+  - 在既有调用次数榜之下追加第二张榜（TOP10、`--purple` 条形、块头带 🟡 估算徽标）；token 行用独立 class `tooltoken-row` 与 `data-tool/data-tokens/data-share/data-steps`，**既有调用次数行的 `data-*` 契约逐字保留**。
+  - token 缺失 / 为空 / 全零 → 不渲染该块，调用次数榜安静降级、不受影响；「无工具」桶显示为「（无工具）」。
+  - `data-source.js` 加 `fetchToolTokens`（镜像 `fetchToolHealth`：非数组归 `[]`）；`mock-data.js` 加确定性 `getMockToolTokens`（由 agent 工具调用数派生，不消耗共享随机源，基准载荷随机序列不变）。
+  - `app.js` 加 `loadToolTokensSection`（独立加载 / 独立容错，与 tool-health 互不阻塞）。
+  - `DESIGN.md` §5 指标目录 + §6 路由表各加一行。
+
+### Test
+
+- `test/tool-tokens.test.ts`：纯函数（单工具全额 / 双工具字节比取整 / 同工具合并 / 零工具桶 / 全空均摊 / **整数守恒 Σ 精确** / share 和 1 / 排序）+ 真 `node:sqlite` 夹具（字节比例归因、legacy `tool` 键回退、孤儿排除、db-null 契约、`?session=` 会话过滤、路由匹配与近失形状）。
+- `test/api-routes.test.ts` 的 503 名单 + `test/session-filter.test.ts` 的消费 `?session=` 名单各加 `/api/tool-tokens`。
+- `test/web-components.test.ts`：token 块 data-*、估算徽标、「（无工具）」标签、空态不渲染、token 行 tooltip；`test/web-b-tier-wiring.test.ts`：`fetchToolTokens` 请求路径与 scope 参数、非数组降级。
+- 全量 627 用例通过；`npm run check` exit 0。
+
+## [0.26.0] - 2026-10-31 · 里程碑 B：模型排行榜按变体细分 + 环比
+
+### Added
+
+- **模型排行榜按变体复合行细分**（复合键 `modelId + providerId + variant`）：
+  - 真实库里同一 `modelId` 常横跨多个 provider / variant（实测 21 个），此前只按 `modelId` 分组会把它们并成一行、指标互相污染。现在后端 `src/db/aggregate-queries.ts` 的 `queryModelMetrics` 与 `src/stats/model-metrics.ts` 的 `computeModelMetrics` 都按复合键分组，键以 `\u0000` 分隔避免拼接碰撞，空值 / 空变体归 `""`。
+  - 前端 `model-table.js` 行键同步为复合键，旧 wire（宿主更新窗口期缺 `variant`）归一为 `""`，绝不把 `undefined` 拼进行键；模型名后跟随变体 chip，空变体不渲染。
+  - `test/sql-aggregation-parity.test.ts` 的 SQL 与 JS 深比较 parity 锁保持绿色。
+  - 真实库冒烟：171 复合行、复合键唯一（171 == 行数）、21 个 modelId 横跨多变体。
+
+- **模型排行榜环比（上一等长窗口）**：
+  - `queryModelMetrics` 增 `windowOffset` 参数：`offset=0` 时 SQL 与 JS 上下界逐字节不变（保持 parity、不改变既有语义）；`offset=k≥1` 时把同一 n 天窗口整体前移 k 个窗口长度并加排他上界。
+  - 新增 `queryModelMetricsComparison` 组合当前窗口与上一等长窗口，`attachPreviousWindowTokens` 按复合键挂 `previousTokens`（无基数记 0）。
+  - 前端总 token 单元格内联环比角标，沿用 KPI 卡的 ▲/▼/持平 与 `.delta/.up/.down/.flat`；无基数时渲染「— 环比」。列数仍为 11，不新增列。
+  - `?days=0` 与全历史请求无上一窗口，全部渲染「— 环比」。真实库冒烟：days=7 → 19 行 / 5 有基数，days=30 → 9 有基数，全历史 → 全 0。
+
+### Test
+
+- `test/model-metrics.test.ts`：复合分组（同 modelId 跨 variant / 跨 provider 各自成行、缺 variant 归空）与 `attachPreviousWindowTokens`（匹配键继承、新模型记 0、消失模型不产出、重复键求和）。
+- `test/model-metrics-days-window.test.ts`：真实 `node:sqlite` 双窗口夹具，断言环比基数来自上一等长窗口、仅当前窗口出现的模型基数记 0、`offset-0` 结果与 `queryModelMetrics` 一致。
+- `test/web-components.test.ts`：变体 chip 与复合行键唯一性、环比角标四种形态（▲ / ▼ / 持平 / —）、11 列不变。
+- 全量 608 用例通过；`npm run check` exit 0。
+
+## [0.25.2] - 2026-10-29 —— 修复：`/api/health` 自报版本与 `package.json` 脱节
+
+### Fixed
+
+- **`INSIGHT_VERSION` 停留在 0.24.0**：`src/web/api.ts` 的版本常量未随 0.25.0/0.25.1 同步，
+  `/api/health` 与 TUI 端口发现的版本核对都基于该常量，运行看板因此自报 `0.24.0`（叠加旧代码）。
+  本次将常量升至与 `package.json` 一致的 `0.25.2`，版本口径恢复同步。
+- 全部 596 项测试通过，`npm run check` exit 0。
+
+## [0.25.1] - 2026-10-29 · 里程碑 A 热修：日历日过滤的时区口径
+
+### Fixed
+
+- **`?day=` 服务端日界改用本地日午夜（`parseDayStartMs`）**：冒烟发现 `?day=2026-10-29` 服务端返回 0 条，但该本地日实有 10 个会话——根因是 `parseDayStartMs` 用 `Date.UTC` 算日界（午夜 UTC），与前端日历热力图 `dateKeyToEpoch`（本地日午夜）错开整个时区偏移，点某日格子把会话列表过滤到「空」。现改 `new Date(year, month-1, day).getTime()`（本地午夜），与热力图日点击口径对齐。
+- **`parseDayStartMs` 导出并加回归锁**（`test/api-routes.test.ts`）：断言本地午夜而非 UTC（时区漂移守卫）+ 空/畸形日期退化返回 null。
+- 全量 596 用例通过；`npm run check` exit 0。
+
+## [0.25.0] - 2026-10-29 · 里程碑 A：跨会话全文搜索 + 日历日点击过滤
+
+### Added
+
+- **跨会话全文搜索**（`GET /api/search`，`src/db/search-queries.ts` + `src/db/message-text-extract.ts` 新增）：跨全部会话搜索消息正文 / 工具入出参 / 思考过程。
+  - 后端按 user/assistant 消息行解析 `data` JSON，经 `message-text-extract.ts` 提取可搜索文本（与回放页 `replay-message-text.js` 同源，不存在「搜得到却渲染不出来」的错位）。
+  - 子串模式大小写不敏感；正则模式构造不区分大小写的 `RegExp`，语法非法返回 `{ hits:[], total:0, error:"invalid regex" }`（200，不抛 500）。
+  - 命中上限 200（按 `messageId` 去重），`total` 是真实全量匹配数；空 `q` 返回空载荷（200）。
+  - `snippet` 是首个命中点附近 ~120 字符的窗口，文本先 `escapeHtml` 再把命中段包进 `<mark>`——「除 `<mark>` 外无其他标签」的安全富文本，闭环消息文本的 XSS 面。
+  - 前端 `search-panel.js`（新增，纯渲染组件）把 `query + mode` 上抛给 `onSearch`，命中行点击深链到 `#/session/<sessionId>`；`data-source.fetchSearch` 与 `mock-data.getMockSearchResults` 提供真实 / 离线两条取数路径。
+  - 会话作用域激活时 `panel-search` 随分布卡一并隐藏（搜索是「全部会话」口径）。
+
+- **日历日点击过滤**（`?day=YYYY-MM-DD`，`src/db/queries.ts` `querySessionList` 增 `dayStartMs` 本地日过滤）：点击日历热力图的某日格子，把下方会话列表过滤到该本地日；脚注标注「过滤到 <date> 的会话」，点击即清除。
+  - 过滤走服务端参数（非客户端行过滤），与 `directory` / `range` AND 叠加；畸形日期静默不过滤。
+  - `session-sort-controller` 缓存键扩为 6 维（`sort:order:directory:range:day:sessionScope`）；`session-csv-export` 导出路径带 `day` 联动。
+
+### Fixed
+
+- **`session-list.js` 的 `SESSIONS_CSV_EXPORT_AVAILABLE` 导入路径**：原从 `session-csv-export.js` 引一个不存在的导出导致 SyntaxError（28 个会话列表测试全挂）；改从 `data-source.js` 引，并同步修好 `web-session-scope.test.ts` 的 6 参 `fetchSessionsPage` 桩（scope 落在错位参数上）。
+
+### Test
+
+- **`test/web-search-panel.test.ts`**（新增）：idle / 禁用态 / 表单提交路由 / loading / 命中行 / 空态 / 正则错误 / 外部文本转义 / snippet 透传 9 个用例。
+- **`test/web-components.test.ts`**：补日历热力图 `onDaySelect` 点击（2 例）与会话列表 `dayFilter` 脚注标注 / 清除（1 例）。
+- **`test/search-queries.test.ts`**、**`test/session-day-filter.test.ts`**（新增）：搜索主查询与本地日过滤的 SQL 语义测试（真 `node:sqlite` 内存夹具）。
+- 全量 594 用例通过；`npm run check` exit 0。
+
 ## [0.24.0] - 2026-10-21
 
 ### Added
@@ -73,7 +201,6 @@
   - 未知 id / 空 id 静默 `notFound`，不滚动、不抛错——深链坏了不该让整个回放页失败。
   - 每个时间线节点（含 `system` / `model-switched` / `compaction` 通知行与空文本 user 占位）都带 `data-message-id` 与 `id="msg-<messageID>"`，给深链与外部锚点一个稳定落点。
 
-### Fixed
 - **深链 `?msg=` 永不清除，F5 每次重复滚动 + 闪烁**（C1，据 @oracle 审查修正）：`session-replay.js` 每次渲染都读 `window.location.hash`，定位成功后却没有任何地方抹掉参数。按 F5 或重进同一链接会再滚一次、再闪一次 2s 高亮，与「一次性落点提示」的契约矛盾。现在定位成功（`status === "located"`）后用 `history.replaceState` 剥掉参数（新增 `buildConsumedSessionHash`）；不用 `location.hash =` 是因为后者会压一条历史记录并触发 `hashchange`，整个回放页会重渲染一遍。`replaceState` 加了 `typeof !== "function"` 守卫——测试桩与部分宿主没有 `history` 对象，缺它不该让回放页失败。定位失败（`notFound`）的链接保留原样，用户能看出地址里的 id 没对上。
 - **`revealMessageNode` 的两个 `notFound` 返回形状不一致**（A8）：`:102` 返回实际 `visibleIndex`，`:91` 返回 `-1`。当前调用方只判 `status`，无活的 bug，但契约注释写着 `notFound` 统一语义，调用方不该需要区分「没找到」与「找到了却没渲染」。两处统一为 `visibleIndex: -1`。
 - **`replay-deep-link.js` 的死代码**（A7）：`typeof clearTimer?.unref === "function"` 恒为假——浏览器 `setTimeout` 返回 number，不是 Node 的 `Timeout` 对象。已删除。
@@ -95,117 +222,7 @@
   原因：`white-space: nowrap` 配自动布局时，长模型 ID / 长会话标题会挤占数字列，列宽随内容漂移。参考 billion-context `src/web/page.ts` 的 `<colgroup>` 写法。
   每张表的第一列保持无宽度以吃掉剩余空间，避免固定布局下表格不满宽。
 
-## [0.25.0] - 2026-10-29 · 里程碑 A：跨会话全文搜索 + 日历日点击过滤
-
-### Added
-
-- **跨会话全文搜索**（`GET /api/search`，`src/db/search-queries.ts` + `src/db/message-text-extract.ts` 新增）：跨全部会话搜索消息正文 / 工具入出参 / 思考过程。
-  - 后端按 user/assistant 消息行解析 `data` JSON，经 `message-text-extract.ts` 提取可搜索文本（与回放页 `replay-message-text.js` 同源，不存在「搜得到却渲染不出来」的错位）。
-  - 子串模式大小写不敏感；正则模式构造不区分大小写的 `RegExp`，语法非法返回 `{ hits:[], total:0, error:"invalid regex" }`（200，不抛 500）。
-  - 命中上限 200（按 `messageId` 去重），`total` 是真实全量匹配数；空 `q` 返回空载荷（200）。
-  - `snippet` 是首个命中点附近 ~120 字符的窗口，文本先 `escapeHtml` 再把命中段包进 `<mark>`——「除 `<mark>` 外无其他标签」的安全富文本，闭环消息文本的 XSS 面。
-  - 前端 `search-panel.js`（新增，纯渲染组件）把 `query + mode` 上抛给 `onSearch`，命中行点击深链到 `#/session/<sessionId>`；`data-source.fetchSearch` 与 `mock-data.getMockSearchResults` 提供真实 / 离线两条取数路径。
-  - 会话作用域激活时 `panel-search` 随分布卡一并隐藏（搜索是「全部会话」口径）。
-
-- **日历日点击过滤**（`?day=YYYY-MM-DD`，`src/db/queries.ts` `querySessionList` 增 `dayStartMs` 本地日过滤）：点击日历热力图的某日格子，把下方会话列表过滤到该本地日；脚注标注「过滤到 <date> 的会话」，点击即清除。
-  - 过滤走服务端参数（非客户端行过滤），与 `directory` / `range` AND 叠加；畸形日期静默不过滤。
-  - `session-sort-controller` 缓存键扩为 6 维（`sort:order:directory:range:day:sessionScope`）；`session-csv-export` 导出路径带 `day` 联动。
-
-### Fixed
-
-- **`session-list.js` 的 `SESSIONS_CSV_EXPORT_AVAILABLE` 导入路径**：原从 `session-csv-export.js` 引一个不存在的导出导致 SyntaxError（28 个会话列表测试全挂）；改从 `data-source.js` 引，并同步修好 `web-session-scope.test.ts` 的 6 参 `fetchSessionsPage` 桩（scope 落在错位参数上）。
-
-### Test
-
-- **`test/web-search-panel.test.ts`**（新增）：idle / 禁用态 / 表单提交路由 / loading / 命中行 / 空态 / 正则错误 / 外部文本转义 / snippet 透传 9 个用例。
-- **`test/web-components.test.ts`**：补日历热力图 `onDaySelect` 点击（2 例）与会话列表 `dayFilter` 脚注标注 / 清除（1 例）。
-- **`test/search-queries.test.ts`**、**`test/session-day-filter.test.ts`**（新增）：搜索主查询与本地日过滤的 SQL 语义测试（真 `node:sqlite` 内存夹具）。
-- 全量 594 用例通过；`npm run check` exit 0。
-
-## [0.25.1] - 2026-10-29 · 里程碑 A 热修：日历日过滤的时区口径
-
-### Fixed
-
-- **`?day=` 服务端日界改用本地日午夜（`parseDayStartMs`）**：冒烟发现 `?day=2026-10-29` 服务端返回 0 条，但该本地日实有 10 个会话——根因是 `parseDayStartMs` 用 `Date.UTC` 算日界（午夜 UTC），与前端日历热力图 `dateKeyToEpoch`（本地日午夜）错开整个时区偏移，点某日格子把会话列表过滤到「空」。现改 `new Date(year, month-1, day).getTime()`（本地午夜），与热力图日点击口径对齐。
-- **`parseDayStartMs` 导出并加回归锁**（`test/api-routes.test.ts`）：断言本地午夜而非 UTC（时区漂移守卫）+ 空/畸形日期退化返回 null。
-- 全量 596 用例通过；`npm run check` exit 0。
-
-## [0.25.2] - 2026-10-29 —— 修复：`/api/health` 自报版本与 `package.json` 脱节
-
-### Fixed
-
-- **`INSIGHT_VERSION` 停留在 0.24.0**：`src/web/api.ts` 的版本常量未随 0.25.0/0.25.1 同步，
-  `/api/health` 与 TUI 端口发现的版本核对都基于该常量，运行看板因此自报 `0.24.0`（叠加旧代码）。
-  本次将常量升至与 `package.json` 一致的 `0.25.2`，版本口径恢复同步。
-- 全部 596 项测试通过，`npm run check` exit 0。
-
-## [0.26.0] - 2026-10-31 · 里程碑 B：模型排行榜按变体细分 + 环比
-
-### Added
-
-- **模型排行榜按变体复合行细分**（复合键 `modelId + providerId + variant`）：
-  - 真实库里同一 `modelId` 常横跨多个 provider / variant（实测 21 个），此前只按 `modelId` 分组会把它们并成一行、指标互相污染。现在后端 `src/db/aggregate-queries.ts` 的 `queryModelMetrics` 与 `src/stats/model-metrics.ts` 的 `computeModelMetrics` 都按复合键分组，键以 `\u0000` 分隔避免拼接碰撞，空值 / 空变体归 `""`。
-  - 前端 `model-table.js` 行键同步为复合键，旧 wire（宿主更新窗口期缺 `variant`）归一为 `""`，绝不把 `undefined` 拼进行键；模型名后跟随变体 chip，空变体不渲染。
-  - `test/sql-aggregation-parity.test.ts` 的 SQL 与 JS 深比较 parity 锁保持绿色。
-  - 真实库冒烟：171 复合行、复合键唯一（171 == 行数）、21 个 modelId 横跨多变体。
-
-- **模型排行榜环比（上一等长窗口）**：
-  - `queryModelMetrics` 增 `windowOffset` 参数：`offset=0` 时 SQL 与 JS 上下界逐字节不变（保持 parity、不改变既有语义）；`offset=k≥1` 时把同一 n 天窗口整体前移 k 个窗口长度并加排他上界。
-  - 新增 `queryModelMetricsComparison` 组合当前窗口与上一等长窗口，`attachPreviousWindowTokens` 按复合键挂 `previousTokens`（无基数记 0）。
-  - 前端总 token 单元格内联环比角标，沿用 KPI 卡的 ▲/▼/持平 与 `.delta/.up/.down/.flat`；无基数时渲染「— 环比」。列数仍为 11，不新增列。
-  - `?days=0` 与全历史请求无上一窗口，全部渲染「— 环比」。真实库冒烟：days=7 → 19 行 / 5 有基数，days=30 → 9 有基数，全历史 → 全 0。
-
-### Test
-
-- `test/model-metrics.test.ts`：复合分组（同 modelId 跨 variant / 跨 provider 各自成行、缺 variant 归空）与 `attachPreviousWindowTokens`（匹配键继承、新模型记 0、消失模型不产出、重复键求和）。
-- `test/model-metrics-days-window.test.ts`：真实 `node:sqlite` 双窗口夹具，断言环比基数来自上一等长窗口、仅当前窗口出现的模型基数记 0、`offset-0` 结果与 `queryModelMetrics` 一致。
-- `test/web-components.test.ts`：变体 chip 与复合行键唯一性、环比角标四种形态（▲ / ▼ / 持平 / —）、11 列不变。
-- 全量 608 用例通过；`npm run check` exit 0。
-
-## [0.27.0] - 2026-10-31 · 里程碑 C：按工具分 token（字节比例归因，🟡 估算）
-
-### Added
-
-- **每工具 token 归因端点 `GET /api/tool-tokens`**（会话感知，吃 `?session=`；db 缺 → 503，未知 session → 404）：
-  - 返回 `ToolTokenStat[]` = `{tool, tokens, share, steps}`，tokens 降序、工具名升序；全部会话口径、锚定 `session_v2`（排除孤儿消息），与 tool-health 同一两段路由形状。
-  - 口径（`src/stats/tool-tokens.ts` + `src/db/tool-token-queries.ts`）：步 token = input+output+cache.read（复用 `totalUsageTokens`）；每步按**去重工具名**的体积权重分摊，`weight = bytes(tool)/Σbytes(step)`，`bytes` = 该 part `$.state.input`+`$.state.output` 的 JSON 文本 UTF-8 字节数（查询层 `length(CAST(json_extract(...) AS BLOB))` 抽取，字段缺失 → 0）；Σbytes==0 → 等权 1/k；零工具步归 tool="" 桶（「无工具」）。
-  - **整数守恒**：浮点 raw 分摊 + 最大余数法取整，使 Σ 行 tokens === Σ 步 token **精确相等**（真库冒烟 6,461,974,210 === 6,461,974,210）。
-  - 查询层逐 assistant 消息用 `json_each` 遍历 `$.content` 抽取每 part 五元组 `[type,name,tool,inputBytes,outputBytes]`——**不用** tool-health 的快路径，因为归因需要每个 part 的两个大字段字节数，只有遍历每个 part 才拿得到。
-  - 归因是**推算**（非 DB 字段），对外标 **🟡 估算**。
-
-- **前端「按 token 消耗」块**（`src/web/public/components/tool-bars.js`）：
-  - 在既有调用次数榜之下追加第二张榜（TOP10、`--purple` 条形、块头带 🟡 估算徽标）；token 行用独立 class `tooltoken-row` 与 `data-tool/data-tokens/data-share/data-steps`，**既有调用次数行的 `data-*` 契约逐字保留**。
-  - token 缺失 / 为空 / 全零 → 不渲染该块，调用次数榜安静降级、不受影响；「无工具」桶显示为「（无工具）」。
-  - `data-source.js` 加 `fetchToolTokens`（镜像 `fetchToolHealth`：非数组归 `[]`）；`mock-data.js` 加确定性 `getMockToolTokens`（由 agent 工具调用数派生，不消耗共享随机源，基准载荷随机序列不变）。
-  - `app.js` 加 `loadToolTokensSection`（独立加载 / 独立容错，与 tool-health 互不阻塞）。
-  - `DESIGN.md` §5 指标目录 + §6 路由表各加一行。
-
-### Test
-
-- `test/tool-tokens.test.ts`：纯函数（单工具全额 / 双工具字节比取整 / 同工具合并 / 零工具桶 / 全空均摊 / **整数守恒 Σ 精确** / share 和 1 / 排序）+ 真 `node:sqlite` 夹具（字节比例归因、legacy `tool` 键回退、孤儿排除、db-null 契约、`?session=` 会话过滤、路由匹配与近失形状）。
-- `test/api-routes.test.ts` 的 503 名单 + `test/session-filter.test.ts` 的消费 `?session=` 名单各加 `/api/tool-tokens`。
-- `test/web-components.test.ts`：token 块 data-*、估算徽标、「（无工具）」标签、空态不渲染、token 行 tooltip；`test/web-b-tier-wiring.test.ts`：`fetchToolTokens` 请求路径与 scope 参数、非数组降级。
-- 全量 627 用例通过；`npm run check` exit 0。
-
-## [0.28.0] - 2026-10-31 · 里程碑 C 增强：每工具 token 归因改自包含分词估算（🟡 估算）
-
-### Changed
-
-- **每工具 token 归因权重由「字节比例」升级为「自包含分词估算」**（C-Y，零新依赖，wire 契约不变）：
-  - 旧口径把每个 part 的 `state.input`+`state.output` 的 UTF-8 字节数当权重，会把 CJK（UTF-8 3 字节/字符）相对 ASCII（1 字节/字符）高估约 3 倍。
-  - 新口径用自包含估算 `estimateTokensFromLengths(charCount, byteCount) = asciiChars/4 + nonAsciiChars`（`nonAsciiChars = max(0, (byteCount − charCount) / 2)`、`asciiChars = max(0, charCount − nonAsciiChars)`）：ASCII ≈ 4 字符/token、3 字节非 ASCII ≈ 1 字符/token。纯 JS 零外部依赖，**不引入 tiktoken / gpt-tokenizer 等运行时依赖**（保持零运行时依赖政策）。
-  - 估算对输入线性，故 input/output 可先各自求和再代入，结果一致；**整数守恒**（浮点 raw 分摊 + 最大余数法取整，Σ 行 tokens === Σ 步 token 精确相等）与 **🟡 估算**标签均不变。
-  - 查询层逐 part 抽取由五元组扩为七元组 `[type,name,tool,inputBytes,outputBytes,inputChars,outputChars]`：新增 `length(json_extract(...))`（字符数，code point）与既有 `length(CAST(json_extract(...) AS BLOB))`（UTF-8 字节数）并列（真 `node:sqlite` 实证 `length()` 对文本返回字符数、对 BLOB 返回字节数）。
-  - **wire 契约不变**：`ToolTokenStat {tool,tokens,share,steps}` 与 `GET /api/tool-tokens` 的会话感知 / 未知 id → 404 / db 缺 → 503 语义与 v0.27.0 完全一致；前端 `tooltoken-row` 等 class 与 `data-*` 逐字保留，仅内部权重与角标文案（「字节比例」→「分词估算」）更新。
-  - `DESIGN.md` §5 指标目录 + §6 路由表同步更新（`src/stats/tool-tokens.ts` 头注口径改写）。
-
-### Test
-
-- `test/tool-tokens.test.ts`：新增 `estimateTokensFromLengths` 纯函数面（ASCII 4 字符/token、3 字节 CJK 1 字符/token、线性可加、非正 / 非有限输入 clamp 到 0）；纯函数夹具改用 `{charCount,byteCount}` 并补 CJK-vs-ASCII 重加权用例（证明相对字节口径的改进）；真 `node:sqlite` 夹具新增 CJK 端到端用例，锁定 `length()` 字符语义。
-- 版本 0.28.0（`package.json` + `src/web/api.ts` 的 `INSIGHT_VERSION` 同步）。
-- 全量 633 用例通过；`npm run check` exit 0；真库守恒 6,497,169,959 === 6,497,169,959。
-
-## [0.23.0] - 2026-10-19
+## [0.23.0] - 2026-10-19（未单独打 tag，内容并入 v0.24.0）
 
 ### Added
 - **TUI 右侧栏「Todos」块**：挂在宿主 `sidebar.content` 槽位，实时展示当前会话的 todo。已完成打 ✓、进行中打 ∼、未做打 ·；`in_progress` 恒在首位（多条并行按 `position`）；每页 4 条、底部 `‹ n/m ›` 可点翻页；**没有未完成项时整块消失**，有新 todo 自动出现。标题行整行点击折叠/展开，折叠态经 `context.storage.store` 持久化。

@@ -10,7 +10,7 @@
  *
  * 与 tool-health-queries.ts 同一锚定与过滤纪律（step 谓词 +
  * SESSION_V2_ANCHOR_PREDICATE_SQL + 可选 ?session= 前置），但本查询不采用
- * 快路径：token 归因需要每个 part 的 state.input/state.output 规模，
+ * 快路径：token 归因需要每个 part 的 state.input 与工具输出规模，
  * 只有 json_each 遍历每个 part 才拿得到——快路径的多路径 json_extract
  * 换取的正是「不遍历 part」，与本查询的需求相反。
  */
@@ -43,12 +43,16 @@ const SESSION_V2_ANCHOR_PREDICATE_SQL = "session_id IN (SELECT id FROM session_v
  * - part 七元组走 json_each 遍历 `$.content`，json_array 包住
  *   [type, name, tool, inputBytes, outputBytes, inputChars, outputChars]，
  *   再由 json_group_array 收成一行嵌套数组字符串（空 content → "[]"）；
- * - inputBytes / outputBytes = `length(CAST(json_extract(c.value,
- *   '$.state.input') AS BLOB))`：CAST(... AS BLOB) 取原始 UTF-8 字节，
- *   length() 对 BLOB 返回字节数；
- * - inputChars / outputChars = `length(json_extract(c.value, '$.state.input'))`：
- *   json_extract（对象/数组 → 紧凑 JSON 文本，字符串 → 其值本身），
+ * - inputBytes / outputBytes = `length(CAST(<input-or-output> AS BLOB))`：
+ *   CAST(... AS BLOB) 取原始 UTF-8 字节，length() 对 BLOB 返回字节数；
+ * - inputChars / outputChars = `length(<input-or-output>)`：
  *   length() 对文本返回字符数（code point）；
+ * - 输入口径 = `json_extract(c.value, '$.state.input')`（对象/数组 →
+ *   紧凑 JSON 文本，字符串 → 其值本身）；
+ * - 输出口径 = `state.metadata.output`（字符串）否则回退
+ *   `state.content[]` 各 `type === "text"` 块的 `text` 以 "\n\n" 拼接——
+ *   与 message-text-extract.ts readToolOutput/partText 逐函数对齐（真实
+ *   tool part 无 `state.output` 字段，实测 0/74,888）；
  * - 字段缺失 → NULL → 绑定为 null（JS 侧按 0 处理）。
  *
  * 缺省（不过滤）时 stepPredicatePrefixSql 为空串，SQL 字节与全量口径
@@ -61,9 +65,9 @@ function buildToolTokenScanSql(stepPredicatePrefixSql: string): string {
                         json_extract(c.value, '$.name'),
                         json_extract(c.value, '$.tool'),
                         length(CAST(json_extract(c.value, '$.state.input') AS BLOB)),
-                        length(CAST(json_extract(c.value, '$.state.output') AS BLOB)),
+                        length(CAST(COALESCE(NULLIF(json_extract(c.value, '$.state.metadata.output'), ''), (SELECT group_concat(json_extract(cc.value, '$.text'), char(10) || char(10)) FROM json_each(c.value, '$.state.content') cc WHERE json_extract(cc.value, '$.type') = 'text')) AS BLOB)),
                         length(json_extract(c.value, '$.state.input')),
-                        length(json_extract(c.value, '$.state.output'))))
+                        length(COALESCE(NULLIF(json_extract(c.value, '$.state.metadata.output'), ''), (SELECT group_concat(json_extract(cc.value, '$.text'), char(10) || char(10)) FROM json_each(c.value, '$.state.content') cc WHERE json_extract(cc.value, '$.type') = 'text')))))
                FROM json_each(m.data, '$.content') c) AS tool_part_sizes
        FROM session_message m
        WHERE ${stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}

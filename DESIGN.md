@@ -1,6 +1,6 @@
 # opencode-db-insight 设计文档（DESIGN.md）
 
-> 版本：0.22.x（与 package.json / api.ts INSIGHT_VERSION 同步，当前 0.22.0）· 状态：实现中（v0.4.0 起随版本演进同步回写，2026-10-18 已与实现对账）
+> 版本：0.28.x（与 package.json / api.ts INSIGHT_VERSION 同步，当前 0.28.1，并记录 0.28.1 修复）· 状态：实现中（v0.4.0 起随版本演进同步回写，2026-10-18 已与实现对账）
 > 本文档是实现的唯一依据；需求变更先改本文档再改代码。
 
 ## 1. 背景与目标
@@ -30,7 +30,7 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 - token 结构（assistant 消息 `data.tokens`）：`input` / `output` / `reasoning` / `cache.read` / `cache.write`；
 - 角色类型齐全：`user` / `assistant`（内含 text、reasoning、tool 三种 part）/ `system`（指令更新通知）/ `model-switched` / `compaction` / `idle` / `synthetic`；
 - 系统提示词本体在 `instruction_blob`（按内容哈希存储，含环境块、工具目录、日期），可还原会话当时的指令注入；
-- 工具调用的输入参数与执行输出完整保留在 tool part 的 `state.input` / `state.output`。
+- 工具调用的输入参数保留在 tool part 的 `state.input`；执行输出为 `state.metadata.output`（字符串）或 `state.content[]`（`{type:"text",text}` 数组）——真实 tool part **没有** `state.output` 字段（实测 0/74,888）。
 
 ### 2.3 业界看板调研（@librarian 已完成，star 数实时查证于 2026-10-05）
 
@@ -90,11 +90,27 @@ opencode-db-insight/
 │  │  ├─ behavior-queries.ts     #   v0.2 行为统计（小时热力 / 会话存活 / 压缩事件）
 │  │  ├─ scan-conventions.ts     #   扫描口径单点（assistant 谓词 / DAY_MS / 下推 floor 与回收窗口成对导出，0.2.1 起）
 │  │  ├─ directory-queries.ts    #   v0.3 按项目目录统计（会话数 / 步数 / tokens 三分 / 最近活跃，预聚合 GROUP BY 消扇出）
+│  │  ├─ search-queries.ts       #   v0.25 跨会话全文搜索（子串/正则两模式，锚定 session_v2）
+│  │  ├─ message-text-extract.ts #   消息可搜索文本抽取（与回放页 replay-message-text 同源）
+│  │  ├─ session-distribution-queries.ts # v0.20 会话 token 总量分布（对数半档桶 + p50/p90/p99，排除零消耗会话）
+│  │  ├─ session-summary-enrichment.ts   # 会话行富化（stepCount / 子代字段，预聚合消扇出）
+│  │  ├─ tool-health-queries.ts  #   v0.18 工具健康榜（两段式 `$.state.status` 聚合）
+│  │  ├─ tool-part-extraction.ts #   v0.22 工具段抽取单点（tool-health / tool-error-trend 共享，跨路由 Σ 守恒）
+│  │  ├─ tool-token-queries.ts   #   v0.27 每工具 token 归因扫描（json_each 逐 part 七元组抽取）
+│  │  ├─ tool-error-trend-queries.ts     # v0.22 工具错误率逐日趋势（本地日分桶）
+│  │  ├─ session-outcome-queries.ts      # v0.22 失败中断会话（终局错误推断，锚定 session_v2）
+│  │  ├─ session-todo-queries.ts #   v0.24 侧栏 Todos 直读（todo 表，锚定 session_v2 + 降级路径）
 │  │  ├─ rows.ts                 #   行记录解析与类型强制（coerceNumber / coerceText）
 │  │  └─ types.ts                 #   数据面类型定义（SessionSummary / AssistantStepRow / ...）
 │  ├─ stats/                     # 纯聚合函数层（无 IO，可单测）
 │  │  ├─ daily-buckets.ts / model-metrics.ts / agent-fingerprint.ts / hit-rate.ts
-│  │  └─ hour-heatmap.ts / session-survival.ts    # v0.2 纯函数（热力分桶带窗口回收下界）
+│  │  ├─ hour-heatmap.ts / session-survival.ts    # v0.2 纯函数（热力分桶带窗口回收下界）
+│  │  ├─ session-distribution.ts #   v0.20 分布桶视图模型（对数半档 + 分位）
+│  │  ├─ session-outcome.ts      #   v0.22 失败中断视图模型（终局错误归类）
+│  │  ├─ tool-health.ts          #   工具健康榜视图模型
+│  │  ├─ tool-error-trend.ts     #   工具错误率趋势视图模型（本地日分桶）
+│  │  ├─ tool-tokens.ts          #   v0.27/0.28 每工具 token 归因（分词估算权重 + 最大余数取整）
+│  │  ├─ session-todo.ts         #   v0.24 侧栏 Todos 视图模型（状态秩排序 + 分页）
 │  │  └─ cache.ts                #   60s TTL + 64 条上限的结果缓存
 │  ├─ web/                       # HTTP 服务层（node:http，仅绑定 127.0.0.1）
 │  │  ├─ server.ts               #   生命周期（listen / shutdown / 端口重试）
@@ -116,14 +132,16 @@ opencode-db-insight/
 │  │     │                       #     replay-search 页内搜索）/ 压缩面板 / 存活卡片 /
 │  │     │                       #     目录统计面板 / 空态与加载态
 │  │     └─ vendor/uplot/        #     uPlot 本地化（无 CDN 依赖）
-│  ├─ export/                    # Markdown 导出渲染（角色分节 / 格式化辅助）
+│  ├─ export/                    # Markdown 导出渲染（角色分节 / 格式化辅助 / 凭据脱敏）
 │  └─ tui/                       # TUI 命令实现
 │     ├─ command-registry.ts     #   斜杠命令注册表
 │     ├─ open-dashboard-command.ts / export-command.ts
 │     ├─ refresh-command.ts      #   /insight-refresh：跨进程回环清 server 缓存（v0.14.0）
 │     ├─ discover-dashboard-port.ts  # 看板端口探测：18789..18798 并发 GET /api/health（v0.16.x TUI 侧发现机制）
+│     ├─ sidebar-todo.tsx        #   v0.24 侧栏「Todos」块（sidebar.content 槽位）
+│     ├─ clip-columns.ts         #   CJK / emoji 感知的显示列宽截断（侧栏标签）
 │     └─ tui-context.ts         #   宿主 toast 降级助手
-├─ test/                         # 347 用例：模块测试 + 集成 / 韧性 / SQL 对账 + 行为 / 目录 / 排序 / CSV / 搜索 / 刷新等回归面（随版本持续增补）
+├─ test/                         # 654 用例：模块测试 + 集成 / 韧性 / SQL 对账 + 行为 / 目录 / 排序 / CSV / 搜索 / 刷新等回归面（随版本持续增补）
 │  └─ helpers/                   # fake-insight-db / step 工厂
 ├─ DESIGN.md / tasks.md / CHANGELOG.md / README.md
 └─ package.json / LICENSE
@@ -144,6 +162,7 @@ opencode-db-insight/
 | 今日总量 | Σ(tokens.input+output+cache.read) 当日 assistant 消息 | 以 session_message 为准 |
 | 缓存命中率 | cache.read / (cache.read + input) | usage-meter 同款口径；严格口径含 write 的 `strictHitRate` 纯函数已备，v0.2 在回放页接线并注明口径 |
 | 模型单点指标 | 步数、总量、命中率、步均输出、步均上下文、中位/p95 上下文、推理占比、活跃区间 | 排行榜核心 |
+| 模型复合行细分 + 环比 | 按复合键 `modelId + providerId + variant` 分组（分隔符 `\u0000`，空值 / 空变体归 `""`）；环比 = 该复合行当前窗口与**上一等长窗口**的 tokens 差（`previousTokens`，无基数记 0） | v0.26.0；SQL 与 JS 口径双锁（`offset=0` 逐字节不变）；前端复合行键 + 变体 chip + ▲/▼/持平/「— 环比」角标，列数不变（11 列） |
 | agent 指纹 | Σ 各工具调用次数 / 该 agent 总调用 | 工具偏好分布 |
 | 逐日趋势 | 按本地时区分桶：步骤、input、read、output、命中率 | 折线/面积图数据 |
 | 小时热力 | 历史步骤数按 小时×星期 分桶（窗口回收下界与 trend 同构） | 作息画像（v0.2 已接线） |
@@ -153,7 +172,7 @@ opencode-db-insight/
 | 会话墙钟时长 | `session_v2.time_updated - time_created`（仅正值会话）分布 + 会话列表列 | v0.21.0；**非「活跃时长」**——`time_compacting` 全 0、`time_suspended` 仅 5，无从精确，故只做墙钟不引入估算 |
 | 工具错误率逐日趋势 | 按本地日分桶：tool 段 `$.state.status === "error"` 的调用数 `toolCalls` 与 `errors`，错误率 = `errors / toolCalls` | v0.22.0；**直读** wire（🟢 实值，非换算）；全部会话口径、锚定 `session_v2`；与 `/api/tool-health` **同源抽取**（跨路由 Σ `toolCalls` / Σ `errors` 恒等，有守恒测试锁定） |
 | 失败中断会话 | 会话最后一条 assistant **对象**消息（`PARTITION BY session_id ORDER BY seq DESC` 取 rn=1）携带 `$.error` 即判「以错误收尾」；`interruptedShare = interruptedSessions / sessionsWithSteps` | v0.22.0；**推断口径**（🟡）——`session_v2` 无 status/error 列，只能自消息推断；`byErrorType` 为**会话级终局**错误类型（Σ count == `interruptedSessions`；终局缺 `type` 者不计桶但仍计入中断）；`sessionsWithSteps` 与步数分布同集合（锚定 `session_v2`、`type='assistant'` 去重计数） |
-| 每工具 token 归因 | 步 token（input+output+cache.read）按步内**去重工具名**的分词估算权重分摊：`weight = estimateTokens(tool)/ΣestimateTokens(step)`，`estimateTokens` = 自包含分词估算（ASCII ≈ 4 字符/token、3 字节非 ASCII ≈ 1 字符/token）＝ `asciiChars/4 + nonAsciiChars`（`nonAsciiChars = max(0,(byte−char)/2)`）；规模 = 该 part `$.state.input`+`$.state.output` 的字符数（`length(json_extract(...))`）与 UTF-8 字节数（`length(CAST(json_extract(...) AS BLOB))`），字段缺失 → 0；Σweight==0 → 等权 1/k；零工具步 → 归「无工具」桶（tool=""）；同一步同一工具多次出现先合并规模再参与权重 | v0.27.0（字节权重）→ **v0.28.0 起改自包含分词估算权重**；**🟡 估算**（归因，非 DB 字段）；整数守恒：最大余数法取整使 Σ 行 tokens === Σ 步 token **精确相等**；全部会话口径、锚定 `session_v2`，吃 `?session=` |
+| 每工具 token 归因 | 步 token（input+output+cache.read）按步内**去重工具名**的分词估算权重分摊：`weight = estimateTokens(tool)/ΣestimateTokens(step)`，`estimateTokens` = 自包含分词估算（ASCII ≈ 4 字符/token、3 字节非 ASCII ≈ 1 字符/token）＝ `asciiChars/4 + nonAsciiChars`（`nonAsciiChars = max(0,(byte−char)/2)`）；规模 = 该 part `$.state.input` 与输出字段（`$.state.metadata.output`（字符串）否则回退 `$.state.content[]` 各 `{type:"text",text}` 块拼接——**不是** `$.state.output`）的字符数（`length(json_extract(...))`）与 UTF-8 字节数（`length(CAST(json_extract(...) AS BLOB))`），字段缺失 → 0；Σweight==0 → 等权 1/k；零工具步 → 归「无工具」桶（tool=""）；同一步同一工具多次出现先合并规模再参与权重 | v0.27.0（字节权重）→ **v0.28.0 起改自包含分词估算权重**；**🟡 估算**（归因，非 DB 字段）；整数守恒：最大余数法取整使 Σ 行 tokens === Σ 步 token **精确相等**；全部会话口径、锚定 `session_v2`，吃 `?session=` |
 | 压缩事件 | compaction 消息计数（按会话/按日/按 reason） | 马拉松会话信号（v0.2 已接线） |
 | 目录维度 | 会话数 / assistant 步数 / tokens 三分（tokensInput / tokensOutput / tokensCacheRead，读 session_v2 汇总列）/ 最近活跃（MAX time_updated）按 session_v2.directory 聚合 | 全量口径，NULL/空目录排除出列表与 totals（v0.3 已接线）；tokens 三分为预聚合方案——step 子查询先 GROUP BY session_id 消除行扇出，SUM 不被步数放大（v0.15.0） |
 | todo 完成率 | completed / total | `todo` 表 |
@@ -165,10 +184,10 @@ opencode-db-insight/
 |---|---|
 | `/api/overview` | KPI 卡：今日/累计 token、今日命中率、会话数、步数、cost |
 | `/api/trend?days=30` | 逐日序列：tokens 分项 + 命中率；每点含 `byModel`（模型 id → 当日 tokens，值口径 input+read+output；键序 = 全窗总量 desc + modelId asc，v0.11.0），供按模型分色堆叠面积图 |
-| `/api/models?days=N` | 模型单点指标排行（v0.18.0 加可选时间窗：scan-floor 下推 + 本地午夜回收；缺省/非法/0/负 = 全量且缓存键保持旧无参形状；clamp 1..366，clamp 后入键） |
+| `/api/models?days=N` | 模型单点指标排行（v0.18.0 加可选时间窗：scan-floor 下推 + 本地午夜回收；缺省/非法/0/负 = 全量且缓存键保持旧无参形状；clamp 1..366，clamp 后入键）；**v0.26.0 起按复合键 `modelId+providerId+variant` 分组**（分隔符 `\u0000`，空值/空变体归 `""`），且 `days>0` 时每行带 `previousTokens`（上一等长窗口环比，无基数记 0） |
 | `/api/agents` | agent 用量 + 工具指纹 |
 | `/api/tool-health` | 工具健康榜（v0.18.0）：session_message 工具段 `$.state.status` 两段式抽取聚合 `{tool, completed, error, running, total, errorRate}`，total 降序；**v0.22.0 起扫描无条件锚定 `session_v2`（排除孤儿消息，与各分布 / `session-outcomes` 同锚）**，抽取与 `/api/tool-error-trend` 收敛到共享模块 `tool-part-extraction.ts` |
-| `/api/tool-tokens` | 每工具 token 归因榜（v0.27.0；v0.28.0 起自包含分词估算权重，🟡 估算）：`ToolTokenStat[]` = `{tool, tokens, share, steps}`，tokens 降序、tool 名升序；**分词估算归因**（见 §5）——逐 assistant 消息按 `$.content` 每 part 抽取 `[type,name,tool,inputBytes,outputBytes,inputChars,outputChars]` 并按去重工具名估算权重分摊步 token；**整数守恒：Σ tokens === 全量步 token（精确相等）**；`tool=""` 为「无工具」桶；全部会话口径、锚定 `session_v2`，吃 `?session=`（未知 id → 404，db 缺失 → 503）；**wire 契约自 v0.27.0 不变** |
+| `/api/tool-tokens` | 每工具 token 归因榜（v0.27.0；v0.28.0 起自包含分词估算权重，🟡 估算）：`ToolTokenStat[]` = `{tool, tokens, share, steps}`，tokens 降序、tool 名升序；**分词估算归因**（见 §5）——逐 assistant 消息按 `$.content` 每 part 抽取 `[type,name,tool,inputBytes,outputBytes,inputChars,outputChars]` 并按去重工具名估算权重分摊步 token（规模取自 `$.state.input` 与输出字段 = `$.state.metadata.output`（字符串）否则 `$.state.content[]` 各 `{type:"text",text}` 拼接，**不是** `$.state.output`）；**整数守恒：Σ tokens === 全量步 token（精确相等）**；`tool=""` 为「无工具」桶；全部会话口径、锚定 `session_v2`，吃 `?session=`（未知 id → 404，db 缺失 → 503）；**wire 契约自 v0.27.0 不变** |
 | `/api/hour-heatmap?days=90` | 7×24 时段热力网格（168 格零填充，weekday=0 周日为外层；v0.18.0 起前端可选 7/30/90/全部窗口，副文案随选择动态化） |
 | `/api/session-survival` | 会话存活统计（中位时长 / 短命占比 / idle 结局分布） |
 | `/api/session-distribution` | 会话 token 总量分布（对数半档桶 + p50/p90/p99），排除零消耗会话（v0.20.0） |
@@ -180,7 +199,8 @@ opencode-db-insight/
 | `/api/compaction` | 压缩事件统计（总数 / 按 reason / 近 30 日逐日 / Top 10 会话） |
 | `/api/todo` | todo 完成率统计（供看板卡片） |
 | `/api/directories?limit=10` | 按项目目录统计（目录排行：会话数 / 步数 / 最近活跃；limit 钳位 1..50，全量口径无 days 窗口） |
-| `/api/sessions?limit=&offset=&sort=&order=&directory=&range=` | 会话列表（标题/模型/agent/时间/token/cost）；每行含分项 `tokensInput` / `tokensOutput` / `tokensCacheRead`（session_v2 三列直通，v0.13.0；既有 `tokens` 折叠总和口径不变）；服务端排序：sort 白名单 time_updated（默认）/time_created/tokens/cost/title，order 默认 desc，非法回退默认；`id ASC` 次级键保证分页确定性；`?directory=` 精确下钻过滤（v0.7.0，miss=空 200）、`?range=7d|30d|90d` 时间窗（v0.9.0，未知非空 → 400）；缓存键含全部维度 |
+| `/api/sessions?limit=&offset=&sort=&order=&directory=&range=&day=` | 会话列表（标题/模型/agent/时间/token/cost）；每行含分项 `tokensInput` / `tokensOutput` / `tokensCacheRead`（session_v2 三列直通，v0.13.0；既有 `tokens` 折叠总和口径不变）；服务端排序：sort 白名单 time_updated（默认）/time_created/tokens/cost/title，order 默认 desc，非法回退默认；`id ASC` 次级键保证分页确定性；`?directory=` 精确下钻过滤（v0.7.0，miss=空 200）、`?range=7d|30d|90d` 时间窗（v0.9.0，未知非空 → 400）、`?day=YYYY-MM-DD` 本地日过滤（v0.25.0，本地日午夜起止，畸形日期静默不过滤，与 directory/range AND 叠加）；缓存键含全部维度 |
+| `/api/search?q=&mode=` | 跨会话全文搜索（v0.25.0）：`{query, mode, hits[{sessionId, sessionTitle, messageId, messageType, snippet, hitCount}], total, error?}`；子串（大小写不敏感）/ 正则两模式；空 `q` → 200 空候选；非法正则 → 200 + `error:"invalid regex"`；命中上限 200（按 messageId 去重），`total` 为真实全量匹配数；**全局口径、锚定 `session_v2`、不吃 `?session=`** |
 | `/api/session/:id/messages` | 单会话全部消息（角色分型，供回放） |
 | `/api/session/:id/system-prompt` | 该会话关联的 instruction_blob 内容 |
 | `/api/export/session/:id.md` | 服务端渲染的 Markdown 导出 |

@@ -11,8 +11,9 @@
  *   estimateTokensFromLengths）：ASCII 约 4 字符 = 1 token、非 ASCII
  *   （CJK 等，UTF-8 3 字节/字符）约 1 字符 = 1 token——比裸字节更贴近真实
  *   token 比例（裸字节会把 CJK 相对 ASCII 低估约 1/3）。
- * - estimateTokens(tool) 的输入是该工具所有 part 的 state.input + state.output
- *   的「字符数 + UTF-8 字节数」（由查询层用 length() 与
+ * - estimateTokens(tool) 的输入是该工具所有 part 的 state.input 与工具输出
+ *   （state.metadata.output 字符串，否则 state.content[] 各 text 块 "\n\n"
+ *   拼接）的「字符数 + UTF-8 字节数」（由查询层用 length() 与
  *   length(CAST(... AS BLOB)) 抽取：object/array → 紧凑 JSON 文本、string →
  *   其值本身；NULL → 0）。估算对输入线性，故 input/output 可先各自求和。
  * - 单工具步 → 整步全额归该工具；同一步同一工具出现多次，其权重先
@@ -32,9 +33,9 @@ import { totalUsageTokens } from "./hit-rate.ts"
 /** 工具名 → 该步内该工具所有 part 的文本规模（字符数 + UTF-8 字节数，已求和）。 */
 export interface ToolTokenPartSize {
   name: string
-  /** 该 part `state.input` + `state.output` 的字符数（code point）之和。 */
+  /** 该 part `state.input` + 工具输出（`state.metadata.output` 或 `state.content[]`）的字符数（code point）之和。 */
   charCount: number
-  /** 该 part `state.input` + `state.output` 的 UTF-8 字节数之和。 */
+  /** 该 part `state.input` + 工具输出（`state.metadata.output` 或 `state.content[]`）的 UTF-8 字节数之和。 */
   byteCount: number
 }
 
