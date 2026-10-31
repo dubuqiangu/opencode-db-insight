@@ -3,7 +3,7 @@
 #
 # First run installs the plugin (opencode plugin add); later runs update it
 # (opencode plugin update). Then the same chain verifies either path:
-#   local HEAD pushed -> install/update -> plugin list commit match ->
+#   local HEAD pushed -> install/update -> plugin check/list commit match ->
 #   on-disk installed version match -> installed file tree mirrors the
 #   repo (src/test counts) -> host opencode.json registration.
 # Prints a PASS/FAIL line per check; exits 0 only when every check passes.
@@ -19,6 +19,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# The opencode CLI writes progress and diagnostics to stderr, and some builds
+# return a non-zero exit code for benign cases. Keep native-command stderr from
+# turning into a terminating error under PowerShell 7.3+, so the script always
+# reaches its own PASS/FAIL accounting instead of dying mid-run.
+$PSNativeCommandUseErrorActionPreference = $false
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $script:failures = 0
@@ -63,12 +68,41 @@ function Resolve-InstalledPackage {
   return $null
 }
 
-function Read-ListedCommit {
-  $listLine = (opencode plugin list 2>$null | Select-String -Pattern "db-insight" | Select-Object -First 1).Line
-  if (-not $listLine) { return $null }
-  $plainLine = $listLine -replace "$([char]27)\[[0-9;]*m", ""
-  foreach ($token in ($plainLine -split "\s+")) {
-    if ($token -match "^[0-9a-f]{7,}$") { return $token }
+# Run an opencode CLI command from the user profile directory and capture its
+# combined stdout+stderr plus exit code. Native stderr is tolerated (it is not
+# an abort condition); each caller decides what a given exit code means.
+function Invoke-OpenCodeCli {
+  param([string[]]$Arguments)
+  $savedErrorPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  Push-Location $env:USERPROFILE
+  try {
+    $combinedOutput = (& opencode @Arguments 2>&1 | Out-String).Trim()
+    return [pscustomobject]@{ OutputText = $combinedOutput; ExitCode = $LASTEXITCODE }
+  } finally {
+    Pop-Location
+    $ErrorActionPreference = $savedErrorPreference
+  }
+}
+
+# The installed short commit, read from whichever CLI listing exposes it.
+# `opencode plugin check` prints "  opencode-db-insight <commit> (current|update
+# available)"; older CLIs leave db-insight out of `check` and only `plugin list`
+# shows "opencode-db-insight <commit> github:...". Both lines carry the short
+# commit as a bare hex token, so try `check` first and fall back to `list`.
+function Read-InstalledCommit {
+  $listingOutputs = @(
+    (Invoke-OpenCodeCli @("plugin", "check")).OutputText,
+    (Invoke-OpenCodeCli @("plugin", "list")).OutputText
+  )
+  foreach ($listingOutput in $listingOutputs) {
+    foreach ($listingLine in ($listingOutput -split "\r?\n")) {
+      if ($listingLine -notmatch "db-insight") { continue }
+      $plainLine = $listingLine -replace "$([char]27)\[[0-9;]*m", ""
+      foreach ($token in ($plainLine -split "\s+")) {
+        if ($token -match "^[0-9a-f]{7,}$") { return $token }
+      }
+    }
   }
   return $null
 }
@@ -97,30 +131,30 @@ $hostConfig = if (Test-Path $hostConfigPath) {
 $firstInstall = -not $hostConfig.Contains($PluginId)
 if ($firstInstall) {
   Write-Output ("first install — running: opencode plugin add " + $PluginId)
+  $installRun = Invoke-OpenCodeCli @("plugin", "add", $PluginId)
 } else {
+  # A per-id update (using the github: target) refreshes only this plugin. Some
+  # CLI builds reject a per-id target, so fall back to the no-arg form, which
+  # updates every outdated package plugin (accepted collateral) and still lands
+  # this plugin on the pushed commit.
   Write-Output ("already registered — running: opencode plugin update " + $PluginId)
-}
-Push-Location $env:USERPROFILE
-try {
-  $installOutput = if ($firstInstall) {
-    (opencode plugin add $PluginId 2>&1 | Out-String).Trim()
-  } else {
-    (opencode plugin update $PluginId 2>&1 | Out-String).Trim()
+  $installRun = Invoke-OpenCodeCli @("plugin", "update", $PluginId)
+  if ($installRun.ExitCode -ne 0 -or $installRun.OutputText -match "not configured") {
+    Write-Output "per-id update unavailable — falling back to: opencode plugin update"
+    $installRun = Invoke-OpenCodeCli @("plugin", "update")
   }
-} finally {
-  Pop-Location
 }
-Write-Output ("install: " + $installOutput)
+Write-Output ("install: " + $installRun.OutputText)
 
 # --- wait until the host registry reflects the pushed commit -----------------------
 $installedCommit = $null
 $installDeadline = (Get-Date).AddSeconds($InstallTimeoutSeconds)
 while ((Get-Date) -lt $installDeadline) {
-  $installedCommit = Read-ListedCommit
+  $installedCommit = Read-InstalledCommit
   if ($installedCommit -eq $localHead) { break }
   Start-Sleep -Seconds 2
 }
-Assert-Check "plugin list shows the pushed commit" ($installedCommit -eq $localHead) "installed=$installedCommit expected=$localHead"
+Assert-Check "plugin check/list shows the pushed commit" ($installedCommit -eq $localHead) "installed=$installedCommit expected=$localHead"
 
 # --- on-disk installed package (poll: the stamp lands slightly late) ----------------
 $cacheRoot = Join-Path $env:USERPROFILE ".cache\opencode\npm"
