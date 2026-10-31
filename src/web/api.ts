@@ -32,6 +32,7 @@ import {
   querySessionSummaryById,
   querySessionSystemPrompt,
   queryTodoStats,
+  queryToolTokens,
   resolveSessionRange,
   resolveSessionSortKey,
   resolveSessionSortOrder,
@@ -72,7 +73,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.26.0"
+export const INSIGHT_VERSION = "0.27.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -104,6 +105,7 @@ const SESSION_FILTER_CONSUMING_ROUTE_NAMES: ReadonlySet<string> = new Set([
   "trend",
   "models",
   "tool-health",
+  "tool-tokens",
   "agents",
   "todo",
   "hour-heatmap",
@@ -440,6 +442,15 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
           () => queryToolHealth(database, sessionFilterId),
         )
         return { statusCode: 200, body: toolHealthStats }
+      }
+      case "tool-tokens": {
+        // v0.27.0 每工具 token 归因（字节比例，🟡 估算）：吃 ?session=，
+        // 与 tool-health 同一缓存键形状（会话维度，"" = 缺省不过滤）。
+        const toolTokenStats = cachedResult(
+          buildCacheKey("queryToolTokens", [sessionFilterId ?? ""]),
+          () => queryToolTokens(database, sessionFilterId),
+        )
+        return { statusCode: 200, body: toolTokenStats }
       }
       case "agents": {
         const agentStats = cachedResult(

@@ -134,6 +134,30 @@
 .toolbar-row:hover .toolbar-name { fill: var(--text); }
 .toolbar-row:hover .toolbar-track { fill: var(--border); }
 
+/* 每工具 token 归因块（v0.27.0，🟡 估算）：调用次数榜之下的第二张榜。 */
+.tooltoken-block { margin-top: 14px; }
+.tooltoken-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.tooltoken-title { color: var(--text-dim); font-size: 12px; font-weight: 600; }
+.tooltoken-estimate {
+  color: var(--amber);
+  border: 1px solid var(--amber-soft);
+  background: var(--amber-soft);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  cursor: help;
+}
+.tooltoken-svg { width: 100%; display: block; }
+.tooltoken-row { cursor: default; }
+.tooltoken-row:hover .toolbar-track { fill: var(--border); }
+
 /* ---------- Token 漏斗 ---------- */
 .funnel-svg { width: 100%; display: block; }
 .funnel-layer { transition: opacity 0.15s; }

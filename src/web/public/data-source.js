@@ -89,6 +89,7 @@ import {
   getMockDirectoryStats,
   getMockToolErrorTrend,
   getMockSessionOutcomes,
+  getMockToolTokens,
   getMockSearchResults,
 } from "./mock-data.js";
 import { getMockSessionMessages, getMockSessionSystemPrompt } from "./mock-replay-data.js";
@@ -505,6 +506,18 @@ export async function fetchToolHealth(sessionScopeId = null) {
   if (USE_MOCK) return resolveWithLatency([]);
   const toolHealthStats = await fetchSessionScopedJson("/tool-health", sessionScopeId);
   return Array.isArray(toolHealthStats) ? toolHealthStats : [];
+}
+
+/**
+ * GET /api/tool-tokens —— 每工具 token 归因（ToolTokenStat[]，tokens 降序；
+ * 🟡 估算，字节比例归因见 DESIGN §5）。会话感知（吃 ?session=，镜像
+ * tool-health）。USE_MOCK 走 getMockToolTokens 缝（同 getMock* 纪律）；
+ * 真实响应非数组也归 []，让条形图的 token 块安静降级而不是炸区块。
+ */
+export async function fetchToolTokens(sessionScopeId = null) {
+  if (USE_MOCK) return resolveWithLatency(getMockToolTokens());
+  const toolTokenStats = await fetchSessionScopedJson("/tool-tokens", sessionScopeId);
+  return Array.isArray(toolTokenStats) ? toolTokenStats : [];
 }
 
 /**

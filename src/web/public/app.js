@@ -15,6 +15,7 @@ import {
   fetchModels,
   fetchAgents,
   fetchToolHealth,
+  fetchToolTokens,
   fetchSessions,
   fetchHealth,
   fetchHourHeatmap,
@@ -119,6 +120,10 @@ const state = {
     // 工具健康度（GET /api/tool-health）：条形图错误色带与标题旁摘要行共用，
     // 由独立的 loadToolHealthSection 填充；与 agents 缓存彼此独立容错。
     toolHealth: undefined,
+    // 每工具 token 归因（GET /api/tool-tokens，🟡 估算）：条形图下方
+    // 「按 token 消耗」榜，由独立的 loadToolTokensSection 填充；与
+    // agents / toolHealth 缓存彼此独立容错。
+    toolTokens: undefined,
     // 会话列表的排序状态/缓存归 session-sort-controller（P2-2 抽出），
     // 不再平铺在这里；本对象只保留其余区块。
     sessionSurvival: undefined,
@@ -293,6 +298,7 @@ function resetSectionCachesForScopeSwitch() {
   state.cache.hourHeatmap = undefined;
   state.cache.hourHeatmapByDays = {};
   state.cache.toolHealth = undefined;
+  state.cache.toolTokens = undefined;
   state.cache.sessionSurvival = undefined;
   state.cache.compaction = undefined;
   state.cache.todo = undefined;
@@ -460,9 +466,14 @@ const loadCalendarSection = createSimpleSectionLoader(
 async function loadToolsSection() {
   try {
     state.cache.agents = await fetchAgents(state.sessionScopeId);
-    // toolHealth 可能先/后于 agents 到达：两侧各自到达后互刷（见下两节），
-    // 任一侧缺失时条形图按无健康度渲染，不阻塞彼此。
-    renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null);
+    // toolHealth / toolTokens 可能先/后于 agents 到达：各自到达后互刷
+    //（见下两节），任一侧缺失时条形图按无该维度渲染，不阻塞彼此。
+    renderToolBars(
+      toolBarsElement,
+      state.cache.agents,
+      state.cache.toolHealth ?? null,
+      state.cache.toolTokens ?? null,
+    );
     markSection("tools", true);
   } catch (error) {
     if (handleSessionScopeVanished(error)) return;
@@ -505,13 +516,38 @@ async function loadToolHealthSection() {
     state.cache.toolHealth = await fetchToolHealth(state.sessionScopeId);
     renderToolHealthCaption(state.cache.toolHealth);
     if (state.cache.agents !== undefined) {
-      renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth);
+      renderToolBars(
+        toolBarsElement,
+        state.cache.agents,
+        state.cache.toolHealth,
+        state.cache.toolTokens ?? null,
+      );
     }
     markSection("tool-health", true);
   } catch (error) {
     if (handleSessionScopeVanished(error)) return;
     toolHealthCaptionElement.innerHTML = "";
     markSection("tool-health", false);
+  }
+}
+
+/** 每工具 token 归因（🟡 估算）：独立加载/独立容错。失败时条形图本体照
+ * 常渲染（无 token 块），只计入顶栏失败数——与 tool-health 同纪律。 */
+async function loadToolTokensSection() {
+  try {
+    state.cache.toolTokens = await fetchToolTokens(state.sessionScopeId);
+    if (state.cache.agents !== undefined) {
+      renderToolBars(
+        toolBarsElement,
+        state.cache.agents,
+        state.cache.toolHealth ?? null,
+        state.cache.toolTokens,
+      );
+    }
+    markSection("tool-tokens", true);
+  } catch (error) {
+    if (handleSessionScopeVanished(error)) return;
+    markSection("tool-tokens", false);
   }
 }
 
@@ -1185,6 +1221,7 @@ async function refreshAllSections() {
       loadTrendSection(),
       loadToolsSection(),
       loadToolHealthSection(),
+      loadToolTokensSection(),
       loadModelsSection(),
       sessionSortController.refreshCurrentView(),
       loadCompactionSection(),
@@ -1318,6 +1355,7 @@ async function startInitialLoad() {
   loadTrendSection();
   loadToolsSection();
   loadToolHealthSection();
+  loadToolTokensSection();
   loadModelsSection();
   sessionSortController.load();
   loadCompactionSection();
@@ -1395,7 +1433,7 @@ function init() {
       state.sessionOutcomesCleanup();
       state.sessionOutcomesCleanup = renderSessionOutcomeCard(sessionOutcomesCardElement, state.cache.sessionOutcomes);
     }
-    if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null);
+    if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null, state.cache.toolTokens ?? null);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
     sessionSortController.renderCurrentIfLoaded();
   });

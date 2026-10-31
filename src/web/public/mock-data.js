@@ -392,6 +392,42 @@ function buildAgentStats() {
   }).sort((left, right) => right.tokens - left.tokens);
 }
 
+/**
+ * 每工具 token 归因 mock（GET /api/tool-tokens，ToolTokenStat[]）。由
+ * AGENT_TOOL_MIXES 的调用数确定性派生（不消耗共享随机源，基准载荷的随机
+ * 序列不变）：token ≈ 调用数 × 固定系数，另加一个「无工具」桶（零工具步的
+ * token）。tokens 降序、工具名升序，share = tokens / 总量——与真实后端同一
+ * 形状（🟡 估算，字节比例归因见 DESIGN §5）。
+ */
+function buildToolTokens() {
+  const totalCounts = new Map();
+  for (const agentMix of AGENT_TOOL_MIXES) {
+    for (const [toolName, callCount] of Object.entries(agentMix.toolCounts)) {
+      totalCounts.set(toolName, (totalCounts.get(toolName) ?? 0) + callCount);
+    }
+  }
+  const TOKENS_PER_CALL = 137;
+  const toolTokenRows = [...totalCounts.entries()].map(([tool, callCount]) => ({
+    tool,
+    tokens: callCount * TOKENS_PER_CALL,
+    steps: Math.round(callCount / 7),
+  }));
+  const totalCalls = [...totalCounts.values()].reduce((sum, callCount) => sum + callCount, 0);
+  toolTokenRows.push({
+    tool: "",
+    tokens: Math.round(totalCalls * TOKENS_PER_CALL * 0.07),
+    steps: 4_200,
+  });
+  const grandTokens = toolTokenRows.reduce((sum, row) => sum + row.tokens, 0);
+  return toolTokenRows
+    .map((row) => ({ ...row, share: grandTokens > 0 ? row.tokens / grandTokens : 0 }))
+    .sort(
+      (left, right) =>
+        right.tokens - left.tokens ||
+        (left.tool < right.tool ? -1 : left.tool > right.tool ? 1 : 0),
+    );
+}
+
 /* ------------------------------------------------------------
  * GET /api/sessions —— SessionSummary 列表（最近 8 天，深夜为主）
  * ------------------------------------------------------------ */
@@ -851,6 +887,7 @@ const directoryStatsPayload = buildDirectoryStats();
 // 放在既有载荷之后，基准载荷的随机序列逐字节不变。
 const toolErrorTrendDailySeries = buildToolErrorTrendDailySeries();
 const sessionOutcomesPayload = buildSessionOutcomes();
+const toolTokensPayload = buildToolTokens();
 
 export function getMockOverview() { return overviewPayload; }
 export function getMockTrend(days) { return buildTrend(days); }
@@ -968,6 +1005,8 @@ export function getMockToolErrorTrend(days = TOOL_ERROR_TREND_DEFAULT_DAYS) {
 }
 /** 会话结局（全部会话口径）：由会话 mock 与权重派生，不消耗共享随机源。 */
 export function getMockSessionOutcomes() { return sessionOutcomesPayload; }
+/** 每工具 token 归因（🟡 估算）：由 agent 工具调用数确定性派生（v0.27.0）。 */
+export function getMockToolTokens() { return toolTokensPayload; }
 /** limit 只截取 directories 列表，totalDirectories/totalSessions 仍是全量口径。 */
 export function getMockDirectoryStats(limit = 10) {
   const boundedLimit = Math.max(1, Math.floor(limit));

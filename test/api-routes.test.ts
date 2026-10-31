@@ -67,6 +67,8 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/child-share",
     "/api/tool-error-trend",
     "/api/session-outcomes",
+    // v0.27.0 每工具 token 归因：两段路由，db 缺失时同样走 503 短接。
+    "/api/tool-tokens",
     // v0.24.0 跨会话搜索端点：两段路由，db 缺失时同样走 503 短接。
     "/api/search",
     "/api/session/ses_example/messages",

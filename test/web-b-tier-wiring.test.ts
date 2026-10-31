@@ -68,6 +68,32 @@ test("data-source: both v0.22.0 endpoints throw on a non-object body (contract b
   }
 })
 
+test("data-source: fetchToolTokens hits /api/tool-tokens and carries the session scope", async () => {
+  const requestedUrls = stubFetchRecorder([{ tool: "read", tokens: 5, share: 1, steps: 1 }])
+  let fetchedToolTokens: unknown
+  try {
+    const { fetchToolTokens } = await import("../src/web/public/data-source.js")
+    fetchedToolTokens = await fetchToolTokens()
+    await fetchToolTokens("ses_example")
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.deepEqual(requestedUrls, ["/api/tool-tokens", "/api/tool-tokens?session=ses_example"])
+  assert.deepEqual(fetchedToolTokens, [{ tool: "read", tokens: 5, share: 1, steps: 1 }])
+})
+
+test("data-source: fetchToolTokens degrades a non-array body to an empty list", async () => {
+  stubFetchRecorder({ not: "an array" })
+  let fetchedToolTokens: unknown
+  try {
+    const { fetchToolTokens } = await import("../src/web/public/data-source.js")
+    fetchedToolTokens = await fetchToolTokens()
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.deepEqual(fetchedToolTokens, [])
+})
+
 /* ---------------- 第 2 组：作用域隐藏清单 ---------------- */
 
 test("session-scope-visibility: both all-sessions panels join the hidden list and hide only while active", async () => {

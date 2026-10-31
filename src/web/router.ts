@@ -13,6 +13,9 @@ export type InsightRoute =
   | { routeName: "trend" }
   | { routeName: "models" }
   | { routeName: "tool-health" }
+  // v0.27.0 每工具 token 归因端点（字节比例归因，🟡 估算）：与
+  // tool-health 同一两段形状，吃 ?session=。
+  | { routeName: "tool-tokens" }
   | { routeName: "agents" }
   | { routeName: "sessions" }
   | { routeName: "todo" }
@@ -64,6 +67,8 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
     case "trend":
     case "models":
     case "tool-health":
+    // v0.27.0 每工具 token 归因：同为两段形状、吃 ?session=。
+    case "tool-tokens":
     case "agents":
     case "sessions":
     case "todo":

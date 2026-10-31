@@ -4404,6 +4404,66 @@ test("renderToolBars wires per-row hover tooltips with the call count and TOP10 
   assert.equal(sharedTooltipElement.hidden, true)
 })
 
+/* ------------- tool-bars token block (v0.27.0) ------------- */
+
+test("renderToolBars appends a byte-proportional token block with per-row data-* and the estimate badge", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+  const container = freshContainer()
+
+  renderToolBars(container, toolBarsAgentStatsFixture(), null, [
+    { tool: "example-tool-read", tokens: 800, share: 0.8, steps: 12 },
+    { tool: "example-tool-write", tokens: 100, share: 0.1, steps: 3 },
+    { tool: "", tokens: 100, share: 0.1, steps: 5 },
+    { tool: "example-tool-zero", tokens: 0, share: 0, steps: 1 },
+  ])
+
+  // 调用次数行逐字保留（4 行，既有 data-* 契约不变）。
+  assert.equal(container.querySelectorAll("g.toolbar-row").length, 4)
+
+  const tokenRows = container.querySelectorAll("g.tooltoken-row")
+  assert.deepEqual(
+    tokenRows.map((row) => row.dataset.tool),
+    ["example-tool-read", "", "example-tool-write"],
+    "tokens desc, then the empty-name bucket before the tied tool name; the zero row drops",
+  )
+  assert.deepEqual(tokenRows.map((row) => row.dataset.tokens), ["800", "100", "100"])
+  assert.deepEqual(tokenRows.map((row) => row.dataset.share), ["80.0", "10.0", "10.0"])
+  assert.deepEqual(tokenRows.map((row) => row.dataset.steps), ["12", "5", "3"])
+  assert.ok(container.innerHTML.includes("按 token 消耗"))
+  assert.ok(container.innerHTML.includes("🟡 估算"))
+  assert.ok(container.innerHTML.includes("（无工具）"), "the empty-name bucket gets a readable label")
+})
+
+test("renderToolBars omits the token block when token stats are absent, empty or all zero", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+  for (const toolTokenStats of [null, [], [{ tool: "example-tool-read", tokens: 0, share: 0, steps: 1 }]]) {
+    const container = freshContainer()
+    renderToolBars(container, toolBarsAgentStatsFixture(), null, toolTokenStats)
+    assert.equal(container.querySelectorAll("g.tooltoken-row").length, 0)
+    assert.equal(container.querySelectorAll("g.toolbar-row").length, 4, "call-count bars are unaffected")
+    assert.ok(!container.innerHTML.includes("按 token 消耗"))
+  }
+})
+
+test("renderToolBars wires token-row hover tooltips with estimate tokens, share and step count", async () => {
+  const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
+  const container = freshContainer()
+  renderToolBars(container, toolBarsAgentStatsFixture(), null, [
+    { tool: "example-tool-read", tokens: 800, share: 0.8, steps: 12 },
+  ])
+
+  const topTokenRow = container.querySelectorAll("g.tooltoken-row")[0]!
+  topTokenRow.fire("mouseenter")
+  assert.equal(sharedTooltipElement.hidden, false)
+  const tooltipHtml = sharedTooltipElement.innerHTML
+  assert.ok(tooltipHtml.includes("example-tool-read"), "the tooltip title carries the tool name")
+  assert.ok(tooltipHtml.includes("token 消耗（🟡 估算）"))
+  assert.ok(tooltipHtml.includes("占比"))
+  assert.ok(tooltipHtml.includes("出现步数"))
+  topTokenRow.fire("mouseleave")
+  assert.equal(sharedTooltipElement.hidden, true)
+})
+
 /* ------------- state-views panel (v0.1.0) ------------- */
 
 test("renderLoading skeletons the tapering block widths and buildLoadingHtml mirrors it", async () => {

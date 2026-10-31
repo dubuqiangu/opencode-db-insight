@@ -162,6 +162,31 @@
 - `test/web-components.test.ts`：变体 chip 与复合行键唯一性、环比角标四种形态（▲ / ▼ / 持平 / —）、11 列不变。
 - 全量 608 用例通过；`npm run check` exit 0。
 
+## [0.27.0] - 2026-10-31 · 里程碑 C：按工具分 token（字节比例归因，🟡 估算）
+
+### Added
+
+- **每工具 token 归因端点 `GET /api/tool-tokens`**（会话感知，吃 `?session=`；db 缺 → 503，未知 session → 404）：
+  - 返回 `ToolTokenStat[]` = `{tool, tokens, share, steps}`，tokens 降序、工具名升序；全部会话口径、锚定 `session_v2`（排除孤儿消息），与 tool-health 同一两段路由形状。
+  - 口径（`src/stats/tool-tokens.ts` + `src/db/tool-token-queries.ts`）：步 token = input+output+cache.read（复用 `totalUsageTokens`）；每步按**去重工具名**的体积权重分摊，`weight = bytes(tool)/Σbytes(step)`，`bytes` = 该 part `$.state.input`+`$.state.output` 的 JSON 文本 UTF-8 字节数（查询层 `length(CAST(json_extract(...) AS BLOB))` 抽取，字段缺失 → 0）；Σbytes==0 → 等权 1/k；零工具步归 tool="" 桶（「无工具」）。
+  - **整数守恒**：浮点 raw 分摊 + 最大余数法取整，使 Σ 行 tokens === Σ 步 token **精确相等**（真库冒烟 6,461,974,210 === 6,461,974,210）。
+  - 查询层逐 assistant 消息用 `json_each` 遍历 `$.content` 抽取每 part 五元组 `[type,name,tool,inputBytes,outputBytes]`——**不用** tool-health 的快路径，因为归因需要每个 part 的两个大字段字节数，只有遍历每个 part 才拿得到。
+  - 归因是**推算**（非 DB 字段），对外标 **🟡 估算**。
+
+- **前端「按 token 消耗」块**（`src/web/public/components/tool-bars.js`）：
+  - 在既有调用次数榜之下追加第二张榜（TOP10、`--purple` 条形、块头带 🟡 估算徽标）；token 行用独立 class `tooltoken-row` 与 `data-tool/data-tokens/data-share/data-steps`，**既有调用次数行的 `data-*` 契约逐字保留**。
+  - token 缺失 / 为空 / 全零 → 不渲染该块，调用次数榜安静降级、不受影响；「无工具」桶显示为「（无工具）」。
+  - `data-source.js` 加 `fetchToolTokens`（镜像 `fetchToolHealth`：非数组归 `[]`）；`mock-data.js` 加确定性 `getMockToolTokens`（由 agent 工具调用数派生，不消耗共享随机源，基准载荷随机序列不变）。
+  - `app.js` 加 `loadToolTokensSection`（独立加载 / 独立容错，与 tool-health 互不阻塞）。
+  - `DESIGN.md` §5 指标目录 + §6 路由表各加一行。
+
+### Test
+
+- `test/tool-tokens.test.ts`：纯函数（单工具全额 / 双工具字节比取整 / 同工具合并 / 零工具桶 / 全空均摊 / **整数守恒 Σ 精确** / share 和 1 / 排序）+ 真 `node:sqlite` 夹具（字节比例归因、legacy `tool` 键回退、孤儿排除、db-null 契约、`?session=` 会话过滤、路由匹配与近失形状）。
+- `test/api-routes.test.ts` 的 503 名单 + `test/session-filter.test.ts` 的消费 `?session=` 名单各加 `/api/tool-tokens`。
+- `test/web-components.test.ts`：token 块 data-*、估算徽标、「（无工具）」标签、空态不渲染、token 行 tooltip；`test/web-b-tier-wiring.test.ts`：`fetchToolTokens` 请求路径与 scope 参数、非数组降级。
+- 全量 627 用例通过；`npm run check` exit 0。
+
 ## [0.23.0] - 2026-10-19
 
 ### Added
