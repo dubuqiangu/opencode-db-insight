@@ -1,18 +1,23 @@
 /**
- * 每工具 token 归因（字节比例归因）for GET /api/tool-tokens
+ * 每工具 token 归因（自包含分词估算权重）for GET /api/tool-tokens
  * (DESIGN.md §5). Pure functions, zero IO; style mirrors tool-health.ts.
  *
  * 口径（冻结）：
  * - 一步 = 一条 assistant 消息；步 token = input + output + cache.read
  *   （复用 totalUsageTokens，与模型排行榜「总 token」同口径）。
- * - 每步按该步内各**去重后工具名**的体积权重分摊：
- *   weight = bytes(tool) / Σbytes(step)。
- * - bytes(tool) = 该步内该工具所有 part 的 state.input + state.output
- *   的 JSON 文本 UTF-8 字节数之和（由查询层用 length(CAST(... AS BLOB))
- *   抽取，NULL → 0）。
- * - 单工具步 → 整步全额归该工具；同一步同一工具出现多次，其 bytes 先
- *   求和再参与权重（即按去重工具名加权）。
- * - Σbytes(step) == 0 且该步 k≥1 个工具 → 等权 1/k（避免除零）。
+ * - 每步按该步内各**去重后工具名**的 token 估算权重分摊：
+ *   weight = estimateTokens(tool) / Σ estimateTokens(step)。
+ * - estimateTokens 是自包含分词估算（零外部依赖，见
+ *   estimateTokensFromLengths）：ASCII 约 4 字符 = 1 token、非 ASCII
+ *   （CJK 等，UTF-8 3 字节/字符）约 1 字符 = 1 token——比裸字节更贴近真实
+ *   token 比例（裸字节会把 CJK 相对 ASCII 低估约 1/3）。
+ * - estimateTokens(tool) 的输入是该工具所有 part 的 state.input + state.output
+ *   的「字符数 + UTF-8 字节数」（由查询层用 length() 与
+ *   length(CAST(... AS BLOB)) 抽取：object/array → 紧凑 JSON 文本、string →
+ *   其值本身；NULL → 0）。估算对输入线性，故 input/output 可先各自求和。
+ * - 单工具步 → 整步全额归该工具；同一步同一工具出现多次，其权重先
+ *   求和再参与分摊（即按去重工具名加权）。
+ * - Σweight(step) == 0 且该步 k≥1 个工具 → 等权 1/k（避免除零）。
  * - 零工具步 → 整步 token 归「无工具」桶（tool === ""）。
  * - 整数守恒：先算浮点 raw 分摊，再用最大余数法取整，使
  *   Σ stat.tokens === Σ stepTokens 精确相等（余数按小数部分从大到小 +1，
@@ -24,16 +29,19 @@
 import type { TokenUsage } from "../db/types.ts"
 import { totalUsageTokens } from "./hit-rate.ts"
 
-/** 工具名 → 该步内该工具所有 part 的体积字节数（已求和）。 */
-export interface ToolTokenPartBytes {
+/** 工具名 → 该步内该工具所有 part 的文本规模（字符数 + UTF-8 字节数，已求和）。 */
+export interface ToolTokenPartSize {
   name: string
-  bytes: number
+  /** 该 part `state.input` + `state.output` 的字符数（code point）之和。 */
+  charCount: number
+  /** 该 part `state.input` + `state.output` 的 UTF-8 字节数之和。 */
+  byteCount: number
 }
 
-/** 一步的归因输入：步 token 用量 + 该步内各工具 part 的字节数。 */
+/** 一步的归因输入：步 token 用量 + 该步内各工具 part 的文本规模。 */
 export interface ToolTokenSample {
   tokens: TokenUsage
-  tools: ToolTokenPartBytes[]
+  tools: ToolTokenPartSize[]
 }
 
 /** 一条工具归因榜行 of GET /api/tool-tokens. */
@@ -52,6 +60,34 @@ export interface ToolTokenStat {
 interface ToolTokenAllocation {
   name: string
   tokens: number
+}
+
+/**
+ * 自包含分词估算权重（零外部依赖）。
+ *
+ * 输入为一段文本的字符数与 UTF-8 字节数（由查询层用 length() 与
+ * length(CAST(... AS BLOB)) 抽取）。估算模型：
+ *
+ * - 非 ASCII 字符（CJK 等按 UTF-8 3 字节/字符假说）≈ 1 字符 = 1 token；
+ *   `nonAsciiChars = max(0, (byteCount - charCount) / 2)`；
+ * - 其余（ASCII）≈ 4 字符 = 1 token；
+ *   `asciiChars = max(0, charCount - nonAsciiChars)`；
+ * - `weight = asciiChars / 4 + nonAsciiChars`。
+ *
+ * 等价于线性式 `0.25 * charCount + 0.375 * (byteCount - charCount)`（在
+ * byteCount ≥ charCount 的合法 UTF-8 输入下与上式逐点相等），故对输入
+ * 线性——input/output 可先各自求和再代入，结果一致。对合法 UTF-8，
+ * byteCount ≥ charCount 恒成立，clamp 只是对异常输入的防御。
+ *
+ * 相比裸字节权重：CJK 每字符 3 字节但 ≈1 token，裸字节会把 CJK 相对
+ * ASCII 高估约 3 倍；本估算把这一偏差收敛到更接近真实 BPE 的比例。
+ */
+export function estimateTokensFromLengths(charCount: number, byteCount: number): number {
+  const safeCharCount = Number.isFinite(charCount) && charCount > 0 ? charCount : 0
+  const safeByteCount = Number.isFinite(byteCount) && byteCount > 0 ? byteCount : 0
+  const nonAsciiChars = Math.max(0, (safeByteCount - safeCharCount) / 2)
+  const asciiChars = Math.max(0, safeCharCount - nonAsciiChars)
+  return asciiChars / 4 + nonAsciiChars
 }
 
 /** 累加计数器：Map<工具名, 数值>。 */
@@ -116,36 +152,36 @@ export function computeToolTokens(samples: ToolTokenSample[]): ToolTokenStat[] {
     const stepTokens = totalUsageTokens(sample.tokens)
     grandTokens += stepTokens
 
-    // 同一步内按去重工具名先求和 bytes（同一工具多次出现 → 先合并再加权）。
-    const bytesByToolInStep = new Map<string, number>()
+    // 同一步内按去重工具名先求和估算权重（同一工具多次出现 → 先合并再加权）。
+    const weightByToolInStep = new Map<string, number>()
     for (const tool of sample.tools) {
       if (tool.name === "") continue
-      const bytes = Number.isFinite(tool.bytes) && tool.bytes > 0 ? tool.bytes : 0
-      addCounterValue(bytesByToolInStep, tool.name, bytes)
+      const weight = estimateTokensFromLengths(tool.charCount, tool.byteCount)
+      addCounterValue(weightByToolInStep, tool.name, weight)
     }
 
-    if (bytesByToolInStep.size === 0) {
+    if (weightByToolInStep.size === 0) {
       // 零工具步：整步 token 归「无工具」桶。
       addCounterValue(tokensByTool, "", stepTokens)
       addCounterValue(stepsByTool, "", 1)
       continue
     }
 
-    const totalStepBytes = [...bytesByToolInStep.values()].reduce(
-      (sum: number, bytes: number) => sum + bytes,
+    const totalStepWeight = [...weightByToolInStep.values()].reduce(
+      (sum: number, weight: number) => sum + weight,
       0,
     )
-    // Σbytes == 0 → 等权 1/k；否则按体积权重。
-    const entryWeights = [...bytesByToolInStep.entries()].map(([name, bytes]) => ({
+    // Σweight == 0 → 等权 1/k；否则按估算权重。
+    const entryWeights = [...weightByToolInStep.entries()].map(([name, weight]) => ({
       name,
       weight:
-        totalStepBytes > 0 ? bytes / totalStepBytes : 1 / bytesByToolInStep.size,
+        totalStepWeight > 0 ? weight / totalStepWeight : 1 / weightByToolInStep.size,
     }))
 
     for (const allocation of allocateStepTokens(entryWeights, stepTokens)) {
       addCounterValue(tokensByTool, allocation.name, allocation.tokens)
     }
-    for (const toolName of bytesByToolInStep.keys()) {
+    for (const toolName of weightByToolInStep.keys()) {
       addCounterValue(stepsByTool, toolName, 1)
     }
   }

@@ -4406,7 +4406,7 @@ test("renderToolBars wires per-row hover tooltips with the call count and TOP10 
 
 /* ------------- tool-bars token block (v0.27.0) ------------- */
 
-test("renderToolBars appends a byte-proportional token block with per-row data-* and the estimate badge", async () => {
+test("renderToolBars appends an estimate-weighted token block with per-row data-* and the estimate badge", async () => {
   const { renderToolBars } = await import("../src/web/public/components/tool-bars.js")
   const container = freshContainer()
 

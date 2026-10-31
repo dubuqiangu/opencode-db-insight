@@ -187,6 +187,24 @@
 - `test/web-components.test.ts`：token 块 data-*、估算徽标、「（无工具）」标签、空态不渲染、token 行 tooltip；`test/web-b-tier-wiring.test.ts`：`fetchToolTokens` 请求路径与 scope 参数、非数组降级。
 - 全量 627 用例通过；`npm run check` exit 0。
 
+## [0.28.0] - 2026-10-31 · 里程碑 C 增强：每工具 token 归因改自包含分词估算（🟡 估算）
+
+### Changed
+
+- **每工具 token 归因权重由「字节比例」升级为「自包含分词估算」**（C-Y，零新依赖，wire 契约不变）：
+  - 旧口径把每个 part 的 `state.input`+`state.output` 的 UTF-8 字节数当权重，会把 CJK（UTF-8 3 字节/字符）相对 ASCII（1 字节/字符）高估约 3 倍。
+  - 新口径用自包含估算 `estimateTokensFromLengths(charCount, byteCount) = asciiChars/4 + nonAsciiChars`（`nonAsciiChars = max(0, (byteCount − charCount) / 2)`、`asciiChars = max(0, charCount − nonAsciiChars)`）：ASCII ≈ 4 字符/token、3 字节非 ASCII ≈ 1 字符/token。纯 JS 零外部依赖，**不引入 tiktoken / gpt-tokenizer 等运行时依赖**（保持零运行时依赖政策）。
+  - 估算对输入线性，故 input/output 可先各自求和再代入，结果一致；**整数守恒**（浮点 raw 分摊 + 最大余数法取整，Σ 行 tokens === Σ 步 token 精确相等）与 **🟡 估算**标签均不变。
+  - 查询层逐 part 抽取由五元组扩为七元组 `[type,name,tool,inputBytes,outputBytes,inputChars,outputChars]`：新增 `length(json_extract(...))`（字符数，code point）与既有 `length(CAST(json_extract(...) AS BLOB))`（UTF-8 字节数）并列（真 `node:sqlite` 实证 `length()` 对文本返回字符数、对 BLOB 返回字节数）。
+  - **wire 契约不变**：`ToolTokenStat {tool,tokens,share,steps}` 与 `GET /api/tool-tokens` 的会话感知 / 未知 id → 404 / db 缺 → 503 语义与 v0.27.0 完全一致；前端 `tooltoken-row` 等 class 与 `data-*` 逐字保留，仅内部权重与角标文案（「字节比例」→「分词估算」）更新。
+  - `DESIGN.md` §5 指标目录 + §6 路由表同步更新（`src/stats/tool-tokens.ts` 头注口径改写）。
+
+### Test
+
+- `test/tool-tokens.test.ts`：新增 `estimateTokensFromLengths` 纯函数面（ASCII 4 字符/token、3 字节 CJK 1 字符/token、线性可加、非正 / 非有限输入 clamp 到 0）；纯函数夹具改用 `{charCount,byteCount}` 并补 CJK-vs-ASCII 重加权用例（证明相对字节口径的改进）；真 `node:sqlite` 夹具新增 CJK 端到端用例，锁定 `length()` 字符语义。
+- 版本 0.28.0（`package.json` + `src/web/api.ts` 的 `INSIGHT_VERSION` 同步）。
+- 全量 633 用例通过；`npm run check` exit 0；真库守恒 6,497,169,959 === 6,497,169,959。
+
 ## [0.23.0] - 2026-10-19
 
 ### Added
