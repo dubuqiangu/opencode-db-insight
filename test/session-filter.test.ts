@@ -432,6 +432,7 @@ const SESSION_FILTER_CONSUMING_PATHNAMES = [
   "/api/trend",
   "/api/models",
   "/api/tool-health",
+  "/api/tool-tokens",
   "/api/agents",
   "/api/todo",
   "/api/hour-heatmap",

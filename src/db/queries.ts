@@ -58,6 +58,10 @@ export {
   queryAgentStats,
 } from "./aggregate-queries.ts"
 
+// v0.27.0 每工具 token 归因（字节比例归因）：独立模块，再导出给 API 层
+// 单一导入面（与上面聚合查询同一纪律）。
+export { queryToolTokens } from "./tool-token-queries.ts"
+
 type SqliteDatabaseConstructor = new (
   databasePath: string,
   options: { readOnly: true },

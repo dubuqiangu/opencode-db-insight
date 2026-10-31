@@ -8,9 +8,16 @@
  * 小字错误率（err N%）。两级警示语言沿用既有色板：errorRate ≥ 10% 用
  * --red（一眼可见），< 10% 用 --amber 提示。health 缺失/为空 → 不渲染
  * 色带与标注，条形图保持原样（安静降级，不炸区块）。
+ *
+ * 第四参 toolTokenStats（GET /api/tool-tokens 的 ToolTokenStat[]，可选）：
+ * 在调用次数榜之下追加一块「按 token 消耗」榜（TOP10，--purple 条形）。
+ * 这是**字节比例归因**（见 DESIGN §5）——🟡 估算，非 DB 字段，故块头带
+ * 估算徽标。token 缺失/为空/全零 → 不渲染该块，调用次数榜保持原样。
+ * 既有调用次数行的 data-*（data-tool / data-count / data-share /
+ * data-error）逐字保留；token 行用独立 class 与 data-* 命名，互不污染。
  */
 
-import { formatCount, formatPercent, escapeHtml } from "../format.js";
+import { formatCount, formatPercent, formatTokens, escapeHtml } from "../format.js";
 import { cssVar } from "../theme.js";
 import { bindHoverTooltip } from "../tooltip.js";
 import { renderEmpty } from "./state-views.js";
@@ -22,6 +29,13 @@ const ROW_HEIGHT = 32;
 const VIEWBOX_WIDTH = 460;
 /** errorRate 达到该值时错误色带/文字升级为 --red（否则 --amber 弱提示）。 */
 const HIGH_ERROR_RATE = 0.1;
+/** token 榜行高（略矮于调用次数榜，弱化主次）。 */
+const TOKEN_ROW_HEIGHT = 26;
+/** token 榜最多展示的工具数。 */
+const TOKEN_TOOL_LIMIT = 10;
+/** 「无工具」桶（零工具步的 token）在榜上的显示名。 */
+const NO_TOOL_LABEL = "（无工具）";
+
 
 /** 跨 agent 合计每个工具的调用次数，降序取前 N。 */
 function aggregateTopTools(agentStats, limit = 10) {
@@ -53,10 +67,78 @@ function clipToolName(name) {
 }
 
 /**
- * 渲染 TOP10 工具条形图。agentStats 为 AgentStat[] 或 null；
- * toolHealthStats 为 ToolHealthStat[] / null（可选，null = 无健康度数据）。
+ * 取 token 榜 TOP-N：过滤脏行、丢弃 tokens ≤ 0 与非有限值（空态不发空图），
+ * 按 tokens 降序、工具名升序稳定排序。返回每行 {tool, tokens, share, steps}。
  */
-export function renderToolBars(container, agentStats, toolHealthStats = null) {
+function topTokenTools(toolTokenStats, limit = TOKEN_TOOL_LIMIT) {
+  const tokenRows = [];
+  for (const tokenStat of Array.isArray(toolTokenStats) ? toolTokenStats : []) {
+    if (tokenStat === null || typeof tokenStat !== "object") continue;
+    if (typeof tokenStat.tool !== "string") continue;
+    if (!Number.isFinite(tokenStat.tokens) || tokenStat.tokens <= 0) continue;
+    tokenRows.push(tokenStat);
+  }
+  tokenRows.sort(
+    (left, right) =>
+      right.tokens - left.tokens ||
+      (left.tool < right.tool ? -1 : left.tool > right.tool ? 1 : 0),
+  );
+  return tokenRows.slice(0, limit);
+}
+
+/** token 榜的显示名：空工具名映射到「（无工具）」桶。 */
+function tokenToolLabel(toolName) {
+  return toolName === "" ? NO_TOOL_LABEL : toolName;
+}
+
+/**
+ * 构建「按 token 消耗」块（块头 + 一张 TOP10 token 条形 SVG）。无有效行
+ * 返回 ""（不渲染空图；调用次数榜照常）。token 色用 --purple，与调用
+ * 次数榜的 --blue/--accent 明确区分。
+ */
+function buildToolTokenBlock(toolTokenStats) {
+  const tokenRows = topTokenTools(toolTokenStats);
+  if (tokenRows.length === 0) return "";
+
+  const maxTokens = tokenRows[0].tokens;
+  const tokenColor = cssVar("--purple");
+  const textColor = cssVar("--text-dim");
+  const trackColor = cssVar("--border");
+  const monoFont = "ui-monospace, Consolas, monospace";
+  const svgHeight = tokenRows.length * TOKEN_ROW_HEIGHT;
+
+  const tokenRowParts = tokenRows.map((tokenStat, rowIndex) => {
+    const yCenter = rowIndex * TOKEN_ROW_HEIGHT + TOKEN_ROW_HEIGHT / 2;
+    const barY = yCenter - 6;
+    const barWidth = Math.max(2, Math.round((tokenStat.tokens / maxTokens) * BAR_MAX_WIDTH));
+    const sharePercent = Number.isFinite(tokenStat.share)
+      ? (tokenStat.share * 100).toFixed(1)
+      : "";
+    return `
+      <g class="tooltoken-row" data-tool="${escapeHtml(tokenStat.tool)}" data-tokens="${tokenStat.tokens}" data-share="${sharePercent}" data-steps="${Number.isFinite(tokenStat.steps) ? tokenStat.steps : 0}">
+        <text x="0" y="${yCenter + 4}" font-size="11" fill="${textColor}" font-family="${monoFont}">${escapeHtml(clipToolName(tokenToolLabel(tokenStat.tool)))}</text>
+        <rect class="toolbar-track" x="${NAME_COLUMN_WIDTH}" y="${barY}" width="${BAR_MAX_WIDTH}" height="12" rx="4" fill="${trackColor}" opacity="0.35"/>
+        <rect x="${NAME_COLUMN_WIDTH}" y="${barY}" width="${barWidth}" height="12" rx="4" fill="${rowIndex === 0 ? cssVar("--accent") : tokenColor}"/>
+        <text x="${VIEWBOX_WIDTH - 2}" y="${yCenter + 4}" font-size="11" fill="${rowIndex === 0 ? cssVar("--accent") : textColor}" font-family="${monoFont}" text-anchor="end">${formatTokens(tokenStat.tokens)}</text>
+      </g>`;
+  });
+
+  return `
+    <div class="tooltoken-block">
+      <div class="tooltoken-head">
+        <span class="tooltoken-title">按 token 消耗</span>
+        <span class="tooltoken-estimate" title="按每 part 的 state.input/state.output 字节比例归因，非 DB 字段">🟡 估算</span>
+      </div>
+      <svg class="toolbars-svg tooltoken-svg" viewBox="0 0 ${VIEWBOX_WIDTH} ${svgHeight}" role="img" aria-label="工具 token 消耗 TOP10（字节比例估算）">${tokenRowParts.join("")}</svg>
+    </div>`;
+}
+
+/**
+ * 渲染 TOP10 工具条形图。agentStats 为 AgentStat[] 或 null；
+ * toolHealthStats 为 ToolHealthStat[] / null（可选，null = 无健康度数据）；
+ * toolTokenStats 为 ToolTokenStat[] / null（可选，null = 无 token 归因数据）。
+ */
+export function renderToolBars(container, agentStats, toolHealthStats = null, toolTokenStats = null) {
   const topTools = agentStats === null ? [] : aggregateTopTools(agentStats, 10);
   if (topTools.length === 0) {
     renderEmpty(container, "没有工具调用记录", "数据库里还没有带 tool part 的 assistant 消息");
@@ -106,7 +188,7 @@ export function renderToolBars(container, agentStats, toolHealthStats = null) {
   });
 
   container.innerHTML = `
-    <svg class="toolbars-svg" viewBox="0 0 ${VIEWBOX_WIDTH} ${svgHeight}" role="img" aria-label="工具调用次数 TOP10">${rowParts.join("")}</svg>`;
+    <svg class="toolbars-svg" viewBox="0 0 ${VIEWBOX_WIDTH} ${svgHeight}" role="img" aria-label="工具调用次数 TOP10">${rowParts.join("")}</svg>${buildToolTokenBlock(toolTokenStats)}`;
 
   for (const row of container.querySelectorAll(".toolbar-row")) {
     const toolName = row.dataset.tool;
@@ -123,6 +205,18 @@ export function renderToolBars(container, agentStats, toolHealthStats = null) {
     bindHoverTooltip(row, () => ({
       title: toolName,
       rows: tooltipRows,
+    }));
+  }
+
+  for (const row of container.querySelectorAll(".tooltoken-row")) {
+    const toolName = tokenToolLabel(row.dataset.tool);
+    bindHoverTooltip(row, () => ({
+      title: toolName,
+      rows: [
+        { label: "token 消耗（🟡 估算）", value: formatTokens(Number(row.dataset.tokens)) },
+        { label: "占比", value: row.dataset.share + "%" },
+        { label: "出现步数", value: formatCount(Number(row.dataset.steps)) },
+      ],
     }));
   }
 }
