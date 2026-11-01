@@ -46,6 +46,16 @@ export const SESSION_SCOPE_KEPT_SECTION_IDS = [
   "kpi-row",
   "panel-tools",
   "panel-funnel",
+  // v0.29.0 A1 记账守恒：端点吃 ?session=，单会话视图下退化为一行对照仍
+  // 成立，故随 Token 漏斗一并保留（不隐藏）。
+  "panel-token-ledger",
+  // v0.29.0 Wave 2A：A4 内容构成 / B5 文件活动同样端点吃 ?session=，单会话
+  // 视图下按该会话归因仍成立，故一并保留（不隐藏）。
+  "panel-content-composition",
+  "panel-file-activity",
+  // v0.29.0 Wave 2B：B6 会话血缘端点吃 ?session=，单会话视图退化为「该
+  // 会话 + 祖先 + 后代」仍成立，故一并保留（不隐藏）。
+  "panel-session-lineage",
   "panel-compaction",
   "panel-todo",
   "panel-models",

@@ -35,13 +35,28 @@ test("router matches /api/export/session/:id.md and tolerates encoded ids", () =
   })
 })
 
+test("router matches /api/export/session/:id.svg (v0.29.0 B8) and tolerates encoded ids", () => {
+  assert.deepEqual(matchApiRoute("/api/export/session/ses_abc.svg"), {
+    routeName: "sessionSvgExport",
+    sessionId: "ses_abc",
+  })
+  assert.deepEqual(matchApiRoute("/api/export/session/ses%20abc.svg/"), {
+    routeName: "sessionSvgExport",
+    sessionId: "ses abc",
+  })
+})
+
 test("router rejects malformed export paths", () => {
   assert.equal(matchApiRoute("/api/export/session/ses_abc"), null, "missing .md suffix")
   assert.equal(matchApiRoute("/api/export/session/ses_abc.txt"), null, "wrong extension")
   assert.equal(matchApiRoute("/api/export/session/.md"), null, "empty session id")
+  assert.equal(matchApiRoute("/api/export/session/.svg"), null, "empty session id (svg)")
   assert.equal(matchApiRoute("/api/export/session/ses_abc.md/extra"), null, "extra segment")
+  assert.equal(matchApiRoute("/api/export/session/ses_abc.svg/extra"), null, "extra segment (svg)")
   assert.equal(matchApiRoute("/api/export/other/ses_abc.md"), null, "unknown collection")
+  assert.equal(matchApiRoute("/api/export/other/ses_abc.svg"), null, "unknown collection (svg)")
   assert.equal(matchApiRoute("/api/export/session/ses_%zz.md"), null, "malformed encoding")
+  assert.equal(matchApiRoute("/api/export/session/ses_%zz.svg"), null, "malformed encoding (svg)")
 })
 
 function buildExportRequestContext(database: Parameters<typeof handleApiRequest>[0]["database"]) {
@@ -92,6 +107,73 @@ test("sessionExport handler renders markdown with download headers", () => {
   assert.ok(apiResponse.rawText!.text.includes("## 🧑 用户"))
   assert.ok(apiResponse.rawText!.text.includes("## 🤖 助手"))
   assert.ok(apiResponse.rawText!.text.includes("## 📋 系统提示词"))
+})
+
+test("sessionSvgExport handler renders an SVG attachment from the same data source", () => {
+  const fakeDatabase = createFakeInsightDatabase({
+    sessions: [buildFakeSessionSummary()],
+    messagesBySessionId: {
+      ses_export_fixture: [
+        { type: "user", data: { text: "帮我修复登录 bug" } },
+        {
+          type: "assistant",
+          data: {
+            agent: "fixer",
+            model: { id: "glm-5.3", providerID: "futureppo" },
+            content: [{ type: "text", text: "已定位问题。" }],
+          },
+        },
+      ],
+    },
+    systemPromptBySessionId: {
+      ses_export_fixture: { "core/environment": "环境提示词" },
+    },
+  })
+
+  const apiResponse = handleApiRequest({
+    ...buildExportRequestContext(fakeDatabase),
+    route: matchApiRoute("/api/export/session/ses_export_fixture.svg")!,
+  })
+  assert.equal(apiResponse.statusCode, 200)
+  assert.ok(apiResponse.rawText, "export must bypass the JSON body convention")
+
+  assert.equal(apiResponse.rawText!.contentType, "image/svg+xml; charset=utf-8")
+  const dispositionHeader = apiResponse.rawText!.headers["Content-Disposition"] ?? ""
+  assert.ok(dispositionHeader.startsWith("attachment;"))
+  assert.ok(
+    dispositionHeader.includes(`filename*=UTF-8''${encodeURIComponent("2026-10-05-导出测试会话.svg")}`),
+    `the real UTF-8 filename must travel via filename*: ${dispositionHeader}`,
+  )
+  assert.match(dispositionHeader, /filename="[^"]*\.svg"/, "an ASCII fallback must be present")
+
+  assert.ok(apiResponse.rawText!.text.startsWith('<?xml version="1.0"'))
+  assert.ok(apiResponse.rawText!.text.includes('xmlns="http://www.w3.org/2000/svg"'))
+  assert.ok(apiResponse.rawText!.text.includes("导出测试会话"))
+  assert.ok(apiResponse.rawText!.text.includes("消息类型构成"))
+  assert.ok(apiResponse.rawText!.text.includes("系统提示词"))
+})
+
+test("sessionSvgExport handler 404s unknown ids and sessions without messages", () => {
+  const fakeDatabase = createFakeInsightDatabase({
+    sessions: [buildFakeSessionSummary()],
+    messagesBySessionId: {},
+    systemPromptBySessionId: {},
+  })
+
+  const unknownResponse = handleApiRequest({
+    ...buildExportRequestContext(fakeDatabase),
+    route: matchApiRoute("/api/export/session/ses_missing.svg")!,
+  })
+  assert.equal(unknownResponse.statusCode, 404)
+  assert.deepEqual(unknownResponse.body, { error: SESSION_NOT_FOUND_MESSAGE })
+  assert.equal(unknownResponse.rawText, undefined)
+
+  const noMessagesResponse = handleApiRequest({
+    ...buildExportRequestContext(fakeDatabase),
+    route: matchApiRoute("/api/export/session/ses_export_fixture.svg")!,
+  })
+  assert.equal(noMessagesResponse.statusCode, 404)
+  assert.deepEqual(noMessagesResponse.body, { error: SESSION_EMPTY_MESSAGE })
 })
 
 test("sessionExport handler 404s unknown ids and sessions without messages", () => {

@@ -69,11 +69,22 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/session-outcomes",
     // v0.27.0 每工具 token 归因：两段路由，db 缺失时同样走 503 短接。
     "/api/tool-tokens",
+    // v0.29.0 A1 记账守恒：两段路由，db 缺失时同样走 503 短接。
+    "/api/token-ledger",
+    // v0.29.0 A4 会话内容构成 / B5 文件活动：两段路由，db 缺失时同样走 503 短接。
+    "/api/content-composition",
+    "/api/file-activity",
+    // v0.29.0 B6 Agent 血缘图：两段路由，db 缺失时同样走 503 短接。
+    "/api/session-lineage",
     // v0.24.0 跨会话搜索端点：两段路由，db 缺失时同样走 503 短接。
     "/api/search",
     "/api/session/ses_example/messages",
+    // v0.29.0 A2/A3 会话事件：4 段路由，db 缺失时同样走 503 短接。
+    "/api/session/ses_example/events",
     "/api/session/ses_example/system-prompt",
     "/api/export/sessions.csv",
+    // v0.29.0 B8 SVG 报告导出：4 段路由，db 缺失时同样走 503 短接。
+    "/api/export/session/ses_example.svg",
   ]
   for (const pathname of dataRoutePathnames) {
     const requestContext = requestContextFor(pathname)

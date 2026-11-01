@@ -233,3 +233,82 @@ v0.22.0 起陆续新增的接口载荷此前未在本文登记，此处补齐形
 ### `/api/models` —— `previousTokens`
 
 - `days>0` 时每个复合行（`modelId + providerId + variant`）带 `previousTokens`（上一等长窗口的 tokens，无基数记 0）；`days=0` / 全历史无上一窗口，恒 0。
+
+---
+
+## 十一、v0.29.0 wire 形状（补录）
+
+v0.29.0（借鉴 dsh-context 实时透视 + billion-context 上下文引擎）新增接口载荷，字段名以源码为准。全部新增端点仍是**只读**、锚定 `session_v2`。
+
+### `/api/token-ledger` —— 记账守恒（A1）
+
+```json
+{
+  "totals": { "promptInput": 0, "promptCacheRead": 0, "promptCacheWrite": 0,
+              "promptTotal": 0, "output": 0, "reasoning": 0,
+              "cacheHitRate": null, "sessions": 0 },
+  "conservation": { "anomalies": { "negativeComponents": 0, "cacheReadExceedsPrompt": 0 },
+                    "balanced": true },
+  "reconciliation": { "residualTokens": 0, "residualRatio": null,
+                      "withinTolerance": false, "tolerance": 0.02 },
+  "sessions": [ { "sessionId": "ses_…", "messages": 37, "promptInput": 0,
+                  "promptCacheRead": 0, "promptCacheWrite": 0, "promptTotal": 0,
+                  "output": 0, "reasoning": 0, "cacheHitRate": null,
+                  "v2Input": 0, "v2CacheRead": 0, "v2CacheWrite": 0, "v2Output": 0 } ]
+}
+```
+
+- `conservation` 是**唯一** pass/fail：`balanced = (negativeComponents === 0 && cacheReadExceedsPrompt === 0)`。
+- `reconciliation` **仅信息性**——message 侧总量与 `session_v2` 对照总量之差来自 compaction 剪枝（`session_v2` 保留被裁历史），超差是已知差值而非异常。
+- `cacheHitRate = promptCacheRead / promptTotal`；`promptTotal === 0 → null`。`sessions` 每会话一行，`promptTotal` desc + `sessionId` asc。吃 `?session=`。
+
+### `/api/session/:id/events` —— 会话事件（A2/A3）
+
+```json
+{ "events": [ { "seq": 12, "timeCreated": 1761…, "type": "model-switched",
+                "detail": "glm-5.3 → claude-4" } ] }
+```
+
+- `type ∈ compaction | model-switched | system`；`seq` 升序。`detail`：compaction → reason（缺失 `"unknown"`）；model-switched → `from → to`；system → 文本前缀（截断 200 code point）。
+- 自带 id、不吃 `?session=`；未知会话 → 404，存在无事件 → 200 `{events:[]}`。
+
+### `/api/content-composition` —— 会话内容构成（A4，字符量口径）
+
+```json
+{ "totalChars": 0,
+  "categories": [ { "key": "assistantText", "chars": 0, "share": 0 } ],
+  "toolEstimatedTokens": 0,
+  "sessions": 0 }
+```
+
+- 六分类 key 白名单恒定出现：`assistantText` / `toolOutput` / `toolInput` / `reasoning` / `userText` / `other`；排序 chars desc + key asc。单位是**字符量**（`length()` code point），**不是 token**。`toolEstimatedTokens` 是全量唯一推算值（只覆盖工具输入 + 输出两类，🟡）。吃 `?session=`。
+
+### `/api/file-activity?limit=20` —— 文件活动（B5）
+
+```json
+{ "totalFiles": 0, "totalOps": 0,
+  "files": [ { "path": "~/a/b.ts", "name": "b.ts", "reads": 3, "edits": 1,
+               "writes": 0, "sessions": 2, "lastActiveMs": 1761… } ] }
+```
+
+- 只统计 `read` / `edit` / `write`；路径规范化（`\`→`/`、折叠 `//`、去尾 `/`、盘符首字母大写）后**脱敏**（`os.homedir()` → `~`）。排序 ops desc + path asc；`totalFiles` / `totalOps` 为截断前全量。limit 缺省 20、clamp 1..100。吃 `?session=`。
+
+### `/api/session-lineage?limit=400` —— Agent 血缘图（B6）
+
+```json
+{ "focusSessionId": null,
+  "nodes": [ { "sessionId": "ses_…", "parentSessionId": null, "title": "…",
+               "agent": "…", "tokens": 0, "timeCreated": 1761…, "childCount": 0 } ],
+  "edges": [ { "parentSessionId": "ses_a", "childSessionId": "ses_b" } ],
+  "stats": { "totalSessions": 0, "graphSessions": 0, "rootCount": 0, "childCount": 0,
+             "orphanParentCount": 0, "selfParentCount": 0, "cycleCount": 0, "maxDepth": 0 },
+  "omittedNodeCount": 0 }
+```
+
+- `tokens` = 三列（input + output + cache.read）合计；`limit` 是**节点预算**（缺省 400、clamp 1..1000），预算内按子树大小 desc 的 BFS 入选，`omittedNodeCount = 候选集 − 入选数`；`stats` 恒为结构全量（不截断）。聚焦时候选集 = 焦点 + 祖先 + 后代。
+- 查询层恒扫全表 `session_v2`（重建祖先链需完整父指针，**不**吃 `?session=`）；路由仍走共享 `?session=` 存在性 gate（未知 id → 404）。
+
+### `/api/export/session/:id.svg` —— SVG 报告导出（B8）
+
+`image/svg+xml; charset=utf-8`（`Content-Disposition: attachment`）。DOM-free 纯函数渲染，`.md` 与 `.svg` 复用同一数据源（summary + messages + flattened system prompt）；**never throws**（坏行降级为占位符，不 500）。自带 id、不吃 `?session=`；未知会话 / 无消息 → 404（`SESSION_NOT_FOUND_MESSAGE` / `SESSION_EMPTY_MESSAGE`），db 缺 → 503。
+

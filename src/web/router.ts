@@ -16,6 +16,12 @@ export type InsightRoute =
   // v0.27.0 每工具 token 归因端点（v0.28.0 起自包含分词估算权重，🟡 估算）：与
   // tool-health 同一两段形状，吃 ?session=。
   | { routeName: "tool-tokens" }
+  // v0.29.0 A1 记账守恒端点：同为两段形状，吃 ?session=。
+  | { routeName: "token-ledger" }
+  // v0.29.0 A4 会话内容构成 / B5 文件活动 / B6 血缘图：同为两段形状，吃 ?session=。
+  | { routeName: "content-composition" }
+  | { routeName: "file-activity" }
+  | { routeName: "session-lineage" }
   | { routeName: "agents" }
   | { routeName: "sessions" }
   | { routeName: "todo" }
@@ -34,8 +40,12 @@ export type InsightRoute =
   // v0.24.0 跨会话搜索端点：无路径参数，q/mode 走查询串（在 api.ts 读）。
   | { routeName: "search" }
   | { routeName: "sessionMessages"; sessionId: string }
+  // v0.29.0 A2/A3 会话事件端点：与 sessionMessages 同一 4 段形状
+  // （/api/session/:id/events），自带 id，不吃 ?session=。
+  | { routeName: "sessionEvents"; sessionId: string }
   | { routeName: "sessionSystemPrompt"; sessionId: string }
   | { routeName: "sessionExport"; sessionId: string }
+  | { routeName: "sessionSvgExport"; sessionId: string }
   | { routeName: "sessionSummaryExport" }
 
 /** Percent-decode a single path segment; malformed encoding yields "". */
@@ -69,6 +79,12 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
     case "tool-health":
     // v0.27.0 每工具 token 归因：同为两段形状、吃 ?session=。
     case "tool-tokens":
+    // v0.29.0 A1 记账守恒：同为两段形状、吃 ?session=。
+    case "token-ledger":
+    // v0.29.0 A4 会话内容构成 / B5 文件活动 / B6 血缘图：同为两段形状、吃 ?session=。
+    case "content-composition":
+    case "file-activity":
+    case "session-lineage":
     case "agents":
     case "sessions":
     case "todo":
@@ -105,6 +121,7 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
       const sessionId = decodePathSegment(pathSegments[2])
       if (sessionId === "") return null
       if (pathSegments[3] === "messages") return { routeName: "sessionMessages", sessionId }
+      if (pathSegments[3] === "events") return { routeName: "sessionEvents", sessionId }
       if (pathSegments[3] === "system-prompt") return { routeName: "sessionSystemPrompt", sessionId }
       return null
     }
@@ -116,13 +133,21 @@ export function matchApiRoute(pathname: string): InsightRoute | null {
       if (pathSegments.length === 3 && pathSegments[2] === "sessions.csv") {
         return { routeName: "sessionSummaryExport" }
       }
-      // /api/export/session/:id.md — the ".md" suffix is literal (DESIGN §6).
+      // /api/export/session/:id.md | :id.svg — the suffix is literal
+      // (DESIGN §6); .md (v0.28.1) and .svg (v0.29.0 B8) share one shape.
       if (pathSegments.length !== 4 || pathSegments[2] !== "session") return null
       const sessionSegment = pathSegments[3]
-      if (!sessionSegment.endsWith(".md")) return null
-      const sessionId = decodePathSegment(sessionSegment.slice(0, -3))
-      if (sessionId === "") return null
-      return { routeName: "sessionExport", sessionId }
+      if (sessionSegment.endsWith(".md")) {
+        const sessionId = decodePathSegment(sessionSegment.slice(0, -3))
+        if (sessionId === "") return null
+        return { routeName: "sessionExport", sessionId }
+      }
+      if (sessionSegment.endsWith(".svg")) {
+        const sessionId = decodePathSegment(sessionSegment.slice(0, -4))
+        if (sessionId === "") return null
+        return { routeName: "sessionSvgExport", sessionId }
+      }
+      return null
     }
     default:
       return null

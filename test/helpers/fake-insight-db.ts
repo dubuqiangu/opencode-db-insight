@@ -6,6 +6,7 @@
  */
 
 import type { SessionSummary, SqliteReadConnection, SqliteStatement } from "../../src/db/types.ts"
+import { coerceNumber } from "../../src/db/rows.ts"
 
 /** Fallback message timestamp when a fixture does not pin one. */
 const DEFAULT_MESSAGE_TIMESTAMP = Date.UTC(2026, 9, 5, 6, 31)
@@ -34,6 +35,80 @@ export interface FakeCompactionMessageFixture {
 
 /** Reason bucket the SQL CASE emits for unusable json_extract results. */
 const UNKNOWN_FAKE_REASON_KEY = "unknown"
+
+/**
+ * Narrow a fixture `data` value to a plain record, mirroring SQLite's
+ * json_type(data) = 'object' judgment (non-object / array / null → null).
+ */
+function fakeDataRecord(rawData: unknown): Record<string, unknown> | null {
+  if (typeof rawData !== "object" || rawData === null || Array.isArray(rawData)) return null
+  return rawData as Record<string, unknown>
+}
+
+/** JS mirror of SQLite `length(text)`: a string → its code-point length, else 0. */
+function fakeTextLength(value: unknown): number {
+  return typeof value === "string" ? value.length : 0
+}
+
+/**
+ * JS mirror of buildToolOutputTextSql: `state.metadata.output` when it is a
+ * non-empty string, else the part's `state.content[]` text blocks joined with
+ * "\n\n". Returns "" when neither is present.
+ */
+function fakeToolOutputText(partRecord: Record<string, unknown>): string {
+  const stateRecord = fakeDataRecord(partRecord["state"])
+  if (stateRecord === null) return ""
+  const metadataRecord = fakeDataRecord(stateRecord["metadata"])
+  const metadataOutput = metadataRecord === null ? undefined : metadataRecord["output"]
+  if (typeof metadataOutput === "string" && metadataOutput !== "") return metadataOutput
+  const stateContent = Array.isArray(stateRecord["content"]) ? stateRecord["content"] : []
+  const textBlocks: string[] = []
+  for (const block of stateContent) {
+    const blockRecord = fakeDataRecord(block)
+    if (blockRecord === null) continue
+    if (blockRecord["type"] === "text" && typeof blockRecord["text"] === "string") {
+      textBlocks.push(blockRecord["text"])
+    }
+  }
+  return textBlocks.join("\n\n")
+}
+
+/**
+ * JS mirror of `length(json_extract(x,'$.state.input'))`: object/array → its
+ * compact JSON text, string → itself, anything else → "".
+ */
+function fakeToolInputText(partRecord: Record<string, unknown>): string {
+  const stateRecord = fakeDataRecord(partRecord["state"])
+  if (stateRecord === null) return ""
+  const inputValue = stateRecord["input"]
+  if (typeof inputValue === "string") return inputValue
+  if (typeof inputValue === "object" && inputValue !== null) return JSON.stringify(inputValue)
+  return ""
+}
+
+/** Resolve a tool part's name: `$.name` wins, empty falls back to legacy `$.tool`. */
+function fakeToolName(partRecord: Record<string, unknown>): string {
+  const nameValue = partRecord["name"]
+  if (typeof nameValue === "string" && nameValue !== "") return nameValue
+  const legacyToolValue = partRecord["tool"]
+  return typeof legacyToolValue === "string" ? legacyToolValue : ""
+}
+
+/**
+ * Resolve a tool part's file path: COALESCE over
+ * `state.input.[path|filePath|file_path]`, first non-empty string wins.
+ */
+function fakeToolPath(partRecord: Record<string, unknown>): string | null {
+  const stateRecord = fakeDataRecord(partRecord["state"])
+  if (stateRecord === null) return null
+  const inputRecord = fakeDataRecord(stateRecord["input"])
+  if (inputRecord === null) return null
+  for (const pathKey of ["path", "filePath", "file_path"]) {
+    const pathValue = inputRecord[pathKey]
+    if (typeof pathValue === "string" && pathValue !== "") return pathValue
+  }
+  return null
+}
 
 /**
  * Mirror the compaction query's SQL CASE (json_valid(data) AND
@@ -137,6 +212,329 @@ export function createFakeInsightDatabase(
     if (sql.trim() === "SELECT 1") {
       // Liveness probe of /api/health (P1-4).
       return { all: () => [], get: () => ({ probe: 1 }) }
+    }
+    if (sql.includes("AS prompt_input")) {
+      // v0.29.0 GET /api/token-ledger：每会话一行的 message 侧 token 三分解
+      // + session_v2 对照列。镜像 SQL 的 LEFT JOIN + GROUP BY SUM——为每个
+      // session_v2 会话算一次 assistant 消息聚合（零 assistant 行 → 0）。
+      // ?session= 时 SQL 同时含内层 session_id = ? 与外层 id = ?，两个绑定
+      // 值相同，取 parameters[0] 即目标会话即可收窄。
+      const hasLedgerSessionFilter = sql.includes("session_id = ?")
+      const aggregateBySessionId = new Map<
+        string,
+        {
+          messageCount: number
+          promptInput: number
+          promptCacheRead: number
+          promptCacheWrite: number
+          output: number
+          reasoning: number
+        }
+      >()
+      for (const [sessionId, messageFixtures] of Object.entries(scenario.messagesBySessionId)) {
+        const aggregate = {
+          messageCount: 0,
+          promptInput: 0,
+          promptCacheRead: 0,
+          promptCacheWrite: 0,
+          output: 0,
+          reasoning: 0,
+        }
+        for (const messageFixture of messageFixtures) {
+          if (messageFixture.type !== "assistant") continue
+          const dataRecord = fakeDataRecord(messageFixture.data)
+          if (dataRecord === null) continue
+          const tokensRecord = fakeDataRecord(dataRecord["tokens"])
+          const cacheRecord = tokensRecord === null ? null : fakeDataRecord(tokensRecord["cache"])
+          aggregate.messageCount += 1
+          aggregate.promptInput += tokensRecord === null ? 0 : coerceNumber(tokensRecord["input"])
+          aggregate.promptCacheRead += cacheRecord === null ? 0 : coerceNumber(cacheRecord["read"])
+          aggregate.promptCacheWrite += cacheRecord === null ? 0 : coerceNumber(cacheRecord["write"])
+          aggregate.output += tokensRecord === null ? 0 : coerceNumber(tokensRecord["output"])
+          aggregate.reasoning += tokensRecord === null ? 0 : coerceNumber(tokensRecord["reasoning"])
+        }
+        aggregateBySessionId.set(sessionId, aggregate)
+      }
+      return {
+        all: (...parameters: unknown[]) => {
+          const sessionFilterValue = hasLedgerSessionFilter ? String(parameters[0] ?? "") : null
+          return sessionRows
+            .filter(
+              (sessionRow) =>
+                sessionFilterValue === null || String(sessionRow.id) === sessionFilterValue,
+            )
+            .map((sessionRow) => {
+              const aggregate = aggregateBySessionId.get(String(sessionRow.id)) ?? {
+                messageCount: 0,
+                promptInput: 0,
+                promptCacheRead: 0,
+                promptCacheWrite: 0,
+                output: 0,
+                reasoning: 0,
+              }
+              return {
+                session_id: sessionRow.id,
+                v2_input: sessionRow.tokens_input,
+                v2_cache_read: sessionRow.tokens_cache_read,
+                v2_cache_write: sessionRow.tokens_cache_write,
+                v2_output: sessionRow.tokens_output,
+                message_count: aggregate.messageCount,
+                prompt_input: aggregate.promptInput,
+                prompt_cache_read: aggregate.promptCacheRead,
+                prompt_cache_write: aggregate.promptCacheWrite,
+                output: aggregate.output,
+                reasoning: aggregate.reasoning,
+              }
+            })
+        },
+        get: () => undefined,
+      }
+    }
+    if (sql.includes("AS compaction_reason")) {
+      // v0.29.0 GET /api/session/:id/events：三类会话事件按 seq 升序。镜像
+      // SQL 的 json_extract（reason / model.id / previous.id / text）；唯一
+      // 绑定参数是会话 id。fake 忽略 session_v2 锚定（与其它分支一致，语义
+      // 权威在 test/session-events.test.ts 的真 SQLite 夹具）。
+      return {
+        all: (...parameters: unknown[]) => {
+          const sessionId = String(parameters[0] ?? "")
+          const messageFixtures = scenario.messagesBySessionId[sessionId] ?? []
+          let fallbackSeq = -1
+          const eventRows: Array<Record<string, unknown>> = []
+          for (const messageFixture of messageFixtures) {
+            if (
+              messageFixture.type !== "compaction" &&
+              messageFixture.type !== "model-switched" &&
+              messageFixture.type !== "system"
+            ) {
+              continue
+            }
+            fallbackSeq += 1
+            const dataRecord = fakeDataRecord(messageFixture.data)
+            const modelRecord = dataRecord === null ? null : fakeDataRecord(dataRecord["model"])
+            const previousRecord =
+              dataRecord === null ? null : fakeDataRecord(dataRecord["previous"])
+            eventRows.push({
+              seq: messageFixture.seq ?? fallbackSeq,
+              time_created: messageFixture.timeCreated ?? DEFAULT_MESSAGE_TIMESTAMP,
+              type: messageFixture.type,
+              // 非 compaction 行 SQL 仍产出该列，但查询层按 type 忽略它。
+              compaction_reason:
+                messageFixture.type === "compaction"
+                  ? fakeSqliteReasonKey(JSON.stringify(messageFixture.data))
+                  : null,
+              switched_to_model:
+                messageFixture.type === "model-switched" && modelRecord !== null
+                  ? modelRecord["id"] ?? null
+                  : null,
+              switched_from_model:
+                messageFixture.type === "model-switched" && previousRecord !== null
+                  ? previousRecord["id"] ?? null
+                  : null,
+              system_text:
+                messageFixture.type === "system" && dataRecord !== null
+                  ? dataRecord["text"] ?? null
+                  : null,
+            })
+          }
+          return eventRows
+        },
+        get: () => undefined,
+      }
+    }
+    if (sql.includes("AS assistant_text_chars")) {
+      // v0.29.0 GET /api/content-composition（A4）：两段扫描 UNION ALL 的
+      // 「一行一 会话×半」形状。镜像 SQL 的 json_each content 遍历与
+      // COALESCE(length(text), length(summary)) 口径；空的 content 不产出
+      // 扫 A 行（与 json_each 对空数组 0 行一致）。语义权威在
+      // test/content-composition.test.ts 的真 SQLite 夹具（fake 不逐字节
+      // 复刻 SQLite 的 json 函数语义，见文件头）。
+      const hasCompositionSessionFilter = sql.includes("session_id = ?")
+      return {
+        all: (...parameters: unknown[]) => {
+          const sessionFilterValue = hasCompositionSessionFilter
+            ? String(parameters[0] ?? "")
+            : null
+          const compositionRows: Array<Record<string, unknown>> = []
+          for (const [sessionId, messageFixtures] of Object.entries(scenario.messagesBySessionId)) {
+            if (sessionFilterValue !== null && sessionId !== sessionFilterValue) continue
+            let assistantTextChars = 0
+            let reasoningChars = 0
+            let toolInputChars = 0
+            let toolOutputChars = 0
+            let toolInputBytes = 0
+            let toolOutputBytes = 0
+            let otherChars = 0
+            let hasAssistantRow = false
+            let nonAssistantTextChars = 0
+            let hasNonAssistantRow = false
+            for (const messageFixture of messageFixtures) {
+              const dataRecord = fakeDataRecord(messageFixture.data)
+              if (messageFixture.type === "assistant") {
+                if (dataRecord === null) continue
+                const contentParts = Array.isArray(dataRecord["content"]) ? dataRecord["content"] : []
+                if (contentParts.length === 0) continue
+                hasAssistantRow = true
+                for (const part of contentParts) {
+                  const partRecord = fakeDataRecord(part)
+                  if (partRecord === null) continue
+                  const partType = String(partRecord["type"] ?? "")
+                  if (partType === "text") {
+                    assistantTextChars += fakeTextLength(partRecord["text"])
+                  } else if (partType === "reasoning") {
+                    reasoningChars += fakeTextLength(partRecord["text"])
+                  } else if (partType === "tool") {
+                    const toolInputText = fakeToolInputText(partRecord)
+                    const toolOutputText = fakeToolOutputText(partRecord)
+                    toolInputChars += toolInputText.length
+                    toolOutputChars += toolOutputText.length
+                    toolInputBytes += Buffer.byteLength(toolInputText, "utf8")
+                    toolOutputBytes += Buffer.byteLength(toolOutputText, "utf8")
+                  } else {
+                    otherChars += fakeTextLength(partRecord["text"])
+                  }
+                }
+              } else if (
+                messageFixture.type === "user" ||
+                messageFixture.type === "synthetic" ||
+                messageFixture.type === "system" ||
+                messageFixture.type === "compaction"
+              ) {
+                if (dataRecord === null) continue
+                hasNonAssistantRow = true
+                const textValue = dataRecord["text"]
+                const summaryValue = dataRecord["summary"]
+                nonAssistantTextChars +=
+                  typeof textValue === "string"
+                    ? textValue.length
+                    : typeof summaryValue === "string"
+                      ? summaryValue.length
+                      : 0
+              }
+            }
+            if (hasAssistantRow) {
+              compositionRows.push({
+                session_id: sessionId,
+                assistant_text_chars: assistantTextChars,
+                reasoning_chars: reasoningChars,
+                tool_input_chars: toolInputChars,
+                tool_output_chars: toolOutputChars,
+                tool_input_bytes: toolInputBytes,
+                tool_output_bytes: toolOutputBytes,
+                other_chars: otherChars,
+                non_assistant_text_chars: 0,
+              })
+            }
+            if (hasNonAssistantRow) {
+              compositionRows.push({
+                session_id: sessionId,
+                assistant_text_chars: 0,
+                reasoning_chars: 0,
+                tool_input_chars: 0,
+                tool_output_chars: 0,
+                tool_input_bytes: 0,
+                tool_output_bytes: 0,
+                other_chars: 0,
+                non_assistant_text_chars: nonAssistantTextChars,
+              })
+            }
+          }
+          return compositionRows
+        },
+        get: () => undefined,
+      }
+    }
+    if (sql.includes("AS raw_path")) {
+      // v0.29.0 GET /api/file-activity（B5）：按 (session_id, raw_path,
+      // tool_name) 归组的扫描。镜像 SQL 的 COALESCE(path|filePath|file_path)
+      // 与工具名解析（name 优先，回退 legacy tool），工具白名单 read/edit/
+      // write。语义权威在 test/file-activity.test.ts 的真 SQLite 夹具。
+      const hasFileActivitySessionFilter = sql.includes("session_id = ?")
+      return {
+        all: (...parameters: unknown[]) => {
+          const sessionFilterValue = hasFileActivitySessionFilter
+            ? String(parameters[0] ?? "")
+            : null
+          const groupedRows = new Map<
+            string,
+            {
+              session_id: string
+              raw_path: string
+              tool_name: string
+              op_count: number
+              last_active_ms: number
+            }
+          >()
+          for (const [sessionId, messageFixtures] of Object.entries(scenario.messagesBySessionId)) {
+            if (sessionFilterValue !== null && sessionId !== sessionFilterValue) continue
+            for (const messageFixture of messageFixtures) {
+              if (messageFixture.type !== "assistant") continue
+              const dataRecord = fakeDataRecord(messageFixture.data)
+              if (dataRecord === null) continue
+              const contentParts = Array.isArray(dataRecord["content"]) ? dataRecord["content"] : []
+              for (const part of contentParts) {
+                const partRecord = fakeDataRecord(part)
+                if (partRecord === null || partRecord["type"] !== "tool") continue
+                const toolName = fakeToolName(partRecord)
+                if (toolName !== "read" && toolName !== "edit" && toolName !== "write") continue
+                const rawPath = fakeToolPath(partRecord)
+                if (rawPath === null) continue
+                const groupKey = `${sessionId}\u0000${rawPath}\u0000${toolName}`
+                const lastActiveMs = messageFixture.timeCreated ?? DEFAULT_MESSAGE_TIMESTAMP
+                const existingRow = groupedRows.get(groupKey)
+                if (existingRow === undefined) {
+                  groupedRows.set(groupKey, {
+                    session_id: sessionId,
+                    raw_path: rawPath,
+                    tool_name: toolName,
+                    op_count: 1,
+                    last_active_ms: lastActiveMs,
+                  })
+                } else {
+                  existingRow.op_count += 1
+                  if (lastActiveMs > existingRow.last_active_ms) {
+                    existingRow.last_active_ms = lastActiveMs
+                  }
+                }
+              }
+            }
+          }
+          return [...groupedRows.values()]
+        },
+        get: () => undefined,
+      }
+    }
+    if (sql.includes("AS child_count")) {
+      // v0.29.0 GET /api/session-lineage（B6）：一行一会话的 lineage 抽取，
+      // 含父指针、display 列、tokens 三列合计与直接子会话数。**必须**放在
+      // 宽泛的 `FROM session_v2` 分支之前（同 A4/B5 分支位置），否则会被它
+      // 截走。语义权威在 test/session-lineage.test.ts 的真 SQLite 夹具。
+      return {
+        all: () => {
+          const childCountByParentId = new Map<string, number>()
+          for (const sessionRow of sessionRows) {
+            const parentSessionId = sessionRow.parent_id
+            if (typeof parentSessionId !== "string" || parentSessionId === "") continue
+            childCountByParentId.set(
+              parentSessionId,
+              (childCountByParentId.get(parentSessionId) ?? 0) + 1,
+            )
+          }
+          return sessionRows.map((sessionRow) => ({
+            session_id: sessionRow.id,
+            parent_id: sessionRow.parent_id ?? null,
+            title: sessionRow.title,
+            agent: sessionRow.agent,
+            time_created: sessionRow.time_created,
+            tokens:
+              Number(sessionRow.tokens_input ?? 0) +
+              Number(sessionRow.tokens_output ?? 0) +
+              Number(sessionRow.tokens_cache_read ?? 0),
+            child_count: childCountByParentId.get(String(sessionRow.id)) ?? 0,
+          }))
+        },
+        get: () => undefined,
+      }
     }
     // v0.28.1：跨会话搜索的扫描现在带 `session_id IN (SELECT id FROM session_v2)`
     // 锚定（B1），于是 SQL 同时含 "FROM session_message" 与 "FROM session_v2"。

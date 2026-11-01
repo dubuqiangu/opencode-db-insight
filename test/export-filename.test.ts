@@ -64,6 +64,13 @@ test("buildExportDownloadFilename uses the session-created local date as prefix"
 
   const untitledSummary = buildFakeSessionSummary({ title: "", timeCreated: Number.NaN })
   assert.equal(buildExportDownloadFilename(untitledSummary), "unknown-date-untitled-session.md")
+
+  // v0.29.0 B8: the .svg export reuses the same stamp/slug, only the
+  // extension differs so both renderings stay distinguishable.
+  assert.equal(
+    buildExportDownloadFilename(sessionSummary, "svg"),
+    "2026-10-05-看板数据核对.svg",
+  )
 })
 
 test("buildExportFilename stamps the export moment as YYYYMMDD-HHmmss", () => {

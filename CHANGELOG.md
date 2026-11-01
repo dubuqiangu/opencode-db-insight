@@ -4,6 +4,36 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 每个里程碑完成后 push 并在此追加一条记录，方便回溯。
 
+## [0.29.0] - 2026-11-02 · 里程碑 D：借鉴 dsh 生态（A 组实时透视 + B 组上下文引擎）
+
+> 借鉴 dsh-context（实时上下文透视）与 billion-context（上下文压缩引擎）两个 dsh 插件的可移植形状（对比见 `references/COMPARISON-dsh-context-billion-context.md`；三者互补非同类：dsh-context 管实时、billion-context 管压缩、本插件管历史归档）。零运行时依赖不变；只读 5 表不变；唯一许可估算仍是既有自包含分词估算（🟡）。
+
+### Added
+
+- **A1 记账守恒端点 `GET /api/token-ledger`**（吃 `?session=`）→ `{totals, conservation, reconciliation, sessions}`：
+  - `totals` = prompt 三分（`promptInput`/`promptCacheRead`/`promptCacheWrite`）+ `promptTotal` + `output` + `reasoning` + `cacheHitRate` + `sessions`。
+  - `conservation`（**pass/fail**）= `{anomalies:{negativeComponents, cacheReadExceedsPrompt}, balanced}`，只看两个异常计数；跨源对照**不**参与判定。
+  - `reconciliation`（**信息性，绝非 pass/fail**）= `{residualTokens, residualRatio, withinTolerance, tolerance:0.02}`：message 侧总量与 `session_v2` 对照总量相减；差值来自 compaction 剪枝（`session_v2` 保留被裁历史，message 侧天然偏小），超差是已知差值而非异常。
+  - `sessions` 每会话一行，`promptTotal` desc + `sessionId` asc。
+- **A2/A3 会话事件端点 `GET /api/session/:id/events`**（自带 id，不吃 `?session=`；未知会话 → 404，存在但无事件 → 200 `{events:[]}`）：`{seq, timeCreated, type, detail}[]`（`type ∈ compaction|model-switched|system`，`seq` 升序）；`detail` 分别取 compaction reason / `from → to` / system 文本前缀（截断 200 code point）。
+- **A4 会话内容构成端点 `GET /api/content-composition`**（吃 `?session=`）→ `{totalChars, categories[{key, chars, share}], toolEstimatedTokens, sessions}`：六分类 `assistantText/toolOutput/toolInput/reasoning/userText/other`（chars desc + key asc）；单位是**字符量**（`length()` code point）**非 token**（真 token 无法归因到分类）；`toolEstimatedTokens` 是全量唯一推算值（只标注工具输入+输出两类，🟡）。
+- **B5 文件活动端点 `GET /api/file-activity?limit=20`**（吃 `?session=`；limit 缺省 20、clamp 1..100）→ `{totalFiles, totalOps, files[{path,name,reads,edits,writes,sessions,lastActiveMs}]}`：只统计 `read`/`edit`/`write`；路径规范化后脱敏（`os.homedir()` → `~`）；ops desc + path asc；totals 为截断前全量。
+- **B6 Agent 血缘图端点 `GET /api/session-lineage?limit=400`**（吃 `?session=` 作聚焦；limit 是节点预算，缺省 400、clamp 1..1000）→ `{focusSessionId, nodes[], edges[], stats{}, omittedNodeCount}`：纯函数侧做自父/孤儿规范化、环断边、深度、子树大小 desc 的 BFS 预算与聚焦候选集（焦点 + 祖先 + 后代）；查询层恒扫全表 `session_v2`（重建祖先链需完整父指针）。
+- **B8 SVG 报告导出 `GET /api/export/session/:id.svg`**（自带 id，不吃 `?session=`；镜像既有 `.md`）→ `image/svg+xml; charset=utf-8` 附件：DOM-free、零依赖、确定性、never throws；内容 = header + 消息类型构成条（idle/synthetic 丢弃）+ 系统提示词说明；wire 串先剥 XML 非法控制字符再转义。
+
+### Changed
+
+- 回放页头部新增「导出 Markdown / 导出 SVG」两个原生 `<a download>` 动作（既有 `.md` 路由此前未在前端暴露）；mock 预览隐藏入口。
+- 回放 token 曲线新增 **Total / Delta** 切换（Delta = 相邻请求差值），并叠加会话事件标记（A2/A3）。
+- 压缩事件新增「压缩阈值（推断）」标注（A2，🟡 推断）。
+- `buildExportDownloadFilename(summary, extension = "md")` 加可选扩展名参数（既有调用零改动）。
+
+### Test
+
+- 新增 `test/token-ledger.test.ts` / `test/content-composition.test.ts` / `test/file-activity.test.ts` / `test/session-lineage.test.ts` / `test/svg-export.test.ts`（纯函数面 + 真 `node:sqlite` parity 夹具）。
+- 同步 `test/router.test.ts` / `test/api-routes.test.ts`（503 名单）/ `test/session-filter.test.ts`（消费 `?session=` 名单）/ `test/helpers/fake-insight-db.ts`（SQL 子串分派）/ `test/web-session-scope.test.ts`（KEPT 清单）/ `test/export-route.test.ts`（`.svg` 路由 + handler）/ `test/export-filename.test.ts`。
+- 全量 **722** 用例通过；`npm run check` exit 0；真库只读冒烟（B6 血缘 1223 会话 / maxDepth 2 / 182-子父聚焦 183 节点；B8 SVG 合法且确定、无 homedir 泄漏）。
+
 ## [0.28.1] - 2026-11-01
 
 ### Fixed

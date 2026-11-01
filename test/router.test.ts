@@ -33,6 +33,13 @@ test("matchApiRoute recognizes every static API route", () => {
   // v0.22.0 B 档工具错误趋势 / 会话结局端点：同款两段静态路由。
   assert.deepEqual(matchApiRoute("/api/tool-error-trend"), { routeName: "tool-error-trend" })
   assert.deepEqual(matchApiRoute("/api/session-outcomes"), { routeName: "session-outcomes" })
+  // v0.29.0 A1 记账守恒端点：两段静态路由，吃 ?session=。
+  assert.deepEqual(matchApiRoute("/api/token-ledger"), { routeName: "token-ledger" })
+  // v0.29.0 A4 会话内容构成 / B5 文件活动：同款两段静态路由，吃 ?session=。
+  assert.deepEqual(matchApiRoute("/api/content-composition"), { routeName: "content-composition" })
+  assert.deepEqual(matchApiRoute("/api/file-activity"), { routeName: "file-activity" })
+  // v0.29.0 B6 Agent 血缘图：同款两段静态路由，吃 ?session=。
+  assert.deepEqual(matchApiRoute("/api/session-lineage"), { routeName: "session-lineage" })
   // v0.14.0 cache-control route: same two-segment shape, no parameters.
   assert.deepEqual(matchApiRoute("/api/refresh"), { routeName: "refresh" })
 })
@@ -44,6 +51,11 @@ test("matchApiRoute matches session routes and decodes the session id", () => {
   })
   assert.deepEqual(matchApiRoute("/api/session/ses_abc123/system-prompt"), {
     routeName: "sessionSystemPrompt",
+    sessionId: "ses_abc123",
+  })
+  // v0.29.0 A2/A3 会话事件：与 messages 同款 4 段形状。
+  assert.deepEqual(matchApiRoute("/api/session/ses_abc123/events"), {
+    routeName: "sessionEvents",
     sessionId: "ses_abc123",
   })
   assert.deepEqual(matchApiRoute("/api/session/ses%20with%20space/messages"), {

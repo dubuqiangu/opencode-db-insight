@@ -1,0 +1,511 @@
+/* ============================================================
+   opencode-db-insight · Wave 1 增量样式（v0.29.0）
+   A1 记账守恒卡片 + A3 曲线 Delta/事件标记（A2 压缩前峰值标注）
+   只放本次新增区块，全部走既有设计令牌；不覆盖 styles.css /
+   components.css 的任何选择器。
+   ============================================================ */
+
+/* ============================================================
+   A1 · Token 记账守恒卡片（#token-ledger）
+   ============================================================ */
+
+/* 卡片根：纵向堆叠四段（判定 / 三分条 / 数值网格 / 守恒明细）
+   + 可折叠逐会话表，段间留白由 gap 统一给。 */
+.ledger-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ---------- 判定行 ---------- */
+.ledger-verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.ledger-verdict-badge {
+  flex: none;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 2px 12px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.ledger-verdict-note { display: inline-flex; align-items: center; gap: 6px; }
+.ledger-verdict-note b { color: var(--text); font-weight: 600; }
+
+/* 完整 / 异常 / 未知：左缘色条 + 徽标同色，三档一眼可辨。 */
+.ledger-verdict-balanced {
+  border-inline-start: 3px solid var(--accent);
+}
+.ledger-verdict-balanced .ledger-verdict-badge { color: var(--accent); background: var(--accent-soft); }
+.ledger-verdict-anomaly {
+  border-inline-start: 3px solid var(--red);
+}
+.ledger-verdict-anomaly .ledger-verdict-badge { color: var(--red); }
+.ledger-verdict-unknown {
+  border-inline-start: 3px solid var(--border-strong);
+}
+.ledger-verdict-unknown .ledger-verdict-badge { color: var(--text-faint); }
+
+/* ---------- prompt 三分堆叠条 + 图例 ---------- */
+.ledger-split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ledger-split-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.ledger-split-head b { color: var(--text); font-weight: 600; }
+.ledger-split-hit { color: var(--text-dim); }
+.ledger-split-hit b { color: var(--accent); }
+
+/* 三段等高条：todo-progress / child-share-dual-bar 的分段语言。 */
+.ledger-split-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ledger-seg { display: block; height: 100%; min-width: 1px; transition: filter 0.12s; }
+.ledger-seg:hover { filter: brightness(1.15); }
+.ledger-seg-input { background: var(--amber); }
+.ledger-seg-read { background: var(--accent); }
+.ledger-seg-write { background: var(--blue); }
+.ledger-seg-empty { background: var(--panel-2); }
+
+.ledger-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.ledger-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.ledger-legend-item b { color: var(--text); font-weight: 600; }
+.ledger-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
+/* 图例色块复用分段色（与堆叠条同色，读图例即认色段）。 */
+.ledger-legend-swatch.ledger-seg-input { background: var(--amber); }
+.ledger-legend-swatch.ledger-seg-read { background: var(--accent); }
+.ledger-legend-swatch.ledger-seg-write { background: var(--blue); }
+.ledger-legend-share { color: var(--text-faint); }
+
+/* ---------- 关键数值网格 ---------- */
+.ledger-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.ledger-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.ledger-metric-label { font-size: 11px; color: var(--text-faint); letter-spacing: 0.2px; }
+.ledger-metric-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+.ledger-metric-unit { font-size: 11px; font-weight: 400; color: var(--text-faint); letter-spacing: 0; }
+
+/* ---------- 守恒校验明细 ---------- */
+.ledger-conservation {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.ledger-conservation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+.ledger-conservation-row:last-child { border-bottom: none; }
+.ledger-conservation-row dt { color: var(--text-dim); }
+.ledger-conservation-row dd { margin: 0; color: var(--text); font-weight: 600; text-align: right; }
+.ledger-conservation-unit { font-size: 11px; font-weight: 400; color: var(--text-faint); }
+
+/* 分量异常行：无异常绿字，命中红字（对照口径见组件文案）。 */
+.ledger-anomaly-row dd { font-weight: 600; }
+.ledger-anomaly-clear dd { color: var(--accent); }
+.ledger-anomaly-hit { background: var(--panel-2); }
+.ledger-anomaly-hit dd { color: var(--red); }
+.ledger-anomaly-hit dd b { font-weight: 650; }
+
+/* ---------- 跨源对照行（信息性，非 pass/fail） ---------- */
+/* 中性一行：🟡 标签 + 对照差值率 / 残差 + 容差状态；与判定行、异常行
+   刻意区分——不出现红/绿语义色，绝不表达「偏差 / 错误」。 */
+.ledger-reconciliation {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.ledger-reconciliation-tag { color: var(--amber); }
+.ledger-reconciliation-metric { display: inline-flex; align-items: baseline; gap: 6px; }
+.ledger-reconciliation-metric b { color: var(--text); font-weight: 600; }
+.ledger-reconciliation-status { color: var(--text-faint); }
+
+/* ---------- 逐会话对照表（默认收起） ---------- */
+.ledger-sessions-details summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+.ledger-sessions-details summary:hover { color: var(--text); }
+.ledger-sessions-details[open] summary { margin-bottom: 6px; }
+.ledger-sessions-scroll { overflow-x: auto; }
+/* 列宽总和 = 150+64+88+96+88；窄于此横向滚动，不压扁任何一列。 */
+.ledger-sessions-table { min-width: 486px; }
+/* 残差非 0 的行：琥珀提示「此处有漂移」，为 0 的行沿用默认暗色。 */
+.data-table td.ledger-session-residual { color: var(--amber); }
+
+/* ============================================================
+   A3 / A2 · 回放消耗曲线扩展（.replay-curve-panel 之内）
+   基础 .replay-curve-* 在 replay.css；此处只补新增元件。
+   ============================================================ */
+
+/* Total / Delta 切换：复用 .range-switch，仅微调尺寸贴合面板头。 */
+.replay-curve-mode button { padding: 4px 16px; }
+
+/* 事件标记的装饰件不吃指针：悬浮交给覆盖其上的透明热区。 */
+.replay-curve-marker-line,
+.replay-curve-marker-glyph,
+.replay-curve-marker-label,
+.replay-curve-delta-dot,
+.replay-curve-marker-line-swatch { pointer-events: none; }
+
+/* 事件悬浮热区（覆盖标记竖线的透明矩形）。 */
+.replay-curve-event-hit { cursor: help; }
+
+/* 标记图例行：压缩 ✂ / 模型切换竖线两条说明，均带小字形样例。 */
+.replay-curve-marker-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  align-items: center;
+}
+.replay-curve-marker-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.replay-curve-marker-glyph { color: var(--amber); font-size: 12px; line-height: 1; }
+/* 图例里的竖线样例：与曲线上 model-switched 标记同色同虚线节奏。 */
+.replay-curve-marker-line-swatch {
+  width: 0;
+  height: 13px;
+  flex: none;
+  border-inline-start: 1px dashed var(--blue);
+}
+/* 🟡 推断：与前缀同一句，不换行断开。 */
+.replay-curve-inferred {
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+/* ============================================================
+   窄屏
+   ============================================================ */
+@media (max-width: 560px) {
+  .ledger-metrics { grid-template-columns: 1fr; }
+  .ledger-conservation-row { grid-template-columns: minmax(0, 1fr); }
+  .ledger-conservation-row dd { text-align: left; }
+  .ledger-verdict { gap: 6px; }
+}
+
+/* ============================================================
+   Wave 2A（v0.29.0）· A4 会话内容构成 + B5 文件活动
+   只放本次新增区块，全部走既有设计令牌；不覆盖 styles.css /
+   components.css 的任何选择器。
+   ============================================================ */
+
+/* ============================================================
+   A4 · 会话内容构成（#content-composition）
+   ============================================================ */
+
+/* 卡片根：纵向堆叠四段（卡头 / 堆叠条 / 图例表 / 工具估算行）。 */
+.content-composition {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.content-composition-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.content-composition-head b { color: var(--text); font-weight: 600; }
+
+/* 单条水平堆叠条：todo-progress / child-share-dual-bar 的分段语言（等高、
+   圆角、边框），分段宽 = chars/合计。 */
+.content-composition-bar {
+  display: flex;
+  height: 18px;
+  border-radius: 9px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.content-composition-bar .todo-seg {
+  display: block;
+  height: 100%;
+  min-width: 1px;
+  transition: filter 0.12s;
+}
+.content-composition-bar .todo-seg:hover { filter: brightness(1.15); }
+/* 六分类配色：只用既有变量；同 key 的分段与图例色块共用同一个 class。 */
+.content-composition-seg-user-text { background: var(--blue); }
+.content-composition-seg-assistant-text { background: var(--accent); }
+.content-composition-seg-reasoning { background: var(--purple); }
+.content-composition-seg-tool-input { background: var(--amber); }
+.content-composition-seg-tool-output { background: var(--red); }
+.content-composition-seg-other { background: var(--text-faint); }
+
+/* 图例表（分类 / 字符数 / 占比）：colgroup 定宽，窄屏横向滚动。 */
+.content-composition-scroll { overflow-x: auto; }
+/* 列宽总和 = 180+120+90；窄于此横向滚动，不压扁任何一列。 */
+.content-composition-table { min-width: 390px; }
+.content-composition-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 8px;
+  vertical-align: baseline;
+}
+
+/* 工具 token 估算行（🟡）：单位是 tokens，与上面的字符构成刻意分开。 */
+.content-composition-estimate {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.content-composition-estimate b { color: var(--text); font-weight: 600; }
+.content-composition-estimate-note { color: var(--text-faint); }
+
+/* ============================================================
+   B5 · 文件活动（#file-activity）
+   ============================================================ */
+
+.file-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.file-activity-scroll { overflow-x: auto; }
+/* 列宽总和 = 280+120+64+64+64+72；窄于此横向滚动。 */
+.file-activity-table { min-width: 664px; }
+.file-activity-name {
+  display: inline-block;
+  max-width: 256px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* 读/改/写迷你比例条：复用 todo-seg 分段语言，高度贴合表格行。 */
+.file-activity-bar-cell { vertical-align: middle; }
+.file-activity-bar {
+  display: flex;
+  height: 10px;
+  width: 100%;
+  min-width: 72px;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.file-activity-bar .todo-seg { display: block; height: 100%; min-width: 1px; }
+.file-activity-seg-read { background: var(--blue); }
+.file-activity-seg-edit { background: var(--amber); }
+.file-activity-seg-write { background: var(--accent); }
+
+.file-activity-meta { font-size: 12px; color: var(--text-dim); }
+.file-activity-meta b { color: var(--text); font-weight: 600; }
+
+@media (max-width: 560px) {
+  .file-activity-name { max-width: 160px; }
+  .content-composition-head { gap: 6px; }
+}
+
+/* ============================================================
+   Wave 2B（v0.29.0）· B6 会话血缘图
+   只放本次新增区块，全部走既有设计令牌；不覆盖 styles.css /
+   components.css 的任何选择器。SVG 着色由组件经 cssVar() 内联，
+   这里只负责布局 / 字体 / 交互态。
+   ============================================================ */
+
+/* 会话血缘（#session-lineage）：卡头小字 / 聚焦条 / 横向滚动画布 / 脚注。 */
+.session-lineage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.session-lineage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.session-lineage-head b { color: var(--text); font-weight: 600; }
+.session-lineage-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.session-lineage-badge {
+  font-size: 11px;
+  color: var(--amber);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--panel-2);
+  cursor: help;
+}
+
+/* 聚焦模式提示条 + 退出按钮。 */
+.session-lineage-focus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.session-lineage-focus-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 2px 10px;
+  color: var(--text);
+  background: var(--panel-2);
+}
+.session-lineage-exit {
+  font-size: 12px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+}
+.session-lineage-exit:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* 宽层横向滚动（不做 pan/zoom）。 */
+.session-lineage-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.session-lineage-svg { display: block; }
+.session-lineage-edges,
+.session-lineage-nodes { pointer-events: none; }
+
+/* 节点盒：内联着色，这里只管过渡；根 / 折叠三种盒共用同一过渡。 */
+.lineage-node-box,
+.lineage-node-box-root,
+.lineage-node-box-more {
+  transition: stroke 0.12s, filter 0.12s;
+}
+.lineage-edge { fill: none; }
+
+/* 会话节点：整盒是一个 <a>，hover 提亮边框。 */
+.lineage-node { pointer-events: auto; cursor: pointer; }
+.lineage-node:hover .lineage-node-box { stroke: var(--accent); }
+.lineage-node-title { font-family: var(--font-ui); }
+.lineage-node-meta { font-family: var(--font-num); }
+
+/* 折叠「+N 更多」节点：可点 / 可键盘聚焦。 */
+.lineage-more { pointer-events: auto; cursor: pointer; }
+.lineage-more:hover .lineage-node-box-more { filter: brightness(1.15); }
+.lineage-more:focus-visible { outline: none; }
+.lineage-more:focus-visible .lineage-node-box-more { stroke-width: 2; }
+.lineage-node-more-label { font-family: var(--font-ui); }
+
+.session-lineage-note {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* ============================================================
+   Wave 3（v0.29.0）· 回放页导出动作（B8）
+   .replay-export = 回放头部标题 / 会话 ID 下方的一排文字链接。
+   只取既有设计令牌；不覆盖 replay.css / styles.css / components.css
+   的任何选择器。
+   ============================================================ */
+
+.replay-export {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.replay-export-link {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+.replay-export-link:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--panel-2);
+}

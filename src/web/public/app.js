@@ -29,11 +29,17 @@ import {
   fetchChildShare,
   fetchToolErrorTrend,
   fetchSessionOutcomes,
+  fetchTokenLedger,
+  fetchContentComposition,
+  fetchFileActivity,
+  fetchSessionLineage,
   fetchSearch,
   fetchRefresh,
   fetchSessionSummaryById,
   SessionScopeNotFoundError,
   MAX_TREND_DAYS,
+  DEFAULT_FILE_ACTIVITY_LIMIT,
+  DEFAULT_SESSION_LINEAGE_LIMIT,
 } from "./data-source.js";
 import { formatTokens, formatPercent, formatCount, escapeHtml } from "./format.js";
 import { onSchemeChange } from "./theme.js";
@@ -55,6 +61,10 @@ import { renderDurationDistributionCard } from "./components/duration-distributi
 import { renderChildShareCard } from "./components/child-share-card.js";
 import { renderToolErrorTrendCard } from "./components/tool-error-trend-card.js";
 import { renderSessionOutcomeCard } from "./components/session-outcome-card.js";
+import { renderTokenLedgerCard } from "./components/token-ledger-card.js";
+import { renderContentCompositionCard } from "./components/content-composition-card.js";
+import { renderFileActivityTable } from "./components/file-activity-table.js";
+import { renderSessionLineageGraph } from "./components/session-lineage-graph.js";
 import { renderSearchPanel } from "./components/search-panel.js";
 import {
   renderSessionScopeChip,
@@ -146,7 +156,23 @@ const state = {
     toolErrorTrendByDays: {},
     // 会话结局（v0.22.0）：全部会话口径，作用域激活时面板整体隐藏、不取数。
     sessionOutcomes: undefined,
+    // 记账守恒（v0.29.0 A1）：作用域感知（端点吃 ?session=），单会话视图下
+    // 退化为一行对照仍成立，故不随作用域隐藏，缓存照常按作用域口径填充。
+    tokenLedger: undefined,
+    // 内容构成（v0.29.0 A4）：作用域感知（端点吃 ?session=），单会话视图下
+    // 仍成立，故不随作用域隐藏，缓存照常按作用域口径填充。
+    contentComposition: undefined,
+    // 文件活动（v0.29.0 B5）：作用域感知（端点吃 ?session=），单会话视图下
+    // 仍成立，故不随作用域隐藏，缓存照常按作用域口径填充。
+    fileActivity: undefined,
+    // 会话血缘（v0.29.0 B6）：作用域感知（端点吃 ?session=），单会话视图下
+    // 退化为「该会话 + 祖先 + 后代」仍成立，故不随作用域隐藏，缓存照常填充。
+    sessionLineage: undefined,
   },
+  // 会话血缘聚焦模式（v0.29.0 B6）：点「+N 更多」把焦点设成该父 id，取数时
+  // 覆盖作用域 id；null = 非聚焦。作用域切换会复位（见
+  // resetSectionCachesForScopeSwitch）。
+  sessionLineageFocusId: null,
   failedSections: new Set(),
   trendCleanup: () => {},
   // 分布卡 cleanup（renderDistributionCard 返回的收起 tooltip 闭包）。
@@ -158,6 +184,8 @@ const state = {
   // 工具错误趋势 / 会话结局卡 cleanup（v0.22.0）。
   toolErrorTrendCleanup: () => {},
   sessionOutcomesCleanup: () => {},
+  // 会话血缘图 cleanup（v0.29.0 B6）：摘掉容器上的聚焦 / 退出委托监听。
+  sessionLineageCleanup: () => {},
 };
 
 /* ---------- DOM 锚点 ---------- */
@@ -192,6 +220,10 @@ const durationDistributionCardElement = document.getElementById("session-duratio
 const childShareCardElement = document.getElementById("child-share");
 const toolErrorTrendCardElement = document.getElementById("session-tool-error-trend");
 const sessionOutcomesCardElement = document.getElementById("session-outcomes");
+const tokenLedgerElement = document.getElementById("token-ledger");
+const contentCompositionElement = document.getElementById("content-composition");
+const fileActivityElement = document.getElementById("file-activity");
+const sessionLineageElement = document.getElementById("session-lineage");
 const rangeSwitchElement = document.getElementById("range-switch");
 const statusDotElement = document.getElementById("status-dot");
 const statusTextElement = document.getElementById("status-text");
@@ -310,6 +342,9 @@ function resetSectionCachesForScopeSwitch() {
   state.cache.toolErrorTrend = undefined;
   state.cache.toolErrorTrendByDays = {};
   state.cache.sessionOutcomes = undefined;
+  // 聚焦模式跟着作用域走：切换作用域后旧的聚焦父 id 不再适用，复位回全图
+  //（本次重载后血缘图按新作用域/无聚焦重取）。
+  state.sessionLineageFocusId = null;
 }
 
 /**
@@ -745,6 +780,103 @@ const loadDirectorySection = createSimpleSectionLoader(
   (directoryStats) =>
     renderDirectoryPanel(directoryPanelElement, directoryStats, state.directoryFilter, onDirectorySelected),
 );
+
+/**
+ * 记账守恒卡（v0.29.0 A1）：作用域感知（/api/token-ledger 吃 ?session=），
+ * 单会话视图下退化为一行对照仍成立，故不随作用域隐藏——loader 始终把
+ * state.sessionScopeId 透传下去，也始终注册进两个加载入口（不走跳过集合）。
+ * 取数/渲染用通用样板：失败走 renderError（含重试）。
+ */
+const loadTokenLedgerSection = createSimpleSectionLoader(
+  "token-ledger",
+  tokenLedgerElement,
+  async () => (state.cache.tokenLedger = await fetchTokenLedger(state.sessionScopeId)),
+  () => renderTokenLedgerCard(tokenLedgerElement, state.cache.tokenLedger),
+);
+
+/**
+ * 会话内容构成卡（v0.29.0 A4）：作用域感知（/api/content-composition 吃
+ * ?session=），单会话视图下按该会话内容归因仍成立，故不随作用域隐藏——
+ * loader 始终把 state.sessionScopeId 透传下去，也始终注册进两个加载入口
+ * （不走跳过集合）。取数/渲染用通用样板：失败走 renderError（含重试）。
+ */
+const loadContentCompositionSection = createSimpleSectionLoader(
+  "content-composition",
+  contentCompositionElement,
+  async () => (state.cache.contentComposition = await fetchContentComposition(state.sessionScopeId)),
+  () => renderContentCompositionCard(contentCompositionElement, state.cache.contentComposition),
+);
+
+/**
+ * 文件活动表（v0.29.0 B5）：作用域感知（/api/file-activity 吃 ?session=），
+ * 单会话视图下按该会话文件操作排行仍成立，故不随作用域隐藏——loader 始终
+ * 把 state.sessionScopeId 透传下去，也始终注册进两个加载入口（不走跳过
+ * 集合）。limit 取 data-source 的契约缺省（与后端一致）。
+ */
+const loadFileActivitySection = createSimpleSectionLoader(
+  "file-activity",
+  fileActivityElement,
+  async () => (state.cache.fileActivity = await fetchFileActivity(DEFAULT_FILE_ACTIVITY_LIMIT, state.sessionScopeId)),
+  () => renderFileActivityTable(fileActivityElement, state.cache.fileActivity),
+);
+
+/**
+ * 会话血缘图（v0.29.0 B6）：作用域感知（/api/session-lineage 吃 ?session=），
+ * 单会话视图下退化为「该会话 + 祖先 + 后代」仍成立，故不随作用域隐藏——
+ * loader 始终注册进两个加载入口（不走跳过集合）。取数用的 session 由聚焦
+ * 模式决定：state.sessionLineageFocusId（点「+N 更多」设置）优先于
+ * state.sessionScopeId。组件读 CSS 变量内联 SVG 配色并返回 cleanup，故用
+ * 手写 loader（非 createSimpleSectionLoader）：作用域版本 + 请求序号双守卫
+ * 弹掉晚到响应，主题切换的重渲在 init 的 onSchemeChange 里按缓存重做。
+ * 失败走 renderError（含重试）。markSection 命名 session-lineage。
+ */
+let sessionLineageLoadSequence = 0;
+
+/** 血缘图的渲染回调（聚焦 / 退出聚焦）；每次渲染重建，无捕获状态。 */
+function sessionLineageRenderOptions() {
+  return {
+    onFocusSession: onSessionLineageFocus,
+    onExitFocus: onSessionLineageExitFocus,
+  };
+}
+
+async function loadSessionLineageSection() {
+  const requestScopeVersion = sessionScopeVersion;
+  const requestSequence = ++sessionLineageLoadSequence;
+  // 聚焦 id 覆盖作用域 id；两者都为 null 时 = 全量森林。
+  const requestSessionId = state.sessionLineageFocusId ?? state.sessionScopeId;
+  try {
+    const sessionLineage = await fetchSessionLineage(requestSessionId, DEFAULT_SESSION_LINEAGE_LIMIT);
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== sessionLineageLoadSequence) return;
+    state.sessionLineageCleanup();
+    state.cache.sessionLineage = sessionLineage;
+    state.sessionLineageCleanup = renderSessionLineageGraph(
+      sessionLineageElement,
+      state.cache.sessionLineage,
+      sessionLineageRenderOptions(),
+    );
+    markSection("session-lineage", true);
+  } catch (error) {
+    if (handleSessionScopeVanished(error)) return;
+    if (requestScopeVersion !== sessionScopeVersion || requestSequence !== sessionLineageLoadSequence) return;
+    renderError(sessionLineageElement, error, loadSessionLineageSection);
+    markSection("session-lineage", false);
+  }
+}
+
+/** 「+N 更多」回调：聚焦该父会话并重取（取数收口在 loader，此处只改状态）。 */
+function onSessionLineageFocus(parentSessionId) {
+  if (typeof parentSessionId !== "string" || parentSessionId === "") return;
+  state.sessionLineageFocusId = parentSessionId;
+  void loadSessionLineageSection();
+}
+
+/** 「退出聚焦」回调：回到作用域（无则全图）并重取。 */
+function onSessionLineageExitFocus() {
+  if (state.sessionLineageFocusId === null) return;
+  state.sessionLineageFocusId = null;
+  void loadSessionLineageSection();
+}
 
 /**
  * 会话 token 分布卡（v0.20.0）：初载与每轮自动刷新取数；null/失败走
@@ -1244,6 +1376,13 @@ async function refreshAllSections() {
       loadCompactionSection(),
       loadTodoSection(),
       loadSearchSection(),
+      // 记账守恒作用域感知：始终取数（吃 ?session=），不进下面的隐藏集。
+      loadTokenLedgerSection(),
+      // 内容构成 / 文件活动同款作用域感知：始终取数，不进下面的隐藏集。
+      loadContentCompositionSection(),
+      loadFileActivitySection(),
+      // 血缘图作用域感知：始终取数（聚焦模式下吃聚焦 id），不进隐藏集。
+      loadSessionLineageSection(),
       // 作用域激活时以下面板整体隐藏（applySessionScopePanelVisibility），
       // 跳过取数——隐藏面板的请求是纯浪费，失败计数也会误导顶栏。
       ...(roundSessionScopeId === null ? [
@@ -1378,6 +1517,13 @@ async function startInitialLoad() {
   loadCompactionSection();
   loadTodoSection();
   loadSearchSection();
+  // 记账守恒作用域感知：始终初载（吃 ?session=），不随作用域隐藏。
+  loadTokenLedgerSection();
+  // 内容构成 / 文件活动同款作用域感知：始终初载，不随作用域隐藏。
+  loadContentCompositionSection();
+  loadFileActivitySection();
+  // 血缘图作用域感知：始终初载（聚焦模式下吃聚焦 id），不随作用域隐藏。
+  loadSessionLineageSection();
   // 作用域缺省为 null，正常全量初载；若初载前用户已点行内按钮进入作用域
   //（竞态窗口极小），isSessionScopeActive 的守卫与 refreshAllSections 的
   // 补一轮机制会追平，这里不必重复判定。
@@ -1449,6 +1595,15 @@ function init() {
     if (state.cache.sessionOutcomes !== undefined && !isSessionScopeActive()) {
       state.sessionOutcomesCleanup();
       state.sessionOutcomesCleanup = renderSessionOutcomeCard(sessionOutcomesCardElement, state.cache.sessionOutcomes);
+    }
+    // 会话血缘图（内联 CSS 变量配色）：主题切换后按缓存重渲，重建委托监听。
+    if (state.cache.sessionLineage !== undefined) {
+      state.sessionLineageCleanup();
+      state.sessionLineageCleanup = renderSessionLineageGraph(
+        sessionLineageElement,
+        state.cache.sessionLineage,
+        sessionLineageRenderOptions(),
+      );
     }
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null, state.cache.toolTokens ?? null);
     if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);

@@ -54,6 +54,18 @@
  *                                          interruptedShare, byErrorType[],
  *                                          recentInterrupted[]}（v0.22.0，
  *                                          「全部会话」口径，不吃 ?session=）
+ *   GET /api/token-ledger[?session=]  → { totals, conservation,
+ *                                          reconciliation,
+ *                                          sessions: TokenLedgerSessionStat[] }
+ *                                          （v0.29.0 A1 记账守恒：消息侧 prompt
+ *                                          三分 + 分量异常完整性校验 +
+ *                                          信息性跨源对照；吃 ?session=）
+ *   GET /api/session/:id/events       → { events: [{ seq, timeCreated,
+ *                                          type: "compaction"|
+ *                                          "model-switched"|"system",
+ *                                          detail }] }（v0.29.0 A2/A3；4 段
+ *                                          路径，不吃 ?session=，会话不在
+ *                                          session_v2 → 404，无事件 → 200 空数组）
  *   GET /api/health              → { status, version, port, dbStatus, dbPath }
  *   GET /api/export/sessions.csv → CSV 附件下载（v0.8.0）：九列
  *                                  id,title,modelId,agent,directory,
@@ -93,6 +105,13 @@ import {
   getMockSearchResults,
 } from "./mock-data.js";
 import { getMockSessionMessages, getMockSessionSystemPrompt } from "./mock-replay-data.js";
+// Wave 1（v0.29.0）：A1 记账守恒 + A2/A3 会话事件的 mock 生产者，单独成文件。
+import { getMockTokenLedger, getMockSessionEvents } from "./mock-token-ledger.js";
+// Wave 2A（v0.29.0）：A4 内容构成 + B5 文件活动的 mock 生产者，各自单独成文件。
+import { getMockContentComposition } from "./mock-content-composition.js";
+import { getMockFileActivity } from "./mock-file-activity.js";
+// Wave 2B（v0.29.0）：B6 会话血缘的 mock 生产者，单独成文件。
+import { getMockSessionLineage } from "./mock-session-lineage.js";
 
 const USE_MOCK = false;
 const API_BASE = "/api";
@@ -224,6 +243,27 @@ export function sessionsExportCsvPath(directory = null, range = DEFAULT_SESSION_
  * ——入口在初始渲染时就按模式决定，不存在"先显示再藏"的闪现。
  */
 export const SESSIONS_CSV_EXPORT_AVAILABLE = !USE_MOCK;
+
+/**
+ * GET /api/export/session/:id.<format> 的下载地址（v0.29.0 B8 回放页导出）。
+ * 导出 URL 的**唯一出处**：format 只认 "md" / "svg"，其余一律回退 "md"
+ * （防御；后端路由把 ".md" / ".svg" 后缀当字面量匹配，拼错只会落 404）。
+ * sessionId 是外部数据，进路径前 encodeURIComponent——与
+ * sessionsExportCsvPath 同为「参数编码单点」，调用方（session-export-links）
+ * 绝不自行拼串。两路都是 4 段路径、自带 id、不吃 ?session=。
+ */
+export function sessionExportPath(sessionId, format = "md") {
+  const exportFormat = format === "svg" ? "svg" : "md";
+  return `${API_BASE}/export/session/${encodeURIComponent(sessionId)}.${exportFormat}`;
+}
+
+/**
+ * 回放页导出入口是否可用（v0.29.0 B8）。mock 预览模式隐藏入口：dev 预览
+ * 没有真实路由 /api/export/session/:id.{md,svg}，点了只会 404。可用性是
+ * 渲染期常量——入口在初始渲染时就按模式决定，不存在"先显示再藏"的闪现
+ * （同 SESSIONS_CSV_EXPORT_AVAILABLE 纪律）。
+ */
+export const REPLAY_EXPORT_AVAILABLE = !USE_MOCK;
 /** KPI sparkline / 今日环比所需的最小趋势窗口。 */
 const OVERVIEW_TREND_WINDOW_DAYS = 15;
 const SESSION_LOOKUP_PAGE_SIZE = 500;
@@ -756,6 +796,94 @@ export async function fetchSessionOutcomes() {
   return sessionOutcomes;
 }
 
+/* ---------------- 记账守恒（v0.29.0 A1） ---------------- */
+
+/**
+ * GET /api/token-ledger[?session=]（v0.29.0 A1）——每会话一行的消息侧 token
+ * 分解 + 与 session_v2 对照的守恒校验（载荷形状见 stats/token-ledger.ts）。
+ * 端点在 SESSION_FILTER_CONSUMING_ROUTE_NAMES 内：sessionScopeId 非空时
+ * 只统计该会话（单会话视图下退化为一行对照，仍成立，故面板不随作用域隐藏）。
+ * 非对象 body 视为契约破坏（走区块错误态）。
+ * USE_MOCK 走 mock-token-ledger.js 的 getMockTokenLedger 缝（同 getMock* 纪律）。
+ */
+export async function fetchTokenLedger(sessionScopeId = null) {
+  if (USE_MOCK) return resolveWithLatency(getMockTokenLedger());
+  const tokenLedger = await fetchSessionScopedJson("/token-ledger", sessionScopeId);
+  if (tokenLedger === null || typeof tokenLedger !== "object" || Array.isArray(tokenLedger)) {
+    throw new Error("/api/token-ledger 返回空数据");
+  }
+  return tokenLedger;
+}
+
+/* ---------------- 内容构成 / 文件活动（v0.29.0 Wave 2A） ---------------- */
+
+/** 文件活动表的契约缺省条数（与后端 DEFAULT_FILE_ACTIVITY_LIMIT 一致）。 */
+export const DEFAULT_FILE_ACTIVITY_LIMIT = 20;
+
+/**
+ * GET /api/content-composition[?session=]（v0.29.0 A4）——按**字符量**归因的
+ * 会话内容构成（文本 / 推理 / 工具入出）+ 工具 token 估算（🟡）。载荷形状见
+ * stats/content-composition.ts。端点在 SESSION_FILTER_CONSUMING_ROUTE_NAMES
+ * 内：sessionScopeId 非空时只统计该会话（单会话视图仍成立，故面板不随作用域
+ * 隐藏）。非对象 body 视为契约破坏（走区块错误态）。
+ * USE_MOCK 走 mock-content-composition.js 的 getMockContentComposition 缝
+ * （同 getMock* 纪律）。
+ */
+export async function fetchContentComposition(sessionScopeId = null) {
+  if (USE_MOCK) return resolveWithLatency(getMockContentComposition());
+  const contentComposition = await fetchSessionScopedJson("/content-composition", sessionScopeId);
+  if (contentComposition === null || typeof contentComposition !== "object" || Array.isArray(contentComposition)) {
+    throw new Error("/api/content-composition 返回空数据");
+  }
+  return contentComposition;
+}
+
+/**
+ * GET /api/file-activity?limit=20[&session=]（v0.29.0 B5）——只统计 read /
+ * edit / write 的文件活动排行（grep / glob / shell / bash / patch /
+ * ast_grep 由后端排除），路径已在服务端脱敏（homedir → `~`）。载荷形状见
+ * stats/file-activity.ts。端点在 SESSION_FILTER_CONSUMING_ROUTE_NAMES 内：
+ * sessionScopeId 非空时只统计该会话（单会话视图仍成立，故面板不随作用域
+ * 隐藏）。非对象 body 视为契约破坏（走区块错误态）。
+ * USE_MOCK 走 mock-file-activity.js 的 getMockFileActivity 缝（同 getMock* 纪律）。
+ */
+export async function fetchFileActivity(limit = DEFAULT_FILE_ACTIVITY_LIMIT, sessionScopeId = null) {
+  if (USE_MOCK) return resolveWithLatency(getMockFileActivity(limit));
+  const fileActivity = await fetchSessionScopedJson(`/file-activity?limit=${limit}`, sessionScopeId);
+  if (fileActivity === null || typeof fileActivity !== "object" || Array.isArray(fileActivity)) {
+    throw new Error("/api/file-activity 返回空数据");
+  }
+  return fileActivity;
+}
+
+/* ---------------- 会话血缘（v0.29.0 Wave 2B） ---------------- */
+
+/** 会话血缘图的**节点预算**缺省（对齐后端 stats/session-lineage.ts 的 LINEAGE_NODE_BUDGET）。 */
+export const DEFAULT_SESSION_LINEAGE_LIMIT = 400;
+/** 会话血缘图的节点预算上限（对齐后端 MAX_LINEAGE_NODE_BUDGET）。 */
+export const MAX_SESSION_LINEAGE_LIMIT = 1000;
+
+/**
+ * GET /api/session-lineage?limit=N[&session=]（v0.29.0 B6）——按 parent_id
+ * 推导的会话父子血缘（分层树）。载荷形状见 stats/session-lineage.ts。
+ * **limit 是节点预算**（后端 LINEAGE_NODE_BUDGET=400 / MAX_LINEAGE_NODE_BUDGET
+ * =1000，路由走 boundedIntParamKey 先夹后作缓存键），不是根子树数——缺省值
+ * 必须与后端对齐，否则会把真图截到很小。端点在
+ * SESSION_FILTER_CONSUMING_ROUTE_NAMES 内：sessionScopeId 非空时返回「该
+ * 会话 + 祖先 + 全部后代」的聚焦子图（缺省为整片森林），单会话视图下仍成立，
+ * 故面板不随作用域隐藏。非对象 body 视为契约破坏（走区块错误态）。
+ * focusSessionId 由 app.js 决定（聚焦模式传其 id，否则传作用域 id）。
+ * USE_MOCK 走 mock-session-lineage.js 的 getMockSessionLineage 缝（同 getMock* 纪律）。
+ */
+export async function fetchSessionLineage(sessionScopeId = null, limit = DEFAULT_SESSION_LINEAGE_LIMIT) {
+  if (USE_MOCK) return resolveWithLatency(getMockSessionLineage(sessionScopeId, limit));
+  const sessionLineage = await fetchSessionScopedJson(`/session-lineage?limit=${limit}`, sessionScopeId);
+  if (sessionLineage === null || typeof sessionLineage !== "object" || Array.isArray(sessionLineage)) {
+    throw new Error("/api/session-lineage 返回空数据");
+  }
+  return sessionLineage;
+}
+
 /* ---------------- 会话回放数据 ---------------- */
 
 /**
@@ -775,6 +903,30 @@ export async function fetchSessionMessages(sessionId) {
     throw new SessionNotFoundError();
   }
   return messageRecords;
+}
+
+/**
+ * GET /api/session/:id/events（v0.29.0 A2/A3）——按 seq 升序的会话事件
+ * （compaction / model-switched / system）。4 段路径，与 messages 同形；
+ * 不吃 ?session=。契约：会话不在 session_v2 → 404；会话存在但无事件 →
+ * 200 { events: [] }。事件是曲线的**可选叠加层**：404 / 形状不符一律
+ * 安静降级为 { events: [] }（不炸回放页，曲线照常渲染）。
+ * USE_MOCK 走 mock-token-ledger.js 的 getMockSessionEvents 缝；mock 对
+ * legacy_ 前缀会话返回 null，转成 SessionNotFoundError（与 messages 同语义）。
+ */
+export async function fetchSessionEvents(sessionId) {
+  if (USE_MOCK) {
+    const eventsPayload = getMockSessionEvents(sessionId);
+    if (eventsPayload === null) throw new SessionNotFoundError();
+    return eventsPayload;
+  }
+  const response = await fetchResponse(`/session/${encodeURIComponent(sessionId)}/events`);
+  if (response.status === 404) return { events: [] };
+  const eventsPayload = await response.json().catch(() => null);
+  if (eventsPayload === null || typeof eventsPayload !== "object" || !Array.isArray(eventsPayload.events)) {
+    return { events: [] };
+  }
+  return eventsPayload;
 }
 
 /**

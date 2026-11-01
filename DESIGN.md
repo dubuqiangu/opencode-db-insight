@@ -176,6 +176,10 @@ opencode-db-insight/
 | 压缩事件 | compaction 消息计数（按会话/按日/按 reason） | 马拉松会话信号（v0.2 已接线） |
 | 目录维度 | 会话数 / assistant 步数 / tokens 三分（tokensInput / tokensOutput / tokensCacheRead，读 session_v2 汇总列）/ 最近活跃（MAX time_updated）按 session_v2.directory 聚合 | 全量口径，NULL/空目录排除出列表与 totals（v0.3 已接线）；tokens 三分为预聚合方案——step 子查询先 GROUP BY session_id 消除行扇出，SUM 不被步数放大（v0.15.0） |
 | todo 完成率 | completed / total | `todo` 表 |
+| 记账守恒 | message 侧 prompt 三分（Σ `$.tokens.input` / `cache.read` / `cache.write`）+ `promptTotal` 与命中率；对照 `session_v2` 四列（input / cache_read / cache_write / output） | v0.29.0 A1；**完整性（pass/fail）只看异常计数** `negativeComponents` / `cacheReadExceedsPrompt`；跨源 `residualRatio` **仅信息性**（compaction 剪枝使 message 侧天然偏小，超差是已知差值，绝不作 pass/fail）；吃 `?session=` |
+| 会话内容构成 | 六分类**字符量**（`length()` code point）：assistantText / toolOutput / toolInput / reasoning / userText / other；`toolEstimatedTokens` = 自包含分词估算（仅工具输入+输出） | v0.29.0 A4；**字符量非 token**（真 token 无法归因到内容分类）；六分类 key 恒定出现、chars desc + key asc；🟡 仅工具估算那一项；吃 `?session=` |
+| 文件活动 | 只归组 `read`/`edit`/`write` 的 `$.state.input` 路径（规范化后 homedir→`~` 脱敏），按路径合计 reads / edits / writes / sessions / lastActiveMs | v0.29.0 B5；**无**改动行数 / 文件大小（DB 无字段）；ops desc + path asc；totals 为截断前全量；吃 `?session=` |
+| Agent 血缘图 | `session_v2` 父子指针构图：节点 tokens = input+output+cache.read 合计；自父 / 孤儿规范化为根、环断边、深度、子树大小 desc 的 BFS 预算、聚焦候选集（焦点 + 祖先 + 后代） | v0.29.0 B6；`limit` 为**节点预算**（缺省 400 / 上限 1000）；`omittedNodeCount` = 候选集 − 入选；`stats` 恒为结构全量（不截断）；聚焦走 `?session=` 存在性 gate |
 | 数字精度标签 | cost 为 DB 实值标 🟢；tokens 换算金额标 🟡 估算 | 采纳 claude-lens 精度分级；精度徽标仅在 KPI 卡逐数生效（kpi-card.js），模型表 / 会话列表 / 回放等其余面板由 index.html 页脚全局图例（🟢/🟡 说明）兜底语义 |
 
 ## 6. Web API 设计（全部 GET；除 sessions.csv 为 CSV 附件外均 JSON）
@@ -188,6 +192,7 @@ opencode-db-insight/
 | `/api/agents` | agent 用量 + 工具指纹 |
 | `/api/tool-health` | 工具健康榜（v0.18.0）：session_message 工具段 `$.state.status` 两段式抽取聚合 `{tool, completed, error, running, total, errorRate}`，total 降序；**v0.22.0 起扫描无条件锚定 `session_v2`（排除孤儿消息，与各分布 / `session-outcomes` 同锚）**，抽取与 `/api/tool-error-trend` 收敛到共享模块 `tool-part-extraction.ts` |
 | `/api/tool-tokens` | 每工具 token 归因榜（v0.27.0；v0.28.0 起自包含分词估算权重，🟡 估算）：`ToolTokenStat[]` = `{tool, tokens, share, steps}`，tokens 降序、tool 名升序；**分词估算归因**（见 §5）——逐 assistant 消息按 `$.content` 每 part 抽取 `[type,name,tool,inputBytes,outputBytes,inputChars,outputChars]` 并按去重工具名估算权重分摊步 token（规模取自 `$.state.input` 与输出字段 = `$.state.metadata.output`（字符串）否则 `$.state.content[]` 各 `{type:"text",text}` 拼接，**不是** `$.state.output`）；**整数守恒：Σ tokens === 全量步 token（精确相等）**；`tool=""` 为「无工具」桶；全部会话口径、锚定 `session_v2`，吃 `?session=`（未知 id → 404，db 缺失 → 503）；**wire 契约自 v0.27.0 不变** |
+| `/api/token-ledger` | 记账守恒（v0.29.0 A1）：`{totals, conservation, reconciliation, sessions}`；**conservation（pass/fail）只看异常计数**，reconciliation 仅信息性（compaction 剪枝致 message 侧偏小，超差是已知差值）；全部会话口径、锚定 `session_v2`，吃 `?session=`（未知 id → 404，db 缺 → 503） |
 | `/api/hour-heatmap?days=90` | 7×24 时段热力网格（168 格零填充，weekday=0 周日为外层；v0.18.0 起前端可选 7/30/90/全部窗口，副文案随选择动态化） |
 | `/api/session-survival` | 会话存活统计（中位时长 / 短命占比 / idle 结局分布） |
 | `/api/session-distribution` | 会话 token 总量分布（对数半档桶 + p50/p90/p99），排除零消耗会话（v0.20.0） |
@@ -196,6 +201,9 @@ opencode-db-insight/
 | `/api/child-share` | 子代理开销占比（子/根会话数与 tokens、childShare）+ 直接子代消耗 TOP5 父会话（v0.21.0） |
 | `/api/tool-error-trend?days=30` | 工具错误率逐日时序（v0.22.0）：本地日分桶的 `{days, points[{date, toolCalls, errors, errorRate}]}`；缺省 30、clamp 1..366（clamp 后入缓存键）；全部会话口径、**不吃 `?session=`**；与 `/api/tool-health` 同源抽取（跨路由 Σ 守恒） |
 | `/api/session-outcomes` | 失败中断会话（v0.22.0，🟡 推断）：`{totalSessions, sessionsWithSteps, interruptedSessions, interruptedShare, byErrorType[], recentInterrupted[]}`；`sessionsWithSteps` 与步数分布同口径（锚定 `session_v2`），`recentInterrupted` limit 5（`time_updated` 降序）；全部会话口径、**不吃 `?session=`**（路径为**复数**） |
+| `/api/content-composition` | 会话内容构成（v0.29.0 A4）：`{totalChars, categories[{key,chars,share}], toolEstimatedTokens, sessions}`；六分类**字符量**（非 token），chars desc + key asc；`toolEstimatedTokens` 🟡 仅工具输入+输出；吃 `?session=` |
+| `/api/file-activity?limit=20` | 文件活动（v0.29.0 B5）：`{totalFiles, totalOps, files[{path,name,reads,edits,writes,sessions,lastActiveMs}]}`；只统计 read/edit/write；路径规范化 + homedir→`~` 脱敏；ops desc + path asc；limit 缺省 20、clamp 1..100；吃 `?session=` |
+| `/api/session-lineage?limit=400` | Agent 血缘图（v0.29.0 B6）：`{focusSessionId, nodes[], edges[], stats{}, omittedNodeCount}`；`limit` 为**节点预算**（400/1000），子树大小 desc 的 BFS 入选；自父 / 孤儿规范化、环断边；聚焦候选集 = 焦点 + 祖先 + 后代；查询层恒扫全表、路由走 `?session=` 存在性 gate |
 | `/api/compaction` | 压缩事件统计（总数 / 按 reason / 近 30 日逐日 / Top 10 会话） |
 | `/api/todo` | todo 完成率统计（供看板卡片） |
 | `/api/directories?limit=10` | 按项目目录统计（目录排行：会话数 / 步数 / 最近活跃；limit 钳位 1..50，全量口径无 days 窗口） |
@@ -203,7 +211,9 @@ opencode-db-insight/
 | `/api/search?q=&mode=` | 跨会话全文搜索（v0.25.0）：`{query, mode, hits[{sessionId, sessionTitle, messageId, messageType, snippet, hitCount}], total, error?}`；子串（大小写不敏感）/ 正则两模式；空 `q` → 200 空候选；非法正则 → 200 + `error:"invalid regex"`；命中上限 200（按 messageId 去重），`total` 为真实全量匹配数；**全局口径、锚定 `session_v2`、不吃 `?session=`** |
 | `/api/session/:id/messages` | 单会话全部消息（角色分型，供回放） |
 | `/api/session/:id/system-prompt` | 该会话关联的 instruction_blob 内容 |
+| `/api/session/:id/events` | 该会话 compaction / model-switched / system 事件（v0.29.0 A2/A3）：`{events:[{seq,timeCreated,type,detail}]}`，`seq` 升序；`detail` = compaction reason / `from → to` / system 文本前缀；自带 id、不吃 `?session=`；未知会话 → 404，无事件 → 200 空数组 |
 | `/api/export/session/:id.md` | 服务端渲染的 Markdown 导出 |
+| `/api/export/session/:id.svg` | 服务端渲染的 SVG 报告导出（v0.29.0 B8）：`image/svg+xml` 附件；DOM-free、零依赖、确定性、never throws；与 `.md` 复用同一数据源 |
 | `/api/export/sessions.csv` | 会话汇总 CSV 导出（v0.8.0）：九列固定序 id,title,modelId,agent,directory,timeCreated,timeUpdated,tokens,cost；RFC 4180 转义 + CRLF + UTF-8 BOM（Excel 中文不乱码）；全量翻页拉取（500/页）不截断，固定 sessions 默认序 + `id ASC` 决胜保证无重无漏；`?directory=` / `?range=` 与 sessions 同契约（导出是过滤视图快照）；一次性点击不走缓存 |
 | `/api/refresh` | 清空进程内统计结果缓存（v0.14.0）：GET，恒 200 `{status:"ok", cleared:N}`；不依赖 db（db 为 null 仍 200，不进 503 名单）；路由自身不入缓存（避免自占用缓存槽），清空后下次查询重算 |
 | `/api/health` | 端口/版本/db 可达性探活 |

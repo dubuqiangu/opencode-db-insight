@@ -39,6 +39,11 @@ import {
   sessionExistsInSessionV2,
 } from "../db/queries.ts"
 import { queryCrossSessionSearch } from "../db/search-queries.ts"
+import { queryTokenLedger } from "../db/token-ledger-queries.ts"
+import { querySessionEvents } from "../db/session-event-queries.ts"
+import { queryContentComposition } from "../db/content-composition-queries.ts"
+import { queryFileActivity } from "../db/file-activity-queries.ts"
+import { querySessionLineage } from "../db/session-lineage-queries.ts"
 import {
   queryCompactionStats,
   queryHourHeatmap,
@@ -59,12 +64,24 @@ import {
 import { queryToolErrorTrend } from "../db/tool-error-trend-queries.ts"
 import { querySessionOutcome } from "../db/session-outcome-queries.ts"
 import { renderSessionMarkdown } from "../export/markdown.ts"
+import { renderSessionSvgReport } from "../export/svg.ts"
 import {
   renderSessionSummaryCsv,
   SESSION_SUMMARY_CSV_CONTENT_TYPE,
   SESSION_SUMMARY_CSV_FILENAME,
 } from "./session-summary-csv.ts"
 import { buildCacheKey, cachedResult, clearResultCache, resultCacheSize } from "../stats/cache.ts"
+import { computeTokenLedger } from "../stats/token-ledger.ts"
+import { computeContentComposition } from "../stats/content-composition.ts"
+import {
+  DEFAULT_FILE_ACTIVITY_LIMIT,
+  MAX_FILE_ACTIVITY_LIMIT,
+} from "../stats/file-activity.ts"
+import {
+  computeSessionLineage,
+  LINEAGE_NODE_BUDGET,
+  MAX_LINEAGE_NODE_BUDGET,
+} from "../stats/session-lineage.ts"
 import { MAX_TREND_DAYS } from "../stats/daily-buckets.ts"
 import {
   parseNonNegativeIntegerParam,
@@ -73,7 +90,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.28.1"
+export const INSIGHT_VERSION = "0.29.0"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -106,6 +123,10 @@ const SESSION_FILTER_CONSUMING_ROUTE_NAMES: ReadonlySet<string> = new Set([
   "models",
   "tool-health",
   "tool-tokens",
+  "token-ledger",
+  "content-composition",
+  "file-activity",
+  "session-lineage",
   "agents",
   "todo",
   "hour-heatmap",
@@ -189,26 +210,34 @@ export function buildExportSlug(sessionTitle: string): string {
   return windowsSafeTitle === "" ? "untitled-session" : windowsSafeTitle
 }
 
-/** Download filename for the export route: <session-created YYYY-MM-DD>-<slug>.md */
-export function buildExportDownloadFilename(sessionSummary: SessionSummary): string {
+/**
+ * Download filename for the export route: <session-created YYYY-MM-DD>-<slug>.<ext>.
+ * The extension defaults to "md" (the v0.28.1 export); v0.29.0 B8 passes
+ * "svg" so both renderings of the same session stay distinguishable.
+ */
+export function buildExportDownloadFilename(
+  sessionSummary: SessionSummary,
+  extension = "md",
+): string {
   const createdDate = new Date(sessionSummary.timeCreated)
   const twoDigits = (value: number) => String(value).padStart(2, "0")
   const dateStamp = Number.isNaN(createdDate.getTime())
     ? "unknown-date"
     : `${createdDate.getFullYear()}-${twoDigits(createdDate.getMonth() + 1)}-${twoDigits(createdDate.getDate())}`
-  return `${dateStamp}-${buildExportSlug(sessionSummary.title)}.md`
+  return `${dateStamp}-${buildExportSlug(sessionSummary.title)}.${extension}`
 }
 
 /**
  * ASCII-only fallback for the Content-Disposition filename parameter (the
  * header itself must be ASCII; the real UTF-8 name travels via filename*).
+ * The degenerate-name fallback keeps the caller's extension.
  */
-function asciiFilenameFallback(downloadFilename: string): string {
+function asciiFilenameFallback(downloadFilename: string, extension = "md"): string {
   const asciiOnly = downloadFilename
     .replace(/[^\x20-\x7e]/g, "")
     .replace(/["\\]/g, "")
     .replace(/\s+/g, "-")
-  return asciiOnly === "" ? "session-export.md" : asciiOnly
+  return asciiOnly === "" ? `session-export.${extension}` : asciiOnly
 }
 
 /**
@@ -459,6 +488,96 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         )
         return { statusCode: 200, body: agentStats }
       }
+      case "token-ledger": {
+        // v0.29.0 A1 记账守恒：与 tool-tokens 同一缓存键形状（会话维度，
+        // "" = 缺省不过滤）。查询层只抽取每会话一行样本，聚合在纯函数
+        // computeTokenLedger —— 响应体 =
+        // { totals, conservation, reconciliation, sessions }。
+        const tokenLedger = cachedResult(
+          buildCacheKey("queryTokenLedger", [sessionFilterId ?? ""]),
+          () => {
+            const tokenLedgerSamples = queryTokenLedger(database, sessionFilterId)
+            return tokenLedgerSamples === null ? null : computeTokenLedger(tokenLedgerSamples)
+          },
+        )
+        if (tokenLedger === null) {
+          return { statusCode: 503, body: { error: DATABASE_UNAVAILABLE_MESSAGE } }
+        }
+        return { statusCode: 200, body: tokenLedger }
+      }
+      case "content-composition": {
+        // v0.29.0 A4 会话内容构成：仅会话维缓存键（与 tool-tokens 同形状，
+        // "" = 缺省不过滤）。查询层抽取每会话一行的字符量样本，聚合在纯
+        // 函数 computeContentComposition —— 响应体 =
+        // { totalChars, categories, toolEstimatedTokens, sessions }。
+        const contentComposition = cachedResult(
+          buildCacheKey("queryContentComposition", [sessionFilterId ?? ""]),
+          () => {
+            const contentCompositionSamples = queryContentComposition(database, sessionFilterId)
+            return contentCompositionSamples === null
+              ? null
+              : computeContentComposition(contentCompositionSamples)
+          },
+        )
+        if (contentComposition === null) {
+          return { statusCode: 503, body: { error: DATABASE_UNAVAILABLE_MESSAGE } }
+        }
+        return { statusCode: 200, body: contentComposition }
+      }
+      case "file-activity": {
+        // v0.29.0 B5 文件活动：limit 走 boundedIntParamKey（P2-6 clamp-before-key），
+        // 再追加 session 维（与 directories 同一缓存键形状）。
+        const fileActivityWindow = boundedIntParamKey(
+          requestContext.searchParams,
+          "limit",
+          DEFAULT_FILE_ACTIVITY_LIMIT,
+          MAX_FILE_ACTIVITY_LIMIT,
+        )
+        const fileActivity = cachedResult(
+          buildCacheKey("queryFileActivity", [
+            ...fileActivityWindow.cacheKeyParameters,
+            sessionFilterId ?? "",
+          ]),
+          () => queryFileActivity(database, fileActivityWindow.boundedValue, sessionFilterId),
+        )
+        if (fileActivity === null) {
+          return { statusCode: 503, body: { error: DATABASE_UNAVAILABLE_MESSAGE } }
+        }
+        return { statusCode: 200, body: fileActivity }
+      }
+      case "session-lineage": {
+        // v0.29.0 B6 Agent 血缘图：limit 走 boundedIntParamKey（P2-6
+        // clamp-before-key）作为节点预算，再追加 session 维作聚焦 id。
+        // querySessionLineage 恒扫全表、不吃 ?session=（重建祖先链需要完整
+        // 父指针），聚焦在纯函数 computeSessionLineage 侧完成；路由仍走共享
+        // ?session= 存在性 gate（未知 id 统一 404），故本 case 进
+        // SESSION_FILTER_CONSUMING_ROUTE_NAMES。
+        const lineageWindow = boundedIntParamKey(
+          requestContext.searchParams,
+          "limit",
+          LINEAGE_NODE_BUDGET,
+          MAX_LINEAGE_NODE_BUDGET,
+        )
+        const sessionLineage = cachedResult(
+          buildCacheKey("querySessionLineage", [
+            ...lineageWindow.cacheKeyParameters,
+            sessionFilterId ?? "",
+          ]),
+          () => {
+            const lineageSamples = querySessionLineage(database)
+            return lineageSamples === null
+              ? null
+              : computeSessionLineage(lineageSamples, {
+                  focusSessionId: sessionFilterId,
+                  nodeBudget: lineageWindow.boundedValue,
+                })
+          },
+        )
+        if (sessionLineage === null) {
+          return { statusCode: 503, body: { error: DATABASE_UNAVAILABLE_MESSAGE } }
+        }
+        return { statusCode: 200, body: sessionLineage }
+      }
       case "search": {
         // v0.24.0 跨会话搜索端点。mode 校验：只有 "regex" 是正则，其余
         // （缺失/空/其它）一律降级为 substring（degrade，不 400）。空/缺
@@ -689,6 +808,19 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         }
         return { statusCode: 200, body: messageRecords }
       }
+      case "sessionEvents": {
+        // v0.29.0 A2/A3 会话事件：自带 id，不吃 ?session=。会话不在
+        // session_v2 → 404（与 sessionMessages 同一 SESSION_NOT_FOUND_MESSAGE）；
+        // 存在但无事件 → 200 {events: []}（不是 404）。
+        if (!sessionExistsInSessionV2(database, route.sessionId)) {
+          return { statusCode: 404, body: { error: SESSION_NOT_FOUND_MESSAGE } }
+        }
+        const sessionEvents = cachedResult(
+          buildCacheKey("querySessionEvents", [route.sessionId]),
+          () => querySessionEvents(database, route.sessionId),
+        )
+        return { statusCode: 200, body: { events: sessionEvents ?? [] } }
+      }
       case "sessionSystemPrompt": {
         const systemPrompt = cachedResult(
           buildCacheKey("querySessionSystemPrompt", [route.sessionId]),
@@ -724,6 +856,39 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             contentType: "text/markdown; charset=utf-8",
             headers: {
               "Content-Disposition": `attachment; filename="${asciiFilenameFallback(downloadFilename)}"; filename*=UTF-8''${encodeURIComponent(downloadFilename)}`,
+            },
+          },
+        }
+      }
+      case "sessionSvgExport": {
+        // v0.29.0 B8: the .svg export reuses the exact same data source as
+        // the .md export above (summary + messages + flattened system
+        // prompt) and renders DOM-free to a standalone SVG — never throws
+        // (a bad row degrades to a placeholder, not a 500). One-shot full
+        // export, so no TTL cache (same reasoning as sessionExport).
+        const sessionSummary = findSessionSummaryById(database, route.sessionId)
+        if (sessionSummary === null) {
+          return { statusCode: 404, body: { error: SESSION_NOT_FOUND_MESSAGE } }
+        }
+        const messageRecords = querySessionMessages(database, route.sessionId)
+        if (messageRecords === null || messageRecords.length === 0) {
+          return { statusCode: 404, body: { error: SESSION_EMPTY_MESSAGE } }
+        }
+        const systemPrompt = querySessionSystemPrompt(database, route.sessionId)
+        const svgDocument = renderSessionSvgReport(
+          sessionSummary,
+          messageRecords,
+          flattenSystemPromptForExport(systemPrompt),
+        )
+        const downloadFilename = buildExportDownloadFilename(sessionSummary, "svg")
+        return {
+          statusCode: 200,
+          body: null,
+          rawText: {
+            text: svgDocument,
+            contentType: "image/svg+xml; charset=utf-8",
+            headers: {
+              "Content-Disposition": `attachment; filename="${asciiFilenameFallback(downloadFilename, "svg")}"; filename*=UTF-8''${encodeURIComponent(downloadFilename)}`,
             },
           },
         }

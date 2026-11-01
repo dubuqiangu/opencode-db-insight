@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="vendor/uplot/uPlot.min.css" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="components.css" />
+  <link rel="stylesheet" href="components-extra.css" />
   <link rel="stylesheet" href="replay.css" />
   <script src="vendor/uplot/uPlot.iife.min.js"></script>
 </head>
@@ -54,6 +55,9 @@
           <button type="button" data-toc-target="panel-calendar">Calendar heatmap</button>
           <button type="button" data-toc-target="panel-hour-heatmap">Hourly heatmap</button>
           <button type="button" data-toc-target="panel-funnel">Token funnel</button>
+          <button type="button" data-toc-target="panel-content-composition">Content composition</button>
+          <button type="button" data-toc-target="panel-session-lineage">Session lineage</button>
+          <button type="button" data-toc-target="panel-token-ledger">Token ledger</button>
           <button type="button" data-toc-target="panel-compaction">Compaction</button>
           <button type="button" data-toc-target="panel-survival">Session survival</button>
           <button type="button" data-toc-target="panel-distribution">Session distribution</button>
@@ -66,6 +70,7 @@
           <button type="button" data-toc-target="panel-agents">Agent leaderboard</button>
           <button type="button" data-toc-target="panel-sessions">Sessions</button>
           <button type="button" data-toc-target="panel-directories">Directories</button>
+          <button type="button" data-toc-target="panel-file-activity">File activity</button>
           <button type="button" data-toc-target="panel-search">Search</button>
         </nav>
 
@@ -162,6 +167,42 @@
             </header>
             <div class="panel-body">
               <div id="compaction-panel" aria-label="上下文压缩事件统计"></div>
+            </div>
+          </article>
+
+          <article id="panel-token-ledger" class="panel span-12 reveal d4">
+            <header class="panel-head">
+              <div>
+                <h2>Token 记账守恒</h2>
+                <p class="panel-sub">消息侧 prompt 三分 vs session_v2 对照 · 守恒校验 · 🟡 残差为派生值</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="token-ledger" aria-label="token 记账守恒校验"></div>
+            </div>
+          </article>
+
+          <article id="panel-content-composition" class="panel span-12 reveal d4">
+            <header class="panel-head">
+              <div>
+                <h2>会话内容构成</h2>
+                <p class="panel-sub">按内容归因的字符量构成 · 工具 token 估算 🟡 · 单位「字符」，非 tokens</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="content-composition" aria-label="会话内容构成：分类字符量与占比"></div>
+            </div>
+          </article>
+
+          <article id="panel-session-lineage" class="panel span-12 reveal d5">
+            <header class="panel-head">
+              <div>
+                <h2>会话血缘</h2>
+                <p class="panel-sub">按 parent_id 推导的会话父子分层树 · 只读 session_v2 · 点节点进入回放，点「+N 更多」聚焦该父</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="session-lineage" aria-label="会话父子血缘分层树"></div>
             </div>
           </article>
         </section>
@@ -317,6 +358,18 @@
             </header>
             <div class="panel-body table-body">
               <div id="directory-panel" aria-label="项目目录用量排行"></div>
+            </div>
+          </article>
+
+          <article id="panel-file-activity" class="panel reveal d5 span-both">
+            <header class="panel-head">
+              <div>
+                <h2>文件活动</h2>
+                <p class="panel-sub">read / edit / write 文件操作排行 · 仅这三类工具 · 路径已脱敏（home → ~）</p>
+              </div>
+            </header>
+            <div class="panel-body table-body">
+              <div id="file-activity" aria-label="文件活动排行"></div>
             </div>
           </article>
         </section>

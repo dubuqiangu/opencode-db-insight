@@ -21,6 +21,7 @@ import {
   ASSISTANT_OBJECT_DATA_PREDICATE,
   buildSessionFilterSqlFragments,
 } from "./scan-conventions.ts"
+import { buildToolOutputTextSql } from "./tool-part-extraction.ts"
 import {
   computeToolTokens,
   type ToolTokenPartSize,
@@ -65,9 +66,9 @@ function buildToolTokenScanSql(stepPredicatePrefixSql: string): string {
                         json_extract(c.value, '$.name'),
                         json_extract(c.value, '$.tool'),
                         length(CAST(json_extract(c.value, '$.state.input') AS BLOB)),
-                        length(CAST(COALESCE(NULLIF(json_extract(c.value, '$.state.metadata.output'), ''), (SELECT group_concat(json_extract(cc.value, '$.text'), char(10) || char(10)) FROM json_each(c.value, '$.state.content') cc WHERE json_extract(cc.value, '$.type') = 'text')) AS BLOB)),
+                        length(CAST(${buildToolOutputTextSql("c.value")} AS BLOB)),
                         length(json_extract(c.value, '$.state.input')),
-                        length(COALESCE(NULLIF(json_extract(c.value, '$.state.metadata.output'), ''), (SELECT group_concat(json_extract(cc.value, '$.text'), char(10) || char(10)) FROM json_each(c.value, '$.state.content') cc WHERE json_extract(cc.value, '$.type') = 'text')))))
+                        length(${buildToolOutputTextSql("c.value")})))
                FROM json_each(m.data, '$.content') c) AS tool_part_sizes
        FROM session_message m
        WHERE ${stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}

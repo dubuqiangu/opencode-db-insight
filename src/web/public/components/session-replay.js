@@ -20,11 +20,14 @@ import {
   fetchSessionSystemPrompt,
   fetchSessionSummaryById,
   fetchSessionDistribution,
+  fetchSessionEvents,
   SessionNotFoundError,
+  REPLAY_EXPORT_AVAILABLE,
 } from "../data-source.js";
 import { formatTokens, formatCount, formatDateTime, formatPercent, escapeHtml } from "../format.js";
 import { renderTimeline, summarizeReplayTokens, summarizeStrictHitRate } from "./replay-timeline.js";
 import { buildReplaySearchBar } from "./replay-search.js";
+import { sessionExportLinksHtml } from "./session-export-links.js";
 import {
   buildConsumedSessionHash,
   readDeepLinkMessageId,
@@ -81,19 +84,20 @@ export async function renderSessionReplay(container, sessionId) {
     return;
   }
 
-  // 系统提示词、标题与全库 token 分布都允许失败：面板省略 / 标题降级 /
-  // 曲线省略分位徽标行。三者并行取，不互相等待。
-  const [systemPrompt, sessionSummary, distributionStats] = await Promise.all([
+  // 系统提示词、标题、全库 token 分布与会话事件都允许失败：面板省略 /
+  // 标题降级 / 曲线省略分位徽标行 / 曲线不画事件标记。四者并行取，不互相等待。
+  const [systemPrompt, sessionSummary, distributionStats, sessionEvents] = await Promise.all([
     fetchSessionSystemPrompt(sessionId).catch(() => null),
     fetchSessionSummaryById(sessionId).catch(() => null),
     fetchSessionDistribution().catch(() => null),
+    fetchSessionEvents(sessionId).catch(() => null),
   ]);
   if (isStale()) return;
 
   container.innerHTML = "";
   container.appendChild(buildBackLink());
   container.appendChild(buildHeaderElement(sessionId, messageRecords, sessionSummary));
-  container.appendChild(buildReplayTokenCurveElement(messageRecords, distributionStats));
+  container.appendChild(buildReplayTokenCurveElement(messageRecords, distributionStats, sessionEvents));
   if (systemPrompt !== null) {
     container.appendChild(buildSystemPromptPanelElement(systemPrompt));
   }
@@ -124,6 +128,7 @@ function buildReplayCurveSteps(messageRecords) {
       : {};
     curveSteps.push({
       index: curveSteps.length,
+      seq: Number(messageRecord.seq),
       timeCreated: Number(messageRecord.timeCreated),
       tokensInput: Number(tokensRecord.input),
       tokensOutput: Number(tokensRecord.output),
@@ -141,7 +146,7 @@ function buildReplayCurveSteps(messageRecords) {
  * 空 steps（无 assistant 消息）时组件约定返回 null：不挂载空面板。
  * distributionStats 取失败 → percentiles 传 null，组件自动省略分位行。
  */
-function buildReplayTokenCurveElement(messageRecords, distributionStats) {
+function buildReplayTokenCurveElement(messageRecords, distributionStats, sessionEvents) {
   const curveMountElement = document.createElement("div");
   const curveCleanup = renderReplayTokenCurve(curveMountElement, {
     steps: buildReplayCurveSteps(messageRecords),
@@ -149,7 +154,7 @@ function buildReplayTokenCurveElement(messageRecords, distributionStats) {
       && typeof distributionStats === "object"
       ? distributionStats.percentiles ?? null
       : null,
-  });
+  }, sessionEvents);
   if (curveCleanup === null) {
     return document.createDocumentFragment();
   }
@@ -178,12 +183,17 @@ function buildHeaderElement(sessionId, messageRecords, sessionSummary) {
   const sessionTitle = sessionSummary !== null && sessionSummary.title !== ""
     ? sessionSummary.title
     : "会话回放";
+  // 导出动作（v0.29.0 B8）：锚点由纯字符串构建器产出；mock 预览不可用 → ""，
+  // 此时整块不渲染（无"先显后藏"）。放在标题 / 会话 ID 之下，不动 panel-head
+  // 的左右两栏与随后的 .panel-sub。
+  const exportLinksHtml = sessionExportLinksHtml(sessionId, REPLAY_EXPORT_AVAILABLE);
 
   headerPanel.innerHTML = `
     <header class="panel-head">
       <div>
         <h2 class="replay-title">${escapeHtml(sessionTitle)}</h2>
         <p class="session-id-line">会话 ID：${escapeHtml(sessionId)}</p>
+        ${exportLinksHtml === "" ? "" : `<div class="replay-export">${exportLinksHtml}</div>`}
       </div>
       <div class="replay-header-stats num">
         <span title="Σ(input + output + cache.read)"><b>${formatTokens(summary.totalTokens)}</b> tokens</span>

@@ -31,6 +31,26 @@ export const TOOL_PART_FAST_PATH_LIMIT = 8
 export const UNKNOWN_TOOL_STATUS = "unknown"
 
 /**
+ * SQL expression for a tool part's OUTPUT text, parameterized by the SQL
+ * reference to the part itself (e.g. "c.value", "p.value").
+ *
+ * Lifted verbatim out of tool-token-queries.ts so the wire rule lives in
+ * ONE place: `state.metadata.output` when it is a non-empty string, else
+ * the part's `state.content[]` text blocks joined with "\n\n" (via
+ * group_concat + `char(10) || char(10)`). This mirrors readToolOutput /
+ * partText in message-text-extract.ts. tool-token-queries.ts and
+ * content-composition-queries.ts both import it, so a change to the
+ * fallback can never let the two endpoints disagree on tool-output size.
+ *
+ * Callers wrap the expression themselves: `length(<expr>)` for code-point
+ * characters, `length(CAST(<expr> AS BLOB))` for UTF-8 bytes (NULL → NULL,
+ * which the callers coerce to 0).
+ */
+export function buildToolOutputTextSql(partColumnSql: string): string {
+  return `COALESCE(NULLIF(json_extract(${partColumnSql}, '$.state.metadata.output'), ''), (SELECT group_concat(json_extract(cc.value, '$.text'), char(10) || char(10)) FROM json_each(${partColumnSql}, '$.state.content') cc WHERE json_extract(cc.value, '$.type') = 'text'))`
+}
+
+/**
  * SQL path list for the fast pass: [type, name, tool, state.status] for
  * every content index below the part limit. Each entry is a ready-to-join
  * SQL string literal (single quotes included), so callers reproduce the

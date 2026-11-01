@@ -621,3 +621,14 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 - [x] 导出 CSV 公式注入、`session-csv-export` scopeTitle 未转义；tool-bars token 块无调用时被隐藏
 - [x] TUI sidebar 卸载竞态；排行榜并列无稳定序；多处 `Date.now()` 跨午夜
 - [x] 文档收敛：DESIGN / DATA-CONTRACT / CHANGELOG / README / tasks 与实现对齐（本次）
+
+## v0.29.0 里程碑 D：借鉴 dsh 生态（A 组实时透视 + B 组上下文引擎）（2026-11-02，orchestrator 后端直写 + des-32 前端两波）
+
+> 参考 `references/COMPARISON-dsh-context-billion-context.md`；只借鉴 A 组 + B 组全部功能点。零运行时依赖 / 只读 5 表 / 既有估算口径均不变。
+
+- [x] **Wave 1**：A1 记账守恒 `GET /api/token-ledger`（`token-ledger-queries.ts` + `stats/token-ledger.ts`）；A3 回放 token 曲线 Total/Delta 切换 + 会话事件标记 `GET /api/session/:id/events`（`session-event-queries.ts`）；A2 压缩阈值（🟡 推断）标注
+- [x] **Wave 2A**：A4 会话内容构成 `GET /api/content-composition` + B5 文件活动 `GET /api/file-activity`（后端 `content-composition-queries.ts` / `file-activity-queries.ts` + `stats/*`；前端 `content-composition-card.js` / `file-activity-table.js`）
+- [x] **Wave 2B**：B6 Agent 血缘图 `GET /api/session-lineage`（`session-lineage-queries.ts` + `stats/session-lineage.ts`；前端 `session-lineage-graph.js` 手写 SVG 分层树，节点预算 400/1000）
+- [x] **Wave 3**：B8 SVG 报告导出 `GET /api/export/session/:id.svg`（`src/export/svg.ts` DOM-free、确定性、never throws；前端 `session-export-links.js` 回放页导出入口，同时补暴露既有 `.md`）
+- [x] B7 split-head（按需加载）评估后暂缓——风险高、收益低，若做单独评估
+- [x] 722 用例通过；`npm run check` exit 0；真库只读冒烟通过；文档收敛（DESIGN / DATA-CONTRACT / CHANGELOG / README / tasks）
