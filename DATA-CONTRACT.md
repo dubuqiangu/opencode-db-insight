@@ -7,12 +7,12 @@
 
 ## 一、插件实际读取的表（FROM 白名单）
 
-按源码里的 `FROM` / `JOIN` 逐表统计（每次改动后重新统计，数字变化即为信号）：
+按源码里的 `FROM` / `JOIN` 逐表统计，另把每处嵌入 SQL 的 `SESSION_V2_ANCHOR_PREDICATE_SQL` 引用计为一次 `session_v2` 读取（常量定义行不计）——0.29.1 起孤儿锚定收敛为单点常量，`session_v2` 的字面出现次数不再等于读取点数量（每次改动后重新统计，数字变化即为信号）：
 
 | 表 | 读取次数 | 用途 |
 |---|---|---|
-| `session_v2` | 26 | 会话列表、KPI 汇总、成本/token、行为统计、目录下钻、分布、成员资格 |
-| `session_message` | 21 | 消息正文（user/assistant/tool/reasoning）、消息级历史、全文搜索 |
+| `session_v2` | 45 | 会话列表、KPI 汇总、成本/token、行为统计、目录下钻、分布、成员资格、**消息扫描的孤儿锚定** |
+| `session_message` | 26 | 消息正文（user/assistant/tool/reasoning）、消息级历史、全文搜索 |
 | `todo` | 3 | 侧栏 Todos 块、状态分布 |
 | `instruction_state` | 1 | 会话系统提示词（current_values） |
 | `instruction_blob` | 1 | 系统提示词块体（hash → value） |
@@ -111,7 +111,7 @@
 
 ## 六、插件读取的 SQL 形态（已核查）
 
-- **所有消息扫描**都带 `AND session_id IN (SELECT id FROM session_v2)`，排除旧表孤儿行；`/api/search` 亦在其列——它是**全库全局口径、不吃 `?session=`**，但仍锚定 `session_v2`。
+- **所有消息扫描**都带 `AND session_id IN (SELECT id FROM session_v2)`（0.29.1 起收敛为单点常量 `scan-conventions.ts` 的 `SESSION_V2_ANCHOR_PREDICATE_SQL`，v0.29 的 7 个查询与 legacy 全局扫描共用），排除旧表孤儿行；`/api/search` 亦在其列——它是**全库全局口径、不吃 `?session=`**，但仍锚定 `session_v2`。
 - 会话列表：`FROM session_v2` + `?sort=` 白名单排序 + `?directory=` / `?range=` 过滤。
 - 消息级历史：`FROM session_message` + `type` 过滤 + `time_created >= ?`（增量）。
 - 侧栏 todo：`FROM todo WHERE session_id = ? AND session_id IN (SELECT id FROM session_v2)`；

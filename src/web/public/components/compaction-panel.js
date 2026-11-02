@@ -8,7 +8,7 @@
  */
 
 import { formatCount, escapeHtml } from "../format.js";
-import { bindHoverTooltip } from "../tooltip.js";
+import { bindHoverTooltip, hideTooltip } from "../tooltip.js";
 import { renderEmpty } from "./state-views.js";
 
 const RECENT_DAILY_BAR_COUNT = 30;
@@ -30,7 +30,7 @@ export function renderCompactionPanel(container, compaction) {
   const totalCount = Number(compaction?.total);
   if (compaction === null || !Number.isFinite(totalCount) || totalCount <= 0) {
     renderEmpty(container, "还没有上下文压缩事件", "数据库里没有 compaction 消息记录");
-    return;
+    return () => hideTooltip();
   }
 
   const reasonEntries = Object.entries(compaction.byReason ?? {})
@@ -99,6 +99,8 @@ export function renderCompactionPanel(container, compaction) {
       rows: [],
     }));
   }
+
+  return () => hideTooltip();
 }
 
 /** sessionId 短显：前 8 字符 + 省略号（够长才省略）。 */

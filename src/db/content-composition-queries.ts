@@ -35,16 +35,10 @@ import { asRecord, coerceNumber, coerceText } from "./rows.ts"
 import {
   ASSISTANT_OBJECT_DATA_PREDICATE,
   buildSessionFilterSqlFragments,
+  SESSION_V2_ANCHOR_PREDICATE_SQL,
 } from "./scan-conventions.ts"
 import { buildToolOutputTextSql } from "./tool-part-extraction.ts"
 import type { ContentCompositionSample } from "../stats/content-composition.ts"
-
-/**
- * 孤儿锚定：会话级消息扫描一律限定 session_id IN (SELECT id FROM session_v2)，
- * 与 token-ledger-queries.ts / tool-token-queries.ts 同锚（真库孤儿为 0，
- * 此约束只防未来不一致）。这是**无条件**口径锚定。
- */
-const SESSION_V2_ANCHOR_PREDICATE_SQL = "session_id IN (SELECT id FROM session_v2)"
 
 /** assistant part 的类型表达式（json_extract on 每个 content part）。 */
 const ASSISTANT_PART_TYPE_SQL = "json_extract(p.value, '$.type')"

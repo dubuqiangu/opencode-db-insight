@@ -33,6 +33,7 @@ import {
   buildSessionFilterSqlFragments,
   buildWindowStartEpochMs,
   DAY_MS,
+  SESSION_V2_ANCHOR_PREDICATE_SQL,
 } from "./scan-conventions.ts"
 import { hitRate } from "../stats/hit-rate.ts"
 import {
@@ -141,7 +142,8 @@ export function queryOverview(
       `SELECT time_created,
               json_extract(data, '$.tokens.input', '$.tokens.output', '$.tokens.cache.read') AS token_fields
        FROM session_message
-       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}
+         AND ${SESSION_V2_ANCHOR_PREDICATE_SQL}`,
     )
     .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 
@@ -228,7 +230,8 @@ export function queryDailyTrend(
               json_extract(data, '$.model.id',
                                  '$.tokens.input', '$.tokens.output', '$.tokens.cache.read') AS trend_fields
        FROM session_message
-       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE} AND time_created >= ?`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}
+         AND ${SESSION_V2_ANCHOR_PREDICATE_SQL} AND time_created >= ?`,
     )
     .all(
       ...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]),
@@ -332,7 +335,8 @@ export function queryModelMetrics(
                                 '$.tokens.input', '$.tokens.output', '$.tokens.reasoning',
                                 '$.tokens.cache.read', '$.tokens.cache.write') AS usage_fields
        FROM session_message
-       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}${sqlFloorClause}${sqlCeilingClause}`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}
+         AND ${SESSION_V2_ANCHOR_PREDICATE_SQL}${sqlFloorClause}${sqlCeilingClause}`,
     )
     .all(
       ...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]),
@@ -457,7 +461,8 @@ export function queryAgentStats(
                          FROM json_each(m.data, '$.content') c)
               END AS tool_part_fields
        FROM session_message m
-       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}
+         AND ${SESSION_V2_ANCHOR_PREDICATE_SQL}`,
     )
     .all(...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]))
 

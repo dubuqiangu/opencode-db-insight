@@ -28,7 +28,11 @@
 
 import type { SqliteReadConnection } from "./types.ts"
 import { asRecord, coerceNumber } from "./rows.ts"
-import { ASSISTANT_OBJECT_DATA_PREDICATE, buildScanFloorEpochMs } from "./scan-conventions.ts"
+import {
+  ASSISTANT_OBJECT_DATA_PREDICATE,
+  buildScanFloorEpochMs,
+  SESSION_V2_ANCHOR_PREDICATE_SQL,
+} from "./scan-conventions.ts"
 import {
   buildToolPartFieldPaths,
   extractToolParts,
@@ -40,15 +44,6 @@ import {
   type ToolErrorSample,
   type ToolErrorTrendPoint,
 } from "../stats/tool-error-trend.ts"
-
-/**
- * 孤儿锚定：会话级消息扫描一律限定 session_id IN (SELECT id FROM session_v2)，
- * 把「会话已删、消息残留」的孤儿消息排除出「全部会话口径」——与 v0.21.0 三个
- * 分布及 session-outcome-queries.ts / tool-health-queries.ts 同锚。真库孤儿为
- * 0，此约束只防未来不一致。与本端点的 ?session=「不吃」口径各自独立：锚定只
- * 收敛样本全集，本端点不叠加任何会话过滤。
- */
-const SESSION_V2_ANCHOR_PREDICATE_SQL = "session_id IN (SELECT id FROM session_v2)"
 
 /** Payload of GET /api/tool-error-trend. */
 export interface ToolErrorTrendStats {

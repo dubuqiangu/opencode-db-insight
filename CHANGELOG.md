@@ -4,6 +4,41 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 每个里程碑完成后 push 并在此追加一条记录，方便回溯。
 
+## [0.29.1] - 2026-11-03 · 全项目审查：异常修复 + 测试补全 + 文档收敛
+
+> 一次只读全量审查（后端正确性 / 前端正确性 / 测试覆盖 + 文档一致性，三路并行）后的收口版本。零运行时依赖不变；只读 5 表不变；唯一许可估算不变（既有自包含分词估算，🟡）。
+
+### Fixed
+
+- **`/api/search` 命中集合不确定**：匹配超过 200 条时扫描无 `ORDER BY`，返回哪 200 条及其顺序随 SQLite 计划漂移 → 加 `ORDER BY time_created DESC, id DESC`，稳定为「最新 200 条」。
+- **`/api/search` 子串下标错位**：`toLowerCase()` 并非 1:1 码元映射（如 `İ` U+0130 小写展开为两码元），小写下标套回原文会错位、`<mark>` 落点偏 → 改为在原文上跑不区分大小写的字面量正则，`exec().index` 直接是原文下标。
+- **`sessionMessages` 未做 `session_v2` 存在性探针**：带孤儿消息的未知 id 因「有消息」返回 200，与语义相同的 `sessionEvents`（404）不一致 → 前置 `sessionExistsInSessionV2` gate，未知会话 → 404。
+- **legacy 全局消息扫描缺 `session_v2` 孤儿锚定**：`overview` / `trend` / `models` / `agents` / `hour-heatmap` / `compaction` / 回放步骤等未带锚定（`DATA-CONTRACT §六` 要求所有消息扫描都带）→ 无条件补齐；锚定谓词收敛为 `scan-conventions.ts` 单点常量 `SESSION_V2_ANCHOR_PREDICATE_SQL`（v0.29 的 7 个查询一并改用）。真库孤儿为 0，本次为防口径漂移。
+- **`ORDER BY seq` 无决胜键**：`session_message` 无 `UNIQUE(session_id, seq)`，等值 `seq` 下回放顺序与「最后一条 assistant 消息」（`session-outcomes` 终局错误推断）不确定 → 补 `time_created` / `id` 次级键（事件流保持 `seq ASC`）。
+- **`queryHourHeatmap` / `queryCompactionStats` 两次读时钟**：下推 floor 与窗口下界可能跨本地午夜分到不同天 → 每次调用只读一次 `nowMs` 并下传。
+- **SVG 导出 `__PAGE_HEIGHT__` 占位符可被会话标题污染**：标题字面含该 token 时会被替换成页高数字 → 背景 `<rect>` 改为布局后直接数值插值，取消占位符机制。
+- **前端精度契约违规**：`kpi-card` / `model-table` 的「— 环比」硬编码破折号 → 统一走 `renderMissingValue(MISSING_REASON.noComparisonBaseline)`（占位 + 环比）。
+- **前端渲染器 cleanup 契约**：`session-survival-card` / `todo-card` / `compaction-panel` 空态返回 `undefined`；`trend-chart` 的 cleanup 非一次性（同一轮加载被连调两次 + 空态分支留旧句柄，`plot.destroy()` 重复调用的 use-after-free 隐患）→ 统一返回 cleanup，trend 改为「取出即清空句柄」的一次性消费。
+- **`search-panel` `hitCount` 未强转**（防御性）：非数字脏值原样进 `innerHTML` → 强转为有限数，否则退 1。
+- **`agent-table` 空态/表头为英文**（夹杂中文 UI）→ 改中文。
+
+### Changed
+
+- `INSIGHT_VERSION` / `package.json` 版本号 → `0.29.1`。
+
+### Test
+
+- 新增 `test/web-v029-panels.test.ts`（22 例）：v0.29 五个前端面板 + `agent-table` + 四个 `mock-*` 的契约测试（转义 / `<colgroup>` / `renderMissingValue` / 血缘图事件监听清理）。
+- 新增此前无直接测试的模块用例：`test/format-helpers.test.ts` / `test/message-roles.test.ts` / `test/tui-context.test.ts` / `test/plugin-definition.test.ts`。
+- 扩测 `test/hour-heatmap.test.ts`（3→10 例：168 格零填充 / 周日外层 / 午夜与 DST 边界）、`test/web-replay-token-curve.test.ts`（边界：空 / 单点 / 全零 / 脏值）、`test/web-components.test.ts`（trend cleanup 一次性 / 环比占位 / `hitCount` 强转 / cleanup 返回契约）。
+- 回归修复：真实 `node:sqlite` 夹具补建 `session_v2` 表（锚定生效所需）；bulk-cap 与 API 503 探针用例随新契约同步。
+- 全量 **818** 用例通过；`npm run check` exit 0。
+
+### Docs
+
+- `DESIGN.md`：版本 banner → 0.29.1；用例数 654→818；§3.1 目录树补 v0.29 模块（stats / db / export / public）；§5 补「会话 token 总量分布」「工具健康榜」指标行；§7 `#toc-nav` 19→24 chip；§12 M6 移除已退役 `/insight-status`。
+- `DATA-CONTRACT.md`：§一 读取计数重算（`session_v2` 26→45、`session_message` 21→26）并注明计数口径（锚定常量按引用计数）；§六 注明锚定谓词已收敛为单点常量。
+
 ## [0.29.0] - 2026-11-02 · 里程碑 D：借鉴 dsh 生态（A 组实时透视 + B 组上下文引擎）
 
 > 借鉴 dsh-context（实时上下文透视）与 billion-context（上下文压缩引擎）两个 dsh 插件的可移植形状（对比见 `references/COMPARISON-dsh-context-billion-context.md`；三者互补非同类：dsh-context 管实时、billion-context 管压缩、本插件管历史归档）。零运行时依赖不变；只读 5 表不变；唯一许可估算仍是既有自包含分词估算（🟡）。

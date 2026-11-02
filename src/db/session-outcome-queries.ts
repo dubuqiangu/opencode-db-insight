@@ -60,13 +60,15 @@ const SESSIONS_WITH_STEPS_SQL = `
  * - error_type / error_message 取自同一条消息（NULL 降级为 ""）；
  * - title 取 session_v2，time_updated 用于 recentInterrupted（排序键 + 展示值）。
  *
- * `ORDER BY seq DESC` 契约指定；PARTITION BY session_id 保证每个锚定会话
- * 恰一行（rn = 1）。json_extract 需要合法 JSON 对象，故只保留 object 行。
+ * `ORDER BY seq DESC, time_created DESC, id DESC` 契约指定（seq 无
+ * UNIQUE，等值 seq 需要额外决胜键才能确定「最后一条」）；PARTITION BY
+ * session_id 保证每个锚定会话恰一行（rn = 1）。json_extract 需要合法 JSON
+ * 对象，故只保留 object 行。
  */
 const LAST_ASSISTANT_MESSAGE_SQL = `
   WITH ordered_last_assistant AS (
     SELECT session_id, data,
-           ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq DESC) AS row_rank
+           ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq DESC, time_created DESC, id DESC) AS row_rank
     FROM session_message
     WHERE type = 'assistant'
       AND json_valid(data) AND json_type(data) = 'object'

@@ -172,9 +172,13 @@ function buildSessionSvgReport(
   elementParts.push(
     `<desc>${escapeXmlText(`会话用量报告 — ${sessionTitle}`)}</desc>`,
   )
-  elementParts.push(
-    `<rect width="${PAGE_WIDTH}" height="__PAGE_HEIGHT__" fill="#ffffff"/>`,
-  )
+  // Background <rect>: its height is the page height, known only after the
+  // layout pass below. Reserve the slot here (document start = painted behind
+  // all content) and fill it in later with a DIRECT numeric interpolation —
+  // no "__PAGE_HEIGHT__" placeholder token, which a session title literally
+  // containing that text could otherwise corrupt via a blanket replace.
+  const backgroundRectPartIndex = elementParts.length
+  elementParts.push("")
 
   let cursorY = PAGE_PADDING
 
@@ -283,15 +287,15 @@ function buildSessionSvgReport(
   cursorY = promptBaseline + (META_LINE_HEIGHT - META_FONT_SIZE)
 
   const pageHeight = Math.ceil(cursorY + PAGE_PADDING)
+  elementParts[backgroundRectPartIndex] =
+    `<rect width="${PAGE_WIDTH}" height="${pageHeight}" fill="#ffffff"/>`
 
   const headerLines = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<svg xmlns="http://www.w3.org/2000/svg" width="${PAGE_WIDTH}" height="${pageHeight}"`,
     ` viewBox="0 0 ${PAGE_WIDTH} ${pageHeight}" role="img" font-family="${FONT_STACK}">`,
   ]
-  const bodyLines = elementParts.map((elementPart) =>
-    elementPart.replace("__PAGE_HEIGHT__", String(pageHeight)),
-  )
+  const bodyLines = elementParts
   const footerLines = ["</svg>", ""]
 
   return [...headerLines, ...bodyLines, ...footerLines].join("\n")

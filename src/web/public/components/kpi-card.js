@@ -58,7 +58,7 @@ function sparklineSvg(values, cssColor) {
 /** 环比角标：▲/▼ + 数值；deltaText 为 null 时显示持平。 */
 function deltaBadge(deltaText, direction) {
   if (deltaText === null || deltaText === undefined) {
-    return `<span class="delta flat">— 环比</span>`;
+    return `<span class="delta flat">${renderMissingValue(MISSING_REASON.noComparisonBaseline)} 环比</span>`;
   }
   if (direction === 0) return `<span class="delta flat">持平</span>`;
   const arrow = direction > 0 ? "▲" : "▼";

@@ -34,6 +34,7 @@ import { asRecord, coerceNumber, coerceText } from "./rows.ts"
 import {
   ASSISTANT_OBJECT_DATA_PREDICATE,
   buildSessionFilterSqlFragments,
+  SESSION_V2_ANCHOR_PREDICATE_SQL,
 } from "./scan-conventions.ts"
 import {
   applyHomeRedaction,
@@ -43,13 +44,6 @@ import {
   type FileActivitySample,
   type FileActivityStats,
 } from "../stats/file-activity.ts"
-
-/**
- * 孤儿锚定：会话级消息扫描一律限定 session_id IN (SELECT id FROM session_v2)，
- * 排除「会话已删、消息残留」的孤儿消息（真库孤儿为 0，此约束只防未来不一致）。
- * 这是**无条件**口径锚定，与可选的 ?session= 过滤互相独立。
- */
-const SESSION_V2_ANCHOR_PREDICATE_SQL = "session_id IN (SELECT id FROM session_v2)"
 
 /** 参与统计的三个文件工具（合同 §5.2 点 2 白名单）。 */
 const FILE_ACTIVITY_TOOL_NAMES = "'read', 'edit', 'write'"

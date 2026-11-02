@@ -332,6 +332,39 @@ test("renderSearchPanel renders the count line and one row per hit with URL-enco
   assert.ok(container.innerHTML.includes("命中 2 处"), "the per-hit count renders")
 })
 
+test("renderSearchPanel coerces a non-numeric hitCount to 1 instead of interpolating it raw (C1)", async () => {
+  const { renderSearchPanel } = await import("../src/web/public/components/search-panel.js")
+  const container = freshContainer()
+  renderSearchPanel(
+    container as unknown as HTMLElement,
+    {
+      status: "done",
+      payload: {
+        query: "x",
+        mode: "substring",
+        total: 4,
+        hits: [
+          // A hostile / malformed wire value must never reach the DOM verbatim.
+          searchHitFixture({ sessionId: "ses_string", hitCount: "<img src=x>" }),
+          searchHitFixture({ sessionId: "ses_nan", hitCount: Number.NaN }),
+          searchHitFixture({ sessionId: "ses_missing", hitCount: undefined }),
+          searchHitFixture({ sessionId: "ses_numeric_string", hitCount: "3" }),
+        ],
+      },
+    },
+    null,
+  )
+
+  const renderedHtml = container.innerHTML
+  assert.ok(!renderedHtml.includes("<img src=x>"), "a hostile hitCount never reaches the DOM raw")
+  assert.equal(
+    renderedHtml.split("命中 1 处").length - 1,
+    3,
+    "a string, NaN and a missing hitCount all coerce to 1",
+  )
+  assert.ok(renderedHtml.includes("命中 3 处"), "a numeric string coerces through Number()")
+})
+
 test("renderSearchPanel escapes hostile sessionTitle / messageType text", async () => {
   const { renderSearchPanel } = await import("../src/web/public/components/search-panel.js")
   const container = freshContainer()

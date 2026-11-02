@@ -8,7 +8,7 @@
  */
 
 import { formatCount, formatPercent } from "../format.js";
-import { bindHoverTooltip } from "../tooltip.js";
+import { bindHoverTooltip, hideTooltip } from "../tooltip.js";
 import { renderEmpty } from "./state-views.js";
 
 /**
@@ -20,7 +20,7 @@ export function renderTodoCard(container, todoStats) {
   const totalCount = Number(todoStats?.total);
   if (!Number.isFinite(totalCount) || totalCount <= 0) {
     renderEmpty(container, "还没有 todo 记录", "数据库 todo 表为空，或尚无 todo 写入");
-    return;
+    return () => hideTooltip();
   }
 
   const completedCount = nonNegativeCount(todoStats.completed);
@@ -60,6 +60,8 @@ export function renderTodoCard(container, todoStats) {
     }));
     progressElement.appendChild(segmentElement);
   }
+
+  return () => hideTooltip();
 }
 
 /** 字段缺失/负数一律按 0 计（wire 上可能缺 key）。 */

@@ -89,6 +89,10 @@ async function createModelsWindowFixture(): Promise<SqliteReadWriteConnection> {
          time_created INTEGER, time_updated INTEGER, data TEXT)`,
     )
     .run()
+  // v0.30.0: every message scan is anchored on session_v2, so the fixture
+  // must carry the parent session row or the query drops all its steps.
+  database.prepare("CREATE TABLE session_v2 (id TEXT PRIMARY KEY)").run()
+  database.prepare("INSERT INTO session_v2 (id) VALUES (?)").run("ses_models_window")
 
   const insertMessage = database.prepare(
     "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -149,6 +153,10 @@ async function createModelComparisonFixture(): Promise<SqliteReadWriteConnection
          time_created INTEGER, time_updated INTEGER, data TEXT)`,
     )
     .run()
+  // v0.30.0: every message scan is anchored on session_v2, so the fixture
+  // must carry the parent session row or the query drops all its steps.
+  database.prepare("CREATE TABLE session_v2 (id TEXT PRIMARY KEY)").run()
+  database.prepare("INSERT INTO session_v2 (id) VALUES (?)").run("ses_models_comparison")
 
   const insertMessage = database.prepare(
     "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)",

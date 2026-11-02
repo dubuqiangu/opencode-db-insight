@@ -115,6 +115,8 @@ function buildSearchResultsHtml(status, payload, errorMessage) {
       : escapeHtml(hitRecord.sessionId ?? "");
     const snippetText = typeof hitRecord.snippet === "string" ? hitRecord.snippet : "";
     const messageType = escapeHtml(hitRecord.messageType ?? "");
+    // hitCount 是唯一未强转的动态值：非数字（缺 key / 脏串 / NaN）一律退到 1。
+    const hitCount = Number.isFinite(Number(hitRecord.hitCount)) ? Number(hitRecord.hitCount) : 1;
     return `
       <a class="search-hit" href="#/session/${encodeURIComponent(hitRecord.sessionId)}">
         <div class="search-hit-head">
@@ -122,7 +124,7 @@ function buildSearchResultsHtml(status, payload, errorMessage) {
           <span class="search-hit-type">${messageType}</span>
         </div>
         <div class="search-hit-snippet">${snippetText}</div>
-        <div class="search-hit-count">命中 ${hitRecord.hitCount ?? 1} 处</div>
+        <div class="search-hit-count">命中 ${hitCount} 处</div>
       </a>`;
   }).join("");
   return `

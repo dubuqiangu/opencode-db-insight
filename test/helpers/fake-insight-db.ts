@@ -7,6 +7,7 @@
 
 import type { SessionSummary, SqliteReadConnection, SqliteStatement } from "../../src/db/types.ts"
 import { coerceNumber } from "../../src/db/rows.ts"
+import { SESSION_V2_ANCHOR_PREDICATE_SQL } from "../../src/db/scan-conventions.ts"
 
 /** Fallback message timestamp when a fixture does not pin one. */
 const DEFAULT_MESSAGE_TIMESTAMP = Date.UTC(2026, 9, 5, 6, 31)
@@ -536,13 +537,16 @@ export function createFakeInsightDatabase(
         get: () => undefined,
       }
     }
-    // v0.28.1：跨会话搜索的扫描现在带 `session_id IN (SELECT id FROM session_v2)`
-    // 锚定（B1），于是 SQL 同时含 "FROM session_message" 与 "FROM session_v2"。
-    // 下面的 session_v2 分支很宽，会先把它截走，所以这里显式让路——搜索的
-    // `type IN ('user', 'assistant')` 是全仓唯一签名，据此排除不会误伤其它查询。
+    // 锚定统一后（v0.30.0），**每条**消息扫描的 SQL 都带共享锚定谓词
+    // SESSION_V2_ANCHOR_PREDICATE_SQL（内含 "SELECT id FROM session_v2"）。
+    // 下面的 session_v2 分支很宽，会先把消息扫描截走，所以这里显式让路：
+    // 只有主表真的是 session_v2（不含锚定谓词）才走该分支。目录查询虽同时
+    // 含 FROM session_message（LEFT JOIN 子查询），但它不带锚定、主表是
+    // session_v2，仍走该分支；token-ledger 等同时含两表且带锚定的查询在其
+    // 专属分支（AS prompt_input 等）更早处理，不受影响。
     if (
       sql.includes("FROM session_v2") &&
-      !sql.includes("type IN ('user', 'assistant')")
+      !sql.includes(SESSION_V2_ANCHOR_PREDICATE_SQL)
     ) {
       if (sql.includes("AS total_sessions")) {
         // v0.21.0 GET /api/child-share 的整体归总：COUNT + 父子分桶 +

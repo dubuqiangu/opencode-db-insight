@@ -114,6 +114,16 @@ function createSearchFixtureDatabase(): SqliteReadWriteConnection {
     0,
     JSON.stringify({ text: "AT&T bar" }),
   )
+  // Case-folding point: 'İ' (U+0130) lowercases to two code units ("i" + a
+  // combining dot), so a naive toLowerCase-index search would misplace the
+  // <mark> on the original text. The match index must come from the original.
+  insertMessage.run(
+    "msg_casefold",
+    "ses_search_alpha",
+    "user",
+    0,
+    JSON.stringify({ text: "İstanbul foo" }),
+  )
   // Orphan: session_id is never registered in session_v2 (会话已删、消息残留).
   insertMessage.run(
     "msg_orphan",
@@ -292,6 +302,75 @@ test(
 )
 
 test(
+  "match index comes from the original text, not a lowercased copy (İ case-folding)",
+  { skip: skipReason },
+  () => {
+    const database = createSearchFixtureDatabase()
+    try {
+      const result = queryCrossSessionSearch(
+        database as unknown as SqliteReadConnection,
+        "foo",
+        "substring",
+      )
+      assert.notEqual(result, null)
+      assert.equal(result!.total, 1)
+      const hit = result!.hits[0]
+      assert.equal(hit.messageId, "msg_casefold")
+      // 'İstanbul foo': 'İ' lowercases to two code units, so a lowered-index
+      // search would slice the original one code unit early and mark "oo".
+      assert.equal(hit.snippet, "İstanbul <mark>foo</mark>")
+    } finally {
+      database.close()
+    }
+  },
+)
+
+test(
+  "equal timestamps fall back to a deterministic id DESC tie-break",
+  { skip: skipReason },
+  () => {
+    const database = new readWriteConstructor!(":memory:")
+    try {
+      database.exec(
+        "CREATE TABLE session_v2 (" +
+          "id TEXT, title TEXT, model TEXT, agent TEXT, directory TEXT, " +
+          "time_created INTEGER, time_updated INTEGER, " +
+          "tokens_input REAL, tokens_output REAL, tokens_cache_read REAL, cost REAL);" +
+          "CREATE TABLE session_message (" +
+          "id TEXT, session_id TEXT, type TEXT, seq INTEGER, " +
+          "time_created INTEGER, time_updated INTEGER, data TEXT);",
+      )
+      database
+        .prepare(
+          "INSERT INTO session_v2 (id, title, model, agent, directory, time_created, time_updated, " +
+            "tokens_input, tokens_output, tokens_cache_read, cost) " +
+            "VALUES ('ses_search_tie', 'tie title', '{}', 'fixer', '', 1000, 2000, 0, 0, 0, 0)",
+        )
+        .run()
+      const insertMessage = database.prepare(
+        "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) " +
+          "VALUES (?, 'ses_search_tie', 'user', ?, 1000, 2000, ?)",
+      )
+      // Same time_created; only the ids differ → id DESC decides.
+      insertMessage.run("msg_tie_alpha", 0, JSON.stringify({ text: "tieword alpha" }))
+      insertMessage.run("msg_tie_beta", 1, JSON.stringify({ text: "tieword beta" }))
+      const result = queryCrossSessionSearch(
+        database as unknown as SqliteReadConnection,
+        "tieword",
+        "substring",
+      )
+      assert.notEqual(result, null)
+      assert.deepEqual(
+        result!.hits.map((hit) => hit.messageId),
+        ["msg_tie_beta", "msg_tie_alpha"],
+      )
+    } finally {
+      database.close()
+    }
+  },
+)
+
+test(
   "hits are capped at 200 while total reflects the full match count",
   { skip: skipReason },
   () => {
@@ -314,12 +393,15 @@ test(
       insertSession.run("ses_search_bulk")
       const insertMessage = database.prepare(
         "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) " +
-          "VALUES (?, 'ses_search_bulk', 'user', ?, 1000, 2000, ?)",
+          "VALUES (?, 'ses_search_bulk', 'user', ?, ?, 2000, ?)",
       )
       // 250 条 user 消息都含 "commonword"——匹配数超 200 上限。
+      // time_created 递增（= messageIndex），配合 ORDER BY time_created DESC,
+      // id DESC：命中顺序确定且最新优先，前 200 条即 msg_bulk_50 .. msg_bulk_249。
       for (let messageIndex = 0; messageIndex < 250; messageIndex += 1) {
         insertMessage.run(
           `msg_bulk_${messageIndex}`,
+          messageIndex,
           messageIndex,
           JSON.stringify({ text: `message ${messageIndex} with commonword` }),
         )
@@ -331,9 +413,9 @@ test(
       )
       assert.notEqual(result, null)
       assert.equal(result!.total, 250, "total is the true full match count")
-      assert.equal(result!.hits.length, 200, "hits are capped at the first 200")
-      assert.equal(result!.hits[0].messageId, "msg_bulk_0")
-      assert.equal(result!.hits[199].messageId, "msg_bulk_199")
+      assert.equal(result!.hits.length, 200, "hits are capped at the newest 200")
+      assert.equal(result!.hits[0].messageId, "msg_bulk_249", "newest match leads")
+      assert.equal(result!.hits[199].messageId, "msg_bulk_50", "the cap cuts at the 200th newest")
     } finally {
       database.close()
     }

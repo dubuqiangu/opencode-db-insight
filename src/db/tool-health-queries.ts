@@ -17,6 +17,7 @@ import { asRecord } from "./rows.ts"
 import {
   ASSISTANT_OBJECT_DATA_PREDICATE,
   buildSessionFilterSqlFragments,
+  SESSION_V2_ANCHOR_PREDICATE_SQL,
 } from "./scan-conventions.ts"
 import {
   buildToolPartFieldPaths,
@@ -28,17 +29,6 @@ import {
   type ToolHealthSample,
   type ToolHealthStat,
 } from "../stats/tool-health.ts"
-
-/**
- * 孤儿锚定：会话级消息扫描一律限定 session_id IN (SELECT id FROM session_v2)，
- * 把「会话已删、消息残留」的孤儿消息排除出「全部会话口径」——与 v0.21.0 三个
- * 分布（session-distribution-queries.ts）及 session-outcome-queries.ts 同锚。
- * 真库孤儿为 0，此约束只防未来不一致（同为全部会话口径的卡片分母/错误数一旦
- * 无锚就会在有孤儿的库上分叉）。这是**无条件**口径锚定，与可选的 ?session=
- * 过滤互相独立：锚定收敛样本全集，?session= 只在全集内再选一个会话，二者
- * 不混用、各自成立。
- */
-const SESSION_V2_ANCHOR_PREDICATE_SQL = "session_id IN (SELECT id FROM session_v2)"
 
 /**
  * Per-tool health leaderboard for GET /api/tool-health, aggregated

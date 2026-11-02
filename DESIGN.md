@@ -1,6 +1,6 @@
 # opencode-db-insight 设计文档（DESIGN.md）
 
-> 版本：0.28.x（与 package.json / api.ts INSIGHT_VERSION 同步，当前 0.28.1，并记录 0.28.1 修复）· 状态：实现中（v0.4.0 起随版本演进同步回写，2026-10-18 已与实现对账）
+> 版本：0.29.x（与 package.json / api.ts INSIGHT_VERSION 同步，当前 0.29.1，并记录 0.29.1 修复）· 状态：实现中（v0.4.0 起随版本演进同步回写，2026-11-03 已与实现对账）
 > 本文档是实现的唯一依据；需求变更先改本文档再改代码。
 
 ## 1. 背景与目标
@@ -88,7 +88,7 @@ opencode-db-insight/
 │  │  ├─ queries.ts              #   SQL 收敛处（会话列表 / 回放步骤 / todo）
 │  │  ├─ aggregate-queries.ts    #   SQL 侧聚合（overview / trend / models / agents，与旧 JS 口径逐字段对账）
 │  │  ├─ behavior-queries.ts     #   v0.2 行为统计（小时热力 / 会话存活 / 压缩事件）
-│  │  ├─ scan-conventions.ts     #   扫描口径单点（assistant 谓词 / DAY_MS / 下推 floor 与回收窗口成对导出，0.2.1 起）
+│  │  ├─ scan-conventions.ts     #   扫描口径单点（assistant 谓词 / DAY_MS / 下推 floor 与回收窗口成对导出，0.2.1 起；0.29.1 起含孤儿锚定常量 SESSION_V2_ANCHOR_PREDICATE_SQL）
 │  │  ├─ directory-queries.ts    #   v0.3 按项目目录统计（会话数 / 步数 / tokens 三分 / 最近活跃，预聚合 GROUP BY 消扇出）
 │  │  ├─ search-queries.ts       #   v0.25 跨会话全文搜索（子串/正则两模式，锚定 session_v2）
 │  │  ├─ message-text-extract.ts #   消息可搜索文本抽取（与回放页 replay-message-text 同源）
@@ -100,6 +100,11 @@ opencode-db-insight/
 │  │  ├─ tool-error-trend-queries.ts     # v0.22 工具错误率逐日趋势（本地日分桶）
 │  │  ├─ session-outcome-queries.ts      # v0.22 失败中断会话（终局错误推断，锚定 session_v2）
 │  │  ├─ session-todo-queries.ts #   v0.24 侧栏 Todos 直读（todo 表，锚定 session_v2 + 降级路径）
+│  │  ├─ token-ledger-queries.ts #   v0.29 记账守恒（message 侧 prompt 三分 × session_v2 对照）
+│  │  ├─ content-composition-queries.ts # v0.29 会话内容构成六分类字符量
+│  │  ├─ file-activity-queries.ts #   v0.29 文件活动（read/edit/write 路径归组 + homedir 脱敏）
+│  │  ├─ session-event-queries.ts #   v0.29 会话事件（compaction / model-switched / system）
+│  │  ├─ session-lineage-queries.ts #  v0.29 Agent 血缘图（session_v2 父子指针节点/边抽取）
 │  │  ├─ rows.ts                 #   行记录解析与类型强制（coerceNumber / coerceText）
 │  │  └─ types.ts                 #   数据面类型定义（SessionSummary / AssistantStepRow / ...）
 │  ├─ stats/                     # 纯聚合函数层（无 IO，可单测）
@@ -111,6 +116,10 @@ opencode-db-insight/
 │  │  ├─ tool-error-trend.ts     #   工具错误率趋势视图模型（本地日分桶）
 │  │  ├─ tool-tokens.ts          #   v0.27/0.28 每工具 token 归因（分词估算权重 + 最大余数取整）
 │  │  ├─ session-todo.ts         #   v0.24 侧栏 Todos 视图模型（状态秩排序 + 分页）
+│  │  ├─ token-ledger.ts         #   v0.29 记账守恒视图模型（完整性只看异常计数，跨源对照仅信息性）
+│  │  ├─ content-composition.ts  #   v0.29 内容构成六分类视图模型（字符量）
+│  │  ├─ file-activity.ts        #   v0.29 文件活动视图模型（homedir→~ 脱敏 + ops/path 排序）
+│  │  ├─ session-lineage.ts      #   v0.29 血缘图纯函数（自父/孤儿规范化 / 环断边 / BFS 节点预算）
 │  │  └─ cache.ts                #   60s TTL + 64 条上限的结果缓存
 │  ├─ web/                       # HTTP 服务层（node:http，仅绑定 127.0.0.1）
 │  │  ├─ server.ts               #   生命周期（listen / shutdown / 端口重试）
@@ -120,8 +129,10 @@ opencode-db-insight/
 │  │  ├─ static-files.ts         #   静态文件服务（路径逃逸防护）
 │  │  ├─ db-connection-guard.ts  #   连接自愈守卫（结构化致命错误判别）
 │  │  └─ public/                 #   前端看板（原生 ESM，零构建）
-│  │     ├─ app.js / data-source.js / format.js / theme.js / tooltip.js
+│  │     ├─ app.js / data-source.js / format.js / precision.js / theme.js / tooltip.js
 │  │     ├─ mock-data.js / mock-replay-data.js
+│  │     ├─ mock-content-composition.js / mock-token-ledger.js
+│  │     ├─ mock-session-lineage.js / mock-file-activity.js
 │  │     │                       #     USE_MOCK 开关（data-source.js）的 dev-only 预览
 │  │     │                       #     数据源：不请求路由，内容为虚构数据（离线演示用）
 │  │     ├─ components/          #     KPI 卡 / 趋势图 / 日历热力 / hour-heatmap 时段热力 /
@@ -132,7 +143,7 @@ opencode-db-insight/
 │  │     │                       #     replay-search 页内搜索）/ 压缩面板 / 存活卡片 /
 │  │     │                       #     目录统计面板 / 空态与加载态
 │  │     └─ vendor/uplot/        #     uPlot 本地化（无 CDN 依赖）
-│  ├─ export/                    # Markdown 导出渲染（角色分节 / 格式化辅助 / 凭据脱敏）
+│  ├─ export/                    # 导出渲染（Markdown 角色分节 / SVG 报告 / 格式化辅助 / 凭据脱敏）
 │  └─ tui/                       # TUI 命令实现
 │     ├─ command-registry.ts     #   斜杠命令注册表
 │     ├─ open-dashboard-command.ts / export-command.ts
@@ -141,7 +152,7 @@ opencode-db-insight/
 │     ├─ sidebar-todo.tsx        #   v0.24 侧栏「Todos」块（sidebar.content 槽位）
 │     ├─ clip-columns.ts         #   CJK / emoji 感知的显示列宽截断（侧栏标签）
 │     └─ tui-context.ts         #   宿主 toast 降级助手
-├─ test/                         # 654 用例：模块测试 + 集成 / 韧性 / SQL 对账 + 行为 / 目录 / 排序 / CSV / 搜索 / 刷新等回归面（随版本持续增补）
+├─ test/                         # 818 用例：模块测试 + 集成 / 韧性 / SQL 对账 + 行为 / 目录 / 排序 / CSV / 搜索 / 刷新等回归面（随版本持续增补）
 │  └─ helpers/                   # fake-insight-db / step 工厂
 ├─ DESIGN.md / tasks.md / CHANGELOG.md / README.md
 └─ package.json / LICENSE
@@ -170,7 +181,9 @@ opencode-db-insight/
 | 子代理开销占比 | Σ子代 tokens / Σ(子代+根) tokens；子代 = `session_v2.parent_id IS NOT NULL` | v0.21.0；tokens 口径 = input+output+cache.read；另出「直接子代消耗 TOP5」父会话（只含直接子代，不含孙代） |
 | 会话步数分布 | 每会话 assistant 消息数分布（对数半档桶 + p50/p90/p99） | v0.21.0；锚定 `session_v2`（排除孤儿消息，与 token / 时长分布同锚） |
 | 会话墙钟时长 | `session_v2.time_updated - time_created`（仅正值会话）分布 + 会话列表列 | v0.21.0；**非「活跃时长」**——`time_compacting` 全 0、`time_suspended` 仅 5，无从精确，故只做墙钟不引入估算 |
+| 会话 token 总量分布 | 每会话 tokens（input+output+cache.read）总量分布（对数半档桶 + p50/p90/p99）；排除零消耗会话 | v0.20.0；锚定 `session_v2`（排除孤儿消息） |
 | 工具错误率逐日趋势 | 按本地日分桶：tool 段 `$.state.status === "error"` 的调用数 `toolCalls` 与 `errors`，错误率 = `errors / toolCalls` | v0.22.0；**直读** wire（🟢 实值，非换算）；全部会话口径、锚定 `session_v2`；与 `/api/tool-health` **同源抽取**（跨路由 Σ `toolCalls` / Σ `errors` 恒等，有守恒测试锁定） |
+| 工具健康榜 | per-tool tool 段 `$.state.status` 计数（completed / error / running / total）+ `errorRate = error / total` | v0.18.0；**直读** wire（🟢 实值）；与 `/api/tool-error-trend` **同源抽取**（`tool-part-extraction.ts`），跨路由 Σ `toolCalls` / Σ `errors` 恒等；全部会话口径、锚定 `session_v2`、吃 `?session=` |
 | 失败中断会话 | 会话最后一条 assistant **对象**消息（`PARTITION BY session_id ORDER BY seq DESC` 取 rn=1）携带 `$.error` 即判「以错误收尾」；`interruptedShare = interruptedSessions / sessionsWithSteps` | v0.22.0；**推断口径**（🟡）——`session_v2` 无 status/error 列，只能自消息推断；`byErrorType` 为**会话级终局**错误类型（Σ count == `interruptedSessions`；终局缺 `type` 者不计桶但仍计入中断）；`sessionsWithSteps` 与步数分布同集合（锚定 `session_v2`、`type='assistant'` 去重计数） |
 | 每工具 token 归因 | 步 token（input+output+cache.read）按步内**去重工具名**的分词估算权重分摊：`weight = estimateTokens(tool)/ΣestimateTokens(step)`，`estimateTokens` = 自包含分词估算（ASCII ≈ 4 字符/token、3 字节非 ASCII ≈ 1 字符/token）＝ `asciiChars/4 + nonAsciiChars`（`nonAsciiChars = max(0,(byte−char)/2)`）；规模 = 该 part `$.state.input` 与输出字段（`$.state.metadata.output`（字符串）否则回退 `$.state.content[]` 各 `{type:"text",text}` 块拼接——**不是** `$.state.output`）的字符数（`length(json_extract(...))`）与 UTF-8 字节数（`length(CAST(json_extract(...) AS BLOB))`），字段缺失 → 0；Σweight==0 → 等权 1/k；零工具步 → 归「无工具」桶（tool=""）；同一步同一工具多次出现先合并规模再参与权重 | v0.27.0（字节权重）→ **v0.28.0 起改自包含分词估算权重**；**🟡 估算**（归因，非 DB 字段）；整数守恒：最大余数法取整使 Σ 行 tokens === Σ 步 token **精确相等**；全部会话口径、锚定 `session_v2`，吃 `?session=` |
 | 压缩事件 | compaction 消息计数（按会话/按日/按 reason） | 马拉松会话信号（v0.2 已接线） |
@@ -236,7 +249,7 @@ opencode-db-insight/
 - **子代理开销占比卡**（v0.21.0，`#panel-child-share` span-both）：双段占比条（子代 = `--accent` / 根 = `--blue`）+ 大号百分比 + 一句概括 + 直接子代消耗 TOP5 父会话清单（每行链到该会话回放）；左概览 / 右榜单两栏，窄屏折单栏。
 - **工具错误率趋势卡**（v0.22.0，`#panel-tool-error-trend` span-12）：本地日的错误数与错误率时序；错误率折线可折叠（选择状态**跨重渲保活**）；范围 7/30/90/全部（「全部」复用 `MAX_TREND_DAYS`，与后端 clamp 同源）；工具段非法本地日直接剔除；副标题标 **🟢 实值**（直读 `$.state.status`，非换算）。
 - **会话失败与中断卡**（v0.22.0，`#panel-session-outcomes` span-both）：以错误收尾会话的 hero 计数 + 占比（分母 = 有步骤会话，计数与占比互相兜底降级）+ 终局错误类型条（条宽为**相对榜首**占比）+ 最近中断记录清单（标题链到该会话回放）；副标题标 **🟡 推断**。
-- **页首目录导航**（v0.18.0，`#toc-nav` 19 chip）：点击平滑滚动 + `.toc-flash` 短暂高亮（reduced-motion 降级）+ `scroll-margin` 防遮挡。
+- **页首目录导航**（v0.18.0，`#toc-nav` 24 chip）：点击平滑滚动 + `.toc-flash` 短暂高亮（reduced-motion 降级）+ `scroll-margin` 防遮挡。
 - **页脚精度图例**（v0.22.0 扩档）：`🟢 实值 = 直接来自数据库 · 🟡 推断/估算 = 由消息字段推断或由 token 换算，仅作参考`——「工具错误率趋势 = 实值」「会话失败与中断 = 推断」据此自洽。
 
 ## 8. TUI 面
@@ -291,7 +304,7 @@ opencode-db-insight/
 | M3 | 看板前端（KPI/趋势/排行） | index 页 |
 | M4 | 单会话回放视图 | session 页 |
 | M5 | Markdown 导出 | /insight-export |
-| M6 | TUI 面板 + 命令打磨 | /insight-status |
+| M6 | TUI 面板 + 命令打磨 | /insight（早期 `/insight-status` 已退役） |
 | M7 | 安装验证 + README 收敛 | v0.1.0 发布 |
 
 每完成一个里程碑：commit → push GitHub → 记录 CHANGELOG.md（见 changelog 约定）。

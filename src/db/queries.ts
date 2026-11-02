@@ -8,8 +8,11 @@
  * Conventions:
  * - Statistics always come from `session_message` (the old `part`/`message`
  *   tables stopped being written 2026-09-23 and must not be double-counted);
- *   `session_v2` is only used for the session list and per-session
- *   dimensions (DESIGN §2.2/§10).
+ *   `session_v2` serves the session list and per-session dimensions, and its
+ *   id set is also the orphan anchor for EVERY message scan
+ *   (session_id IN (SELECT id FROM session_v2), see scan-conventions.ts
+ *   SESSION_V2_ANCHOR_PREDICATE_SQL and DATA-CONTRACT.md §六) — not just the
+ *   session list.
  * - SQL only extracts raw rows; aggregation (median/p95/fingerprints/...)
  *   happens in the pure `src/stats/` functions.
  * - Every query accepts `null` (db missing or node:sqlite unavailable) and
@@ -41,7 +44,10 @@ import {
 // （todo 表按 session_id 列过滤）；step/会话级聚合的落点在
 // aggregate-queries.ts / behavior-queries.ts / tool-health-queries.ts /
 // directory-queries.ts。
-import { buildSessionFilterSqlFragments } from "./scan-conventions.ts"
+import {
+  buildSessionFilterSqlFragments,
+  SESSION_V2_ANCHOR_PREDICATE_SQL,
+} from "./scan-conventions.ts"
 // 会话富化（v0.19.0 modelIds + v0.20.0 附加字段）：独立模块，见
 // session-summary-enrichment.ts 的文件头说明（行为零变化的拆分）。
 import {
@@ -120,7 +126,8 @@ export function openOpencodeDb(
  * Every assistant message of `session_message`, parsed into step rows. The
  * single shared scan behind the stats queries and the TUI status panel
  * (which passes a `sinceMs` lower bound so its 7-day window prunes old rows
- * in SQL). Returns null when the database is unavailable.
+ * in SQL). 每条扫描都带 session_v2 孤儿锚定（SESSION_V2_ANCHOR_PREDICATE_SQL），
+ * 与其余统计口径同锚。Returns null when the database is unavailable.
  */
 export function queryAssistantStepRows(
   db: SqliteReadConnection | null,
@@ -131,8 +138,8 @@ export function queryAssistantStepRows(
   const rawRows = db
     .prepare(
       hasTimeFloor
-        ? "SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant' AND time_created >= ?"
-        : "SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant'",
+        ? `SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant' AND ${SESSION_V2_ANCHOR_PREDICATE_SQL} AND time_created >= ?`
+        : `SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant' AND ${SESSION_V2_ANCHOR_PREDICATE_SQL}`,
     )
     .all(...(hasTimeFloor ? [sinceMs] : []))
 
@@ -522,7 +529,11 @@ function parseSessionSummaryRow(
 }
 
 /**
- * All messages of one session for the replay view, ordered by seq.
+ * All messages of one session for the replay view, ordered by
+ * `seq ASC, time_created ASC, id ASC` (deterministic: session_message has no
+ * UNIQUE(session_id, seq), so equal seq values need the extra tie-breaks or
+ * pagination/rendering would drift). Anchored to session_v2 like every
+ * message scan, so orphan messages of a deleted session never surface.
  * `data` keeps the parsed original JSON structure. Unknown session ids
  * yield an empty array.
  */
@@ -536,7 +547,8 @@ export function querySessionMessages(
       `SELECT id, session_id, type, seq, time_created, time_updated, data
        FROM session_message
        WHERE session_id = ?
-       ORDER BY seq ASC`,
+         AND ${SESSION_V2_ANCHOR_PREDICATE_SQL}
+       ORDER BY seq ASC, time_created ASC, id ASC`,
     )
     .all(sessionId)
 

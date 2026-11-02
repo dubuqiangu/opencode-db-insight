@@ -30,6 +30,7 @@ import {
   buildScanFloorEpochMs,
   buildSessionFilterSqlFragments,
   buildWindowStartEpochMs,
+  SESSION_V2_ANCHOR_PREDICATE_SQL,
 } from "./scan-conventions.ts"
 
 /** Bucket key for compaction rows whose data carries no usable reason. */
@@ -63,15 +64,19 @@ export function queryHourHeatmap(
   if (db === null) return null
   if (!Number.isFinite(days) || days <= 0) return bucketStepsByHourAndWeekday([])
   const boundedDays = Math.min(Math.floor(days), MAX_TREND_DAYS)
-  const scanFloorMs = buildScanFloorEpochMs(boundedDays)
-  const windowStartEpochMs = buildWindowStartEpochMs(boundedDays)
+  // 读一次时钟：扫描下界与窗口下界共用同一时刻，避免两次 Date.now() 跨越
+  // 本地午夜把「今天」分到不同天（与 queryModelMetricsComparison 同纪律）。
+  const nowMs = Date.now()
+  const scanFloorMs = buildScanFloorEpochMs(boundedDays, nowMs)
+  const windowStartEpochMs = buildWindowStartEpochMs(boundedDays, nowMs)
   const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
 
   const rawRows = db
     .prepare(
       `SELECT time_created
        FROM session_message
-       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE} AND time_created >= ?`,
+       WHERE ${sessionFilter.stepPredicatePrefixSql}${ASSISTANT_OBJECT_DATA_PREDICATE}
+         AND ${SESSION_V2_ANCHOR_PREDICATE_SQL} AND time_created >= ?`,
     )
     .all(
       ...(sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]),
@@ -176,9 +181,14 @@ export function queryCompactionStats(
 ): CompactionStats | null {
   if (db === null) return null
 
+  // 读一次时钟：recentDaily 的扫描下界与「今天」本地午夜共用同一时刻，
+  // 避免两次时钟读取跨越本地午夜导致下界与日期键错日。
+  const nowMs = Date.now()
   const sessionFilter = buildSessionFilterSqlFragments(sessionFilterId)
   const stepFilterBinds = sessionFilter.sessionFilterId === null ? [] : [sessionFilter.sessionFilterId]
-  const compactionPredicate = `${sessionFilter.stepPredicatePrefixSql}type = 'compaction'`
+  const compactionPredicate =
+    `${sessionFilter.stepPredicatePrefixSql}type = 'compaction'` +
+    ` AND ${SESSION_V2_ANCHOR_PREDICATE_SQL}`
 
   const reasonRows = db
     .prepare(
@@ -205,7 +215,7 @@ export function queryCompactionStats(
     total += reasonCount
   }
 
-  const recentDailyFloorMs = buildScanFloorEpochMs(COMPACTION_RECENT_DAILY_WINDOW_DAYS)
+  const recentDailyFloorMs = buildScanFloorEpochMs(COMPACTION_RECENT_DAILY_WINDOW_DAYS, nowMs)
   const timestampRows = db
     .prepare(
       `SELECT time_created
@@ -218,7 +228,7 @@ export function queryCompactionStats(
   // same key generation bucketDailyTrend uses.
   const recentDaily: CompactionDailyCount[] = []
   const countByDateKey = new Map<string, number>()
-  const todayLocalMidnight = new Date()
+  const todayLocalMidnight = new Date(nowMs)
   todayLocalMidnight.setHours(0, 0, 0, 0)
   for (let daysBack = COMPACTION_RECENT_DAILY_WINDOW_DAYS - 1; daysBack >= 0; daysBack -= 1) {
     const bucketDate = new Date(todayLocalMidnight.getTime())

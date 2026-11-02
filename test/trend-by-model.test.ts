@@ -141,6 +141,13 @@ function createTrendByModelDatabase(): SqliteReadWriteConnection {
       "id TEXT, session_id TEXT, type TEXT, seq INTEGER, " +
       "time_created INTEGER, time_updated INTEGER, data TEXT);",
   )
+  // v0.30.0: every message scan is anchored on session_v2, so the fixture
+  // must carry a parent row per session or the query drops its messages.
+  database.exec("CREATE TABLE session_v2 (id TEXT PRIMARY KEY);")
+  const insertSessionRow = database.prepare("INSERT INTO session_v2 (id) VALUES (?)")
+  for (const sessionId of new Set(TREND_FIXTURE_MESSAGES.map((fixtureMessage) => fixtureMessage.sessionId))) {
+    insertSessionRow.run(sessionId)
+  }
   const insertMessage = database.prepare(
     "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) " +
       "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -302,6 +309,9 @@ test(
           "id TEXT, session_id TEXT, type TEXT, seq INTEGER, " +
           "time_created INTEGER, time_updated INTEGER, data TEXT);",
       )
+      // v0.30.0: the trend scan is anchored on session_v2.
+      database.exec("CREATE TABLE session_v2 (id TEXT PRIMARY KEY);")
+      database.prepare("INSERT INTO session_v2 (id) VALUES (?)").run("ses_trend_example_solo")
       const insertMessage = database.prepare(
         "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) " +
           "VALUES (?, ?, ?, ?, ?, ?, ?)",

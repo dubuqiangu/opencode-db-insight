@@ -390,6 +390,13 @@ function createInMemoryCompactionDatabase(
         "id TEXT, session_id TEXT, type TEXT, seq INTEGER, " +
         "time_created REAL, time_updated REAL, data TEXT)",
     )
+    // v0.30.0: the compaction scans are anchored on session_v2, so every
+    // fixture session id needs a parent row or its rows drop out.
+    database.exec("CREATE TABLE session_v2 (id TEXT PRIMARY KEY)")
+    const insertSessionRow = database.prepare("INSERT INTO session_v2 (id) VALUES (?)")
+    for (const sessionId of new Set(compactionRows.map((compactionRow) => compactionRow.sessionId))) {
+      insertSessionRow.run(sessionId)
+    }
     const insertCompactionRow = database.prepare(
       "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) " +
         "VALUES (?, ?, 'compaction', 0, 1000, 1000, ?)",

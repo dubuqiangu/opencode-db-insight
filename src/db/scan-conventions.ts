@@ -23,6 +23,15 @@ export const ASSISTANT_OBJECT_DATA_PREDICATE =
   "type = 'assistant' AND json_valid(data) AND json_type(data) = 'object'"
 
 /**
+ * 消息扫描的孤儿锚定谓词（单点）：所有 session_message 扫描一律带
+ * `session_id IN (SELECT id FROM session_v2)`，排除「会话已删、消息残留」
+ * 的孤儿消息（DATA-CONTRACT.md §六：所有消息扫描都带该谓词；真库孤儿为 0，
+ * 此约束只防未来不一致）。这是**无条件**口径锚定，与可选的 ?session= 过滤
+ * 互相独立：锚定收敛样本全集，?session= 只在全集内再选一个会话。
+ */
+export const SESSION_V2_ANCHOR_PREDICATE_SQL = "session_id IN (SELECT id FROM session_v2)"
+
+/**
  * SQL-side scan floor for a bounded day window (days pushdown): one
  * extra day of slack so the floor is always below the window start even
  * across DST transitions. The slack rows it lets through are dropped

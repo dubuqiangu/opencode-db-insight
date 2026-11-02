@@ -90,7 +90,7 @@ function compositeModelKey(modelMetric) {
 
 /**
  * token 环比角标（B-part-2）：对比「上一等长窗口」的 token 合计。
- * - previousTokens 缺失 / 非有限 / <= 0：没有可比基数，渲染 "— 环比"；
+ * - previousTokens 缺失 / 非有限 / <= 0：没有可比基数，渲染 renderMissingValue 占位 + "环比"；
  * - 否则 ratio = (tokens - previousTokens) / previousTokens，方向取符号，
  *   数值 = |ratio × 100| 一位小数，方向 0 渲染 "持平"。
  * 沿用 kpi-card.js 的 ▲/▼/持平 与 CSS 类名（.delta/.up/.down/.flat）。
@@ -99,11 +99,11 @@ function compositeModelKey(modelMetric) {
 function renderPeriodDeltaBadge(metric) {
   const previousTokens = metric.previousTokens;
   if (!Number.isFinite(previousTokens) || previousTokens <= 0) {
-    return `<span class="delta flat">— 环比</span>`;
+    return `<span class="delta flat">${renderMissingValue(MISSING_REASON.noComparisonBaseline)} 环比</span>`;
   }
   const ratio = (metric.tokens - previousTokens) / previousTokens;
   if (!Number.isFinite(ratio)) {
-    return `<span class="delta flat">— 环比</span>`;
+    return `<span class="delta flat">${renderMissingValue(MISSING_REASON.noComparisonBaseline)} 环比</span>`;
   }
   if (ratio === 0) {
     return `<span class="delta flat">持平</span>`;

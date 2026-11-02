@@ -22,7 +22,7 @@ export function renderSessionSurvivalCard(container, survival) {
   const medianDurationSeconds = Number(survival?.medianDurationSeconds);
   if (survival === null || !Number.isFinite(totalSessions) || totalSessions <= 0) {
     renderEmpty(container, "还没有会话存活数据", "数据库里没有可统计的会话起止记录");
-    return;
+    return () => {};
   }
   const hasMedian = Number.isFinite(medianDurationSeconds) && medianDurationSeconds >= MINIMUM_MEDIAN_SECONDS;
   const shortLivedShare = Number(survival.shortLivedShare);
@@ -61,6 +61,8 @@ export function renderSessionSurvivalCard(container, survival) {
     </div>
     <p class="distribution-caption">idle 结局分布</p>
     <div class="distribution-list">${outcomeRowsHtml}</div>`;
+
+  return () => {};
 }
 
 /** 分数夹到 0..100，非数显 0（进度条宽度用）。 */

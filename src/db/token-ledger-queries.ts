@@ -25,15 +25,9 @@ import { asRecord, coerceNumber, coerceText } from "./rows.ts"
 import {
   ASSISTANT_OBJECT_DATA_PREDICATE,
   buildSessionFilterSqlFragments,
+  SESSION_V2_ANCHOR_PREDICATE_SQL,
 } from "./scan-conventions.ts"
 import type { TokenLedgerSample } from "../stats/token-ledger.ts"
-
-/**
- * 孤儿锚定：会话级消息扫描一律限定 session_id IN (SELECT id FROM session_v2)，
- * 与 tool-token-queries.ts / 各分布查询同锚（真库孤儿为 0，此约束只防未来
- * 不一致）。这是**无条件**口径锚定，与可选的 ?session= 过滤互相独立。
- */
-const SESSION_V2_ANCHOR_PREDICATE_SQL = "session_id IN (SELECT id FROM session_v2)"
 
 /**
  * 每会话一行的 ledger 抽取：session_v2 的会话行 LEFT JOIN 一个按

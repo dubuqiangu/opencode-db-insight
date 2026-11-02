@@ -3484,6 +3484,15 @@ function modelBodyRowOrder(container: StubElement): Array<string | undefined> {
 }
 
 /**
+ * 缺失环比基线的角标（v0.29.0 precision 收口）：kpi-card 与 model-table 现在
+ * 都走 renderMissingValue(MISSING_REASON.noComparisonBaseline)——不再硬编码
+ * "— 环比" 字面量。两处调用点共用这段期望串。
+ */
+function missingDeltaBadgeHtml(): string {
+  return `<span class="delta flat"><span class="missing-value" title="${MISSING_REASON.noComparisonBaseline}">—</span> 环比</span>`
+}
+
+/**
  * 模块级 sortKey/sortDirection 跨测试残留（model-table 既有隐患）——每个
  * 用例先把排序态定态到自证状态再断言：点击目标列后 sortKey 必落在该列，
  * 方向未知（可能是残留翻转态），按渲染出的箭头方向补一次点击钉死。无论
@@ -3690,8 +3699,8 @@ test("renderModelTable renders the 环比 badge inside the tokens cell and keeps
     "equal totals → 持平",
   )
   assert.ok(
-    container.innerHTML.includes('<span class="delta flat">— 环比</span>'),
-    "previousTokens 0 → no base, — 环比",
+    container.innerHTML.includes(missingDeltaBadgeHtml()),
+    "previousTokens 0 → no base, renderMissingValue placeholder + 环比",
   )
   assert.ok(
     container.innerHTML.includes('<td class="num primary">1K<span class="delta up">'),
@@ -3706,7 +3715,7 @@ test("renderModelTable renders the 环比 badge inside the tokens cell and keeps
     null,
     noopModelSelect,
   )
-  assert.ok(oldWireContainer.innerHTML.includes('<span class="delta flat">— 环比</span>'))
+  assert.ok(oldWireContainer.innerHTML.includes(missingDeltaBadgeHtml()))
 })
 
 test("getMockModelMetrics mirrors the v0.12.0 tokenShare wire: per-model tokens/Σtokens, Σ shares = 1", async () => {
@@ -3754,8 +3763,8 @@ test("getMockModelMetrics mirrors the v0.12.0 tokenShare wire: per-model tokens/
     "at least one mock row has no previous-window base",
   )
   assert.ok(
-    container.innerHTML.includes('<span class="delta flat">— 环比</span>'),
-    "the zero-base row renders the — 环比 badge",
+    container.innerHTML.includes(missingDeltaBadgeHtml()),
+    "the zero-base row renders the missing-baseline 环比 badge",
   )
 })
 
@@ -3965,7 +3974,7 @@ test("renderKpiRow renders the four cards with precision badges, delta direction
     "steps delta: 120 vs 100 → up ratio 20.0%",
   )
   assert.ok(!renderedHtml.includes("持平"), "no flat badge when every metric moved")
-  assert.ok(!renderedHtml.includes("— 环比"), "no missing-base badge in a full fixture")
+  assert.ok(!renderedHtml.includes("missing-value"), "no missing-base placeholder in a full fixture")
 
   // The sessions card is cumulative — no delta badge, its sub line reports
   // the 14-day daily average: round((3+4+5+6)/4) = 5.
@@ -3989,9 +3998,9 @@ test("renderKpiRow degrades flat and missing deltas, handles degenerate sparklin
   const container = freshContainer()
 
   // Flat delta (steps unchanged), missing comparison base (yesterdayTokens
-  // absent → "— 环比"), a constant sparkline (the max===min degenerate
-  // branch must not NaN) and a one-point sparkline (below the 2-value
-  // floor → the spark is omitted entirely).
+  // absent → renderMissingValue placeholder + 环比), a constant sparkline (the
+  // max===min degenerate branch must not NaN) and a one-point sparkline (below
+  // the 2-value floor → the spark is omitted entirely).
   renderKpiRow(container, kpiOverviewFixture({
     yesterdayTokens: undefined,
     yesterdaySteps: 120,
@@ -4001,8 +4010,8 @@ test("renderKpiRow degrades flat and missing deltas, handles degenerate sparklin
 
   const renderedHtml = container.innerHTML
   assert.ok(
-    renderedHtml.includes('<span class="delta flat">— 环比</span>'),
-    "a missing comparison base degrades to the — 环比 badge",
+    renderedHtml.includes(missingDeltaBadgeHtml()),
+    "a missing comparison base degrades to the renderMissingValue badge + 环比",
   )
   assert.ok(
     renderedHtml.includes('<span class="delta flat">持平</span>'),
@@ -4785,4 +4794,213 @@ test("renderTrendChart degrades null and single-point windows to the empty place
   )
   assert.equal(singlePointContainer.querySelectorAll("canvas").length, 0, "no chart is built on the degradation path")
   singlePointCleanup()
+})
+
+/* ---------- trend-chart: one-shot plot cleanup (v0.29.0 / A1) ---------- */
+
+/**
+ * Chart mount stub for the uPlot path. The base StubElement backs the legend,
+ * but the chart container additionally needs clientWidth (uPlot's width) and a
+ * removeEventListener the returned cleanup touches — the base shim only
+ * captures addEventListener.
+ */
+class TrendChartContainerStub extends StubElement {
+  clientWidth = 800
+  removedMouseLeaveListeners = 0
+  removeEventListener(eventType: string): void {
+    if (eventType === "mouseleave") this.removedMouseLeaveListeners += 1
+  }
+}
+
+/**
+ * The render body needs a uPlot constructor, a ResizeObserver and a
+ * devicePixelRatio; none are referenced at import time, so installing them
+ * lazily per test keeps the module offline-testable. Returns call counters so
+ * the tests can assert a plot is torn down exactly once.
+ */
+function installTrendChartRuntimes() {
+  const globalScope = globalThis as unknown as Record<string, unknown>
+  const originalUPlot = globalScope.uPlot
+  const originalResizeObserver = globalScope.ResizeObserver
+  const originalDevicePixelRatio = globalScope.devicePixelRatio
+
+  const runtimeCounters = { destroyed: 0, disconnected: 0 }
+  globalScope.uPlot = class {
+    setSize(): void {}
+    destroy(): void {
+      runtimeCounters.destroyed += 1
+    }
+  }
+  globalScope.ResizeObserver = class {
+    observe(): void {}
+    disconnect(): void {
+      runtimeCounters.disconnected += 1
+    }
+  }
+  globalScope.devicePixelRatio = 1
+
+  return {
+    destroyedPlotCount: () => runtimeCounters.destroyed,
+    disconnectedObserverCount: () => runtimeCounters.disconnected,
+    restore: () => {
+      globalScope.uPlot = originalUPlot
+      globalScope.ResizeObserver = originalResizeObserver
+      globalScope.devicePixelRatio = originalDevicePixelRatio
+    },
+  }
+}
+
+/** Three-day window with one named model (rankModels takes the byModel branch). */
+function trendChartFixture(modelId: string) {
+  return {
+    points: [
+      dailyTrendPointFixture("2026-10-01", 100, 400, 50),
+      dailyTrendPointFixture("2026-10-02", 120, 500, 60),
+      dailyTrendPointFixture("2026-10-03", 90, 300, 40),
+    ],
+    byModel: [{ modelId, values: [200, 250, 150] }],
+  }
+}
+
+test("renderTrendChart's returned cleanup is one-shot: a second call neither destroys the plot nor disconnects again (A1)", async () => {
+  const { renderTrendChart } = await import("../src/web/public/components/trend-chart.js")
+  const runtimes = installTrendChartRuntimes()
+  try {
+    const chartContainer = new TrendChartContainerStub("div")
+    const legendContainer = freshContainer()
+    const cleanup = renderTrendChart(chartContainer, legendContainer, trendChartFixture("model-oneshot-example"))
+
+    assert.equal(runtimes.destroyedPlotCount(), 0, "building the plot destroys nothing yet")
+    assert.equal(typeof cleanup, "function", "the render returns a cleanup")
+
+    // app.js invokes the previous render's cleanup twice in one load cycle
+    // (loadTrendSection pre-await + renderTrendSectionFromCache) with no
+    // reassignment between the two calls — only the first may tear down.
+    cleanup()
+    cleanup()
+
+    assert.equal(runtimes.destroyedPlotCount(), 1, "the plot is destroyed exactly once")
+    assert.equal(runtimes.disconnectedObserverCount(), 1, "the observer is disconnected exactly once")
+    assert.equal(chartContainer.removedMouseLeaveListeners, 1, "the mouseleave listener is removed exactly once")
+  } finally {
+    runtimes.restore()
+  }
+})
+
+test("renderTrendChart does not re-run a consumed plot cleanup when the last layer is toggled off and back on (A1)", async () => {
+  const { renderTrendChart } = await import("../src/web/public/components/trend-chart.js")
+  const runtimes = installTrendChartRuntimes()
+  try {
+    const chartContainer = new TrendChartContainerStub("div")
+    const legendContainer = freshContainer()
+    const cleanup = renderTrendChart(chartContainer, legendContainer, trendChartFixture("model-toggle-example"))
+
+    // The sole model chip is the first legend button. Turning it off leaves
+    // zero visible layers → the empty placeholder, and the plot cleanup must
+    // be consumed exactly once (not left dangling for the next build to re-run).
+    const modelChip = () => legendContainer.querySelectorAll("button")[0]!
+    modelChip().click()
+    assert.match(chartContainer.innerHTML, /所有模型都被关掉了/, "toggling the last layer off shows the empty state")
+    assert.equal(runtimes.destroyedPlotCount(), 1, "toggling the last layer off destroys the plot once")
+
+    // Toggling back on rebuilds; re-running the already-consumed cleanup here
+    // would be a second destroy() of the same dead plot (the use-after-free).
+    modelChip().click()
+    assert.equal(runtimes.destroyedPlotCount(), 1, "the consumed cleanup is not re-run on the next build")
+
+    cleanup()
+    assert.equal(runtimes.destroyedPlotCount(), 2, "the final cleanup destroys the rebuilt plot exactly once")
+    assert.equal(runtimes.disconnectedObserverCount(), 2, "one observer disconnect per built plot")
+  } finally {
+    runtimes.restore()
+  }
+})
+
+/* -------- precision contract: missing 环比 baseline (v0.29.0 / B1+B2) -------- */
+
+test("missing 环比 bases route through renderMissingValue with the shared reason, never a hardcoded — literal (B1+B2)", async () => {
+  const { renderKpiRow } = await import("../src/web/public/components/kpi-card.js")
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+  const expectedBadge = missingDeltaBadgeHtml()
+
+  const kpiContainer = freshContainer()
+  renderKpiRow(kpiContainer, kpiOverviewFixture({ yesterdayTokens: undefined }))
+  assert.ok(
+    kpiContainer.innerHTML.includes(expectedBadge),
+    "the KPI tokens card carries the renderMissingValue badge for an absent baseline",
+  )
+  assert.ok(
+    kpiContainer.innerHTML.includes(`title="${MISSING_REASON.noComparisonBaseline}"`),
+    "the badge exposes the shared reason as a tooltip",
+  )
+  assert.ok(
+    !kpiContainer.innerHTML.includes('delta flat">— 环比'),
+    "no hardcoded — 环比 literal survives in kpi-card",
+  )
+
+  const modelContainer = freshContainer()
+  renderModelTable(
+    modelContainer,
+    [modelMetricFixture({ modelId: "model-example-nobase", tokens: 1000, previousTokens: 0 })],
+    null,
+    noopModelSelect,
+  )
+  assert.ok(
+    modelContainer.innerHTML.includes(expectedBadge),
+    "the model table row carries the renderMissingValue badge for a zero base",
+  )
+  assert.ok(
+    modelContainer.innerHTML.includes(`title="${MISSING_REASON.noComparisonBaseline}"`),
+    "the model-table badge exposes the shared reason as a tooltip",
+  )
+  assert.ok(
+    !modelContainer.innerHTML.includes('delta flat">— 环比'),
+    "no hardcoded — 环比 literal survives in model-table",
+  )
+})
+
+/* ---------------- cleanup contract on every render path (C2) ---------------- */
+
+test("session-survival / todo / compaction renderers always return a callable cleanup (C2)", async () => {
+  const { renderSessionSurvivalCard } = await import("../src/web/public/components/session-survival-card.js")
+  const { renderTodoCard } = await import("../src/web/public/components/todo-card.js")
+  const { renderCompactionPanel } = await import("../src/web/public/components/compaction-panel.js")
+
+  // Data path.
+  const survivalDataCleanup = renderSessionSurvivalCard(freshContainer(), {
+    totalSessions: 2,
+    medianDurationSeconds: 120,
+    shortLivedShare: 0.5,
+    idleOutcomeCounts: { idle: 2 },
+  })
+  const todoDataCleanup = renderTodoCard(freshContainer(), {
+    total: 2,
+    completed: 1,
+    pending: 1,
+    inProgress: 0,
+  })
+  const compactionDataCleanup = renderCompactionPanel(freshContainer(), {
+    total: 1,
+    byReason: { auto: 1 },
+    recentDaily: [],
+    topSessions: [],
+  })
+
+  // Empty / null path — previously returned undefined.
+  const survivalEmptyCleanup = renderSessionSurvivalCard(freshContainer(), null)
+  const todoEmptyCleanup = renderTodoCard(freshContainer(), { total: 0, completed: 0, pending: 0, inProgress: 0 })
+  const compactionEmptyCleanup = renderCompactionPanel(freshContainer(), null)
+
+  const returnedCleanups = [
+    survivalDataCleanup,
+    todoDataCleanup,
+    compactionDataCleanup,
+    survivalEmptyCleanup,
+    todoEmptyCleanup,
+    compactionEmptyCleanup,
+  ]
+  for (const cleanup of returnedCleanups) {
+    assert.equal(typeof cleanup, "function", "every render path returns a cleanup function")
+    assert.doesNotThrow(() => cleanup(), "the returned cleanup is safe to invoke")
+  }
 })

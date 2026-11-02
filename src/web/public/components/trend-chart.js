@@ -130,8 +130,19 @@ export function renderTrendChart(container, legendContainer, trendData) {
 
   let cleanupPreviousPlot = null;
 
+  // 一次性消费：取出即清空句柄，保证同一个 cleanup 绝不二次执行
+  //（plot.destroy() 与 resizeObserver.disconnect() 重复调用是 use-after-free）。
+  // app.js 会在同一轮加载里连调两次返回的 cleanup（loadTrendSection 预清 +
+  // renderTrendSectionFromCache 渲染前清，中间无重新赋值）；buildPlot 的
+  // 「所有层关闭」空态分支也不再挂新句柄——清空是这两条路径共用的护栏。
+  const consumePreviousPlotCleanup = () => {
+    const previousCleanup = cleanupPreviousPlot;
+    cleanupPreviousPlot = null;
+    if (previousCleanup) previousCleanup();
+  };
+
   const buildPlot = () => {
-    if (cleanupPreviousPlot) cleanupPreviousPlot();
+    consumePreviousPlotCleanup();
     container.innerHTML = "";
 
     const { visibleLayers, cumulativeSeries } = buildStackedData(layers, timestampsSeconds);
@@ -264,6 +275,6 @@ export function renderTrendChart(container, legendContainer, trendData) {
   }
 
   return () => {
-    if (cleanupPreviousPlot) cleanupPreviousPlot();
+    consumePreviousPlotCleanup();
   };
 }

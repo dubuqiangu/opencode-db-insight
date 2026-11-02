@@ -214,6 +214,36 @@ test("sessionMessages distinguishes empty sessions from unknown ids (P2-7)", () 
   }
 })
 
+test("sessionMessages 404s an orphan id whose messages linger outside session_v2 (M3)", () => {
+  clearResultCache()
+  try {
+    const fakeDatabase = createFakeInsightDatabase({
+      sessions: [buildFakeSessionSummary({ id: "ses_registered" })],
+      messagesBySessionId: {
+        ses_orphan: [{ type: "user", data: { text: "已删会话残留的消息" } }],
+      },
+      systemPromptBySessionId: {},
+    })
+
+    // The orphan has messages but no session_v2 row: the existence gate (the
+    // same one the anchored message scan uses) must answer 404, not serve them.
+    const orphanResponse = handleApiRequest(
+      apiContextFor("/api/session/ses_orphan/messages", fakeDatabase),
+    )
+    assert.equal(orphanResponse.statusCode, 404)
+    assert.deepEqual(orphanResponse.body, { error: SESSION_NOT_FOUND_MESSAGE })
+
+    // The registered session is unaffected: it still answers SESSION_EMPTY.
+    const registeredResponse = handleApiRequest(
+      apiContextFor("/api/session/ses_registered/messages", fakeDatabase),
+    )
+    assert.equal(registeredResponse.statusCode, 404)
+    assert.deepEqual(registeredResponse.body, { error: SESSION_EMPTY_MESSAGE })
+  } finally {
+    clearResultCache()
+  }
+})
+
 test("unexpected query errors answer an opaque 500 and only log the cause (P2-11)", () => {
   clearResultCache()
   const consoleErrorMock = mock.method(console, "error", () => {})
@@ -222,6 +252,12 @@ test("unexpected query errors answer an opaque 500 and only log the cause (P2-11
       prepare: (sql: string) => {
         if (sql.includes("FROM session_message")) {
           throw new Error("fake db: corrupt b-tree page in session_message")
+        }
+        if (sql.includes("FROM session_v2")) {
+          // The v0.30.0 existence gate (SELECT 1 … WHERE id = ?) must
+          // succeed so the failing message query — not the probe — is
+          // what surfaces as the opaque 500.
+          return { all: () => [], get: () => ({ probe: 1 }) }
         }
         throw new Error(`fake db: unexpected SQL: ${sql}`)
       },

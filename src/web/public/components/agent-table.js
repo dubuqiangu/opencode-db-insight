@@ -1,6 +1,6 @@
 /**
  * Agent 排行榜明细表（数据 = GET /api/agents 的 AgentStat[]，按 tokens 降序）。
- * 列：Agent / Sessions / Tokens / Top Tools（toolFingerprint 调用次数前 3，
+ * 列：Agent / 会话 / 总 token / 常用工具（toolFingerprint 调用次数前 3，
  * 小字 chip）。表格样式语言完全复用 model-table 的 .data-table（num 右对齐
  * tabular-nums、primary 提亮、行 hover），不另起样式体系。
  *
@@ -49,7 +49,7 @@ export function renderAgentTable(container, agentStats) {
     return;
   }
   if (agentStats.length === 0) {
-    renderEmpty(container, "No agent records yet", "数据库里还没有可归属到 agent 的 assistant 消息");
+    renderEmpty(container, "还没有 agent 记录", "数据库里还没有可归属到 agent 的 assistant 消息");
     return;
   }
 
@@ -66,16 +66,16 @@ export function renderAgentTable(container, agentStats) {
     </tr>`).join("");
 
   container.innerHTML = `
-    <table class="data-table agent-table" aria-label="Agent Leaderboard">
+    <table class="data-table agent-table" aria-label="Agent 排行榜">
       <colgroup>
         <col style="width:160px"><col style="width:76px">
         <col style="width:96px"><col style="width:160px">
       </colgroup>
       <thead><tr>
         <th>Agent</th>
-        <th class="num">Sessions</th>
-        <th class="num">Tokens</th>
-        <th>Top Tools</th>
+        <th class="num">会话</th>
+        <th class="num">总 token</th>
+        <th>常用工具</th>
       </tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>`;

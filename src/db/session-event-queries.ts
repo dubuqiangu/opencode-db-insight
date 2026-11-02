@@ -20,18 +20,13 @@
 
 import type { SqliteReadConnection } from "./types.ts"
 import { asRecord, coerceNumber, coerceText, UNKNOWN_MODEL_ID } from "./rows.ts"
+import { SESSION_V2_ANCHOR_PREDICATE_SQL } from "./scan-conventions.ts"
 
 /** 无可用 reason 的 compaction 行归入此桶（与 behavior-queries 同语义）。 */
 const UNKNOWN_COMPACTION_REASON = "unknown"
 
 /** system 事件 detail 的截断长度（按 code point，避免切断代理对）。 */
 const SYSTEM_EVENT_DETAIL_MAX_LENGTH = 200
-
-/**
- * 孤儿锚定：会话级消息扫描一律限定 session_id IN (SELECT id FROM session_v2)，
- * 与 tool-token-queries.ts / 各分布查询同锚。
- */
-const SESSION_V2_ANCHOR_PREDICATE_SQL = "session_id IN (SELECT id FROM session_v2)"
 
 /** 会话事件类型（wire type 列，仅这三类）。 */
 export type SessionEventType = "compaction" | "model-switched" | "system"
@@ -92,7 +87,7 @@ export function querySessionEvents(
        WHERE session_id = ?
          AND type IN ('compaction', 'model-switched', 'system')
          AND ${SESSION_V2_ANCHOR_PREDICATE_SQL}
-       ORDER BY seq ASC`,
+       ORDER BY seq ASC, time_created ASC, id ASC`,
     )
     .all(sessionId)
 

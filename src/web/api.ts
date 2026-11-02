@@ -90,7 +90,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.29.0"
+export const INSIGHT_VERSION = "0.29.1"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -788,6 +788,13 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         return { statusCode: 200, body: sessionOutcome }
       }
       case "sessionMessages": {
+        // v0.29.1：先做 session_v2 存在性探针，不在 session_v2 的 id（孤儿 /
+        // 已删会话）直接 404——与 sessionEvents 同门，也和消息扫描的
+        // SESSION_V2_ANCHOR_PREDICATE_SQL 同口径（否则带孤儿消息的未知 id 会
+        // 因为「有消息」而绕过 404）。
+        if (!sessionExistsInSessionV2(database, route.sessionId)) {
+          return { statusCode: 404, body: { error: SESSION_NOT_FOUND_MESSAGE } }
+        }
         const messageRecords = cachedResult(
           buildCacheKey("querySessionMessages", [route.sessionId]),
           () => querySessionMessages(database, route.sessionId),

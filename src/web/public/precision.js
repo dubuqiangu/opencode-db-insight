@@ -50,6 +50,7 @@ export const MISSING_REASON = Object.freeze({
   nonPositiveDuration: "没有正的墙钟时长（更新时间不晚于创建时间）",
   noToolCalls: "没有工具调用记录",
   inconsistentCount: "前后端口径不一致，该计数不可得",
+  noComparisonBaseline: "没有可比较的上一窗口基线，环比不可得",
 });
 
 /**

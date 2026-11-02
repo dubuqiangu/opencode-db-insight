@@ -22,6 +22,7 @@
 import type { SqliteReadConnection } from "./types.ts"
 import { asRecord } from "./rows.ts"
 import { buildSearchableMessageText } from "./message-text-extract.ts"
+import { SESSION_V2_ANCHOR_PREDICATE_SQL } from "./scan-conventions.ts"
 
 /** 单个搜索命中载荷（契约定稿，与前端 wire 形状一致）。 */
 export interface CrossSessionSearchHit {
@@ -90,15 +91,24 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#39;")
 }
 
-/** 在原始大小写文本里定位子串匹配（大小写不敏感），返回首个命中或 -1。 */
+/** 转义正则元字符，使查询串能作为字面量被 RegExp 匹配（子串模式用）。 */
+function escapeRegExp(rawText: string): string {
+  return rawText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * 在原始文本里定位子串匹配（大小写不敏感），返回首个命中的**原文**下标
+ * 或 -1。
+ *
+ * 不能对文本 toLowerCase 再 indexOf 后把小写下标套回原文：大小写转换不是
+ * 1:1 码元映射（如 'İ' U+0130 小写为 "i" + 组合点两个码元），小写文本的
+ * 下标会比原文偏移，用于原文切片会错位。改为在原文上跑不区分大小写的
+ * 字面量正则，exec().index 直接就是原文下标；RegExp 返回最左匹配，
+ * 保留「首个命中」语义。
+ */
 function findSubstringMatchIndex(originalText: string, rawQuery: string): number {
-  const loweredText = originalText.toLowerCase()
-  const loweredQuery = rawQuery.toLowerCase()
-  const loweredIndex = loweredText.indexOf(loweredQuery)
-  if (loweredIndex === -1) return -1
-  // 大小写转换不改变码元偏移（toLowerCase 是 1:1 的码元映射），因此
-  // 小写文本里的命中偏移可直接用于原始文本切片。
-  return loweredIndex
+  const firstMatch = new RegExp(escapeRegExp(rawQuery), "i").exec(originalText)
+  return firstMatch === null ? -1 : firstMatch.index
 }
 
 /** 在原始文本里定位正则首个命中，返回 { index, length } 或 null。 */
@@ -149,11 +159,15 @@ export function queryCrossSessionSearch(
     }
   }
 
+  // 稳定「前 200 条」：按 time_created DESC, id DESC 排序，使命中顺序
+  // 确定且最新优先（session_message 无 UNIQUE(session_id, seq)，仅靠主键 id
+  // 无法保证顺序；200 上限截取的是最新 200 条而非任意 200 条）。
   const rawRows = db
     .prepare(
       "SELECT id, session_id, type, seq, data FROM session_message " +
         "WHERE type IN ('user', 'assistant') " +
-        "AND session_id IN (SELECT id FROM session_v2)",
+        `AND ${SESSION_V2_ANCHOR_PREDICATE_SQL} ` +
+        "ORDER BY time_created DESC, id DESC",
     )
     .all()
 
