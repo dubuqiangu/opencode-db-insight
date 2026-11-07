@@ -371,6 +371,58 @@ test(
 )
 
 test(
+  "substring hitCount uses the same case-insensitive regex rules as matching (İ fold) (N1)",
+  { skip: skipReason },
+  () => {
+    // 'İ' (U+0130) lowercases to two code units ("i" + combining dot), so a
+    // toLowerCase-based counter reports 2 matches where the case-insensitive
+    // regex that drove the match reports 1. Matching and counting must share
+    // the regex semantics; otherwise hitCount contradicts the snippet.
+    const database = new readWriteConstructor!(":memory:")
+    try {
+      database.exec(
+        "CREATE TABLE session_v2 (" +
+          "id TEXT, title TEXT, model TEXT, agent TEXT, directory TEXT, " +
+          "time_created INTEGER, time_updated INTEGER, " +
+          "tokens_input REAL, tokens_output REAL, tokens_cache_read REAL, cost REAL);" +
+          "CREATE TABLE session_message (" +
+          "id TEXT, session_id TEXT, type TEXT, seq INTEGER, " +
+          "time_created INTEGER, time_updated INTEGER, data TEXT);",
+      )
+      database
+        .prepare(
+          "INSERT INTO session_v2 (id, title, model, agent, directory, time_created, time_updated, " +
+            "tokens_input, tokens_output, tokens_cache_read, cost) " +
+            "VALUES ('ses_search_fold', 'fold title', '{}', 'fixer', '', 1000, 2000, 0, 0, 0, 0)",
+        )
+        .run()
+      database
+        .prepare(
+          "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) " +
+            "VALUES ('msg_special_fold', 'ses_search_fold', 'user', 0, 1000, 2000, ?)",
+        )
+        .run(JSON.stringify({ text: "İ foo i" }))
+
+      const result = queryCrossSessionSearch(
+        database as unknown as SqliteReadConnection,
+        "i",
+        "substring",
+      )
+      assert.notEqual(result, null)
+      assert.equal(result!.total, 1)
+      const hit = result!.hits[0]
+      assert.equal(hit.messageId, "msg_special_fold")
+      // The regex /i/i matches only the ASCII 'i' (the 'İ' is not folded to
+      // it), so the true hit count is 1 — matching the snippet's single mark.
+      assert.equal(hit.hitCount, 1, "the count follows the regex, not toLowerCase")
+      assert.ok(hit.snippet.includes("<mark>i</mark>"), "the snippet marks the regex match")
+    } finally {
+      database.close()
+    }
+  },
+)
+
+test(
   "hits are capped at 200 while total reflects the full match count",
   { skip: skipReason },
   () => {

@@ -1,6 +1,6 @@
 # opencode-db-insight 设计文档（DESIGN.md）
 
-> 版本：0.29.x（与 package.json / api.ts INSIGHT_VERSION 同步，当前 0.29.1，并记录 0.29.1 修复）· 状态：实现中（v0.4.0 起随版本演进同步回写，2026-11-03 已与实现对账）
+> 版本：0.29.2（与 package.json / api.ts INSIGHT_VERSION 同步）· 状态：实现中（v0.4.0 起随版本演进同步回写，2026-11-07 已与实现对账）
 > 本文档是实现的唯一依据；需求变更先改本文档再改代码。
 
 ## 1. 背景与目标
@@ -9,8 +9,8 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 
 本项目补上**历史侧**：一个 OpenCode V2 插件，提供
 
-1. **本地 Web 看板**：斜杠命令启动/打开，展示历史用量的汇总统计与单会话回放；
-2. **终端面板**：与 usage-meter 风格对齐的常用指标（今日总量、命中率、模型 TOP5）；
+1. **本地 Web 看板**：由斜杠命令打开，展示历史用量的汇总统计与单会话回放；
+2. **三条斜杠命令 + 右侧栏 Todos 块**：`/insight`（打开看板）、`/insight-export`（导出 Markdown）、`/insight-refresh`（清看板缓存），以及挂在宿主侧栏的实时 Todos 块（早期 `/insight-status` 终端面板已于 v0.18.0 退役，见 §12/M6）；
 3. **会话导出**：把任意会话导出为角色分节标注的 Markdown。
 
 **不重复造轮子的边界**：实时速率、流式估算校准等 usage-meter 已覆盖的能力不做；本项目只做"库里有、但实时插件做不了"的历史分析。
@@ -80,10 +80,12 @@ OpenCode 在本地 SQLite 数据库（`~/.local/share/opencode/opencode.db`，�
 
 ```
 opencode-db-insight/
-├─ scripts/                      # 工具脚本：verify-install.ps1（推送后一键安装自验证）
+├─ scripts/                      # 工具脚本：verify-install.ps1（推送后一键安装自验证）/ desensitize-scan.ps1（推送前脱敏扫描）/ milestone-a-smoke.ps1（里程碑真库冒烟）
 ├─ src/
 │  ├─ index.ts                   # 插件入口：装配 insight server + 端口持久化 + 生命周期清理
-│  ├─ tui.tsx                    # TUI 插件入口：装配四条斜杠命令
+│  ├─ insight-service-identity.ts # /api/health 的 service 名（TUI 端口发现据此校验，双 flavor 共享）
+│  ├─ plugin-definition.ts       # 自带的 Plugin.define 等价物（避免运行期拉入 @opencode/plugin）
+│  ├─ tui.tsx                    # TUI 插件入口：装配三条斜杠命令
 │  ├─ db/                        # 只读取数层
 │  │  ├─ queries.ts              #   SQL 收敛处（会话列表 / 回放步骤 / todo）
 │  │  ├─ aggregate-queries.ts    #   SQL 侧聚合（overview / trend / models / agents，与旧 JS 口径逐字段对账）
@@ -129,6 +131,8 @@ opencode-db-insight/
 │  │  ├─ static-files.ts         #   静态文件服务（路径逃逸防护）
 │  │  ├─ db-connection-guard.ts  #   连接自愈守卫（结构化致命错误判别）
 │  │  └─ public/                 #   前端看板（原生 ESM，零构建）
+│  │     ├─ index.html / styles.css / replay.css / components.css / components-extra.css
+│  │     │                       #     页面骨架与样式表
 │  │     ├─ app.js / data-source.js / format.js / precision.js / theme.js / tooltip.js
 │  │     ├─ mock-data.js / mock-replay-data.js
 │  │     ├─ mock-content-composition.js / mock-token-ledger.js
@@ -143,7 +147,12 @@ opencode-db-insight/
 │  │     │                       #     replay-search 页内搜索）/ 压缩面板 / 存活卡片 /
 │  │     │                       #     目录统计面板 / 空态与加载态
 │  │     └─ vendor/uplot/        #     uPlot 本地化（无 CDN 依赖）
-│  ├─ export/                    # 导出渲染（Markdown 角色分节 / SVG 报告 / 格式化辅助 / 凭据脱敏）
+│  ├─ export/                    # 导出渲染
+│  │  ├─ markdown.ts             #   角色分节 Markdown
+│  │  ├─ svg.ts                  #   DOM-free SVG 报告（v0.29.0）
+│  │  ├─ format-helpers.ts       #   文件名 / 时长等格式化辅助
+│  │  ├─ message-roles.ts        #   消息角色分型单点
+│  │  └─ redact-credentials.ts   #   凭据脱敏（PEM / 各式 token）
 │  └─ tui/                       # TUI 命令实现
 │     ├─ command-registry.ts     #   斜杠命令注册表
 │     ├─ open-dashboard-command.ts / export-command.ts
@@ -152,9 +161,9 @@ opencode-db-insight/
 │     ├─ sidebar-todo.tsx        #   v0.24 侧栏「Todos」块（sidebar.content 槽位）
 │     ├─ clip-columns.ts         #   CJK / emoji 感知的显示列宽截断（侧栏标签）
 │     └─ tui-context.ts         #   宿主 toast 降级助手
-├─ test/                         # 818 用例：模块测试 + 集成 / 韧性 / SQL 对账 + 行为 / 目录 / 排序 / CSV / 搜索 / 刷新等回归面（随版本持续增补）
+├─ test/                         # 834 用例：模块测试 + 集成 / 韧性 / SQL 对账 + 行为 / 目录 / 排序 / CSV / 搜索 / 刷新等回归面（随版本持续增补）
 │  └─ helpers/                   # fake-insight-db / step 工厂
-├─ DESIGN.md / tasks.md / CHANGELOG.md / README.md
+├─ DESIGN.md / DATA-CONTRACT.md / tasks.md / CHANGELOG.md / README.md
 └─ package.json / LICENSE
 ```
 
@@ -168,32 +177,79 @@ opencode-db-insight/
 
 ## 5. 指标目录（口径定义）
 
-| 指标 | 公式 / 来源 | 说明 |
+下表给出每个指标的**来源 / 公式**与引入**版本**；需要展开的**长口径**见其后编号小节（§5.1–§5.14），逐条给全、不省略。
+
+| 指标 | 来源 / 公式 | 版本 |
 |---|---|---|
-| 今日总量 | Σ(tokens.input+output+cache.read) 当日 assistant 消息 | 以 session_message 为准 |
-| 缓存命中率 | cache.read / (cache.read + input) | usage-meter 同款口径；严格口径含 write 的 `strictHitRate` 纯函数已备，v0.2 在回放页接线并注明口径 |
-| 模型单点指标 | 步数、总量、命中率、步均输出、步均上下文、中位/p95 上下文、推理占比、活跃区间 | 排行榜核心 |
-| 模型复合行细分 + 环比 | 按复合键 `modelId + providerId + variant` 分组（分隔符 `\u0000`，空值 / 空变体归 `""`）；环比 = 该复合行当前窗口与**上一等长窗口**的 tokens 差（`previousTokens`，无基数记 0） | v0.26.0；SQL 与 JS 口径双锁（`offset=0` 逐字节不变）；前端复合行键 + 变体 chip + ▲/▼/持平/「— 环比」角标，列数不变（11 列） |
-| agent 指纹 | Σ 各工具调用次数 / 该 agent 总调用 | 工具偏好分布 |
-| 逐日趋势 | 按本地时区分桶：步骤、input、read、output、命中率 | 折线/面积图数据 |
-| 小时热力 | 历史步骤数按 小时×星期 分桶（窗口回收下界与 trend 同构） | 作息画像（v0.2 已接线） |
-| 会话存活 | time_created→time_updated 时长分布、idle_outcome 计数 | 短命会话占比（v0.2 已接线） |
-| 子代理开销占比 | Σ子代 tokens / Σ(子代+根) tokens；子代 = `session_v2.parent_id IS NOT NULL` | v0.21.0；tokens 口径 = input+output+cache.read；另出「直接子代消耗 TOP5」父会话（只含直接子代，不含孙代） |
-| 会话步数分布 | 每会话 assistant 消息数分布（对数半档桶 + p50/p90/p99） | v0.21.0；锚定 `session_v2`（排除孤儿消息，与 token / 时长分布同锚） |
-| 会话墙钟时长 | `session_v2.time_updated - time_created`（仅正值会话）分布 + 会话列表列 | v0.21.0；**非「活跃时长」**——`time_compacting` 全 0、`time_suspended` 仅 5，无从精确，故只做墙钟不引入估算 |
-| 会话 token 总量分布 | 每会话 tokens（input+output+cache.read）总量分布（对数半档桶 + p50/p90/p99）；排除零消耗会话 | v0.20.0；锚定 `session_v2`（排除孤儿消息） |
-| 工具错误率逐日趋势 | 按本地日分桶：tool 段 `$.state.status === "error"` 的调用数 `toolCalls` 与 `errors`，错误率 = `errors / toolCalls` | v0.22.0；**直读** wire（🟢 实值，非换算）；全部会话口径、锚定 `session_v2`；与 `/api/tool-health` **同源抽取**（跨路由 Σ `toolCalls` / Σ `errors` 恒等，有守恒测试锁定） |
-| 工具健康榜 | per-tool tool 段 `$.state.status` 计数（completed / error / running / total）+ `errorRate = error / total` | v0.18.0；**直读** wire（🟢 实值）；与 `/api/tool-error-trend` **同源抽取**（`tool-part-extraction.ts`），跨路由 Σ `toolCalls` / Σ `errors` 恒等；全部会话口径、锚定 `session_v2`、吃 `?session=` |
-| 失败中断会话 | 会话最后一条 assistant **对象**消息（`PARTITION BY session_id ORDER BY seq DESC` 取 rn=1）携带 `$.error` 即判「以错误收尾」；`interruptedShare = interruptedSessions / sessionsWithSteps` | v0.22.0；**推断口径**（🟡）——`session_v2` 无 status/error 列，只能自消息推断；`byErrorType` 为**会话级终局**错误类型（Σ count == `interruptedSessions`；终局缺 `type` 者不计桶但仍计入中断）；`sessionsWithSteps` 与步数分布同集合（锚定 `session_v2`、`type='assistant'` 去重计数） |
-| 每工具 token 归因 | 步 token（input+output+cache.read）按步内**去重工具名**的分词估算权重分摊：`weight = estimateTokens(tool)/ΣestimateTokens(step)`，`estimateTokens` = 自包含分词估算（ASCII ≈ 4 字符/token、3 字节非 ASCII ≈ 1 字符/token）＝ `asciiChars/4 + nonAsciiChars`（`nonAsciiChars = max(0,(byte−char)/2)`）；规模 = 该 part `$.state.input` 与输出字段（`$.state.metadata.output`（字符串）否则回退 `$.state.content[]` 各 `{type:"text",text}` 块拼接——**不是** `$.state.output`）的字符数（`length(json_extract(...))`）与 UTF-8 字节数（`length(CAST(json_extract(...) AS BLOB))`），字段缺失 → 0；Σweight==0 → 等权 1/k；零工具步 → 归「无工具」桶（tool=""）；同一步同一工具多次出现先合并规模再参与权重 | v0.27.0（字节权重）→ **v0.28.0 起改自包含分词估算权重**；**🟡 估算**（归因，非 DB 字段）；整数守恒：最大余数法取整使 Σ 行 tokens === Σ 步 token **精确相等**；全部会话口径、锚定 `session_v2`，吃 `?session=` |
-| 压缩事件 | compaction 消息计数（按会话/按日/按 reason） | 马拉松会话信号（v0.2 已接线） |
-| 目录维度 | 会话数 / assistant 步数 / tokens 三分（tokensInput / tokensOutput / tokensCacheRead，读 session_v2 汇总列）/ 最近活跃（MAX time_updated）按 session_v2.directory 聚合 | 全量口径，NULL/空目录排除出列表与 totals（v0.3 已接线）；tokens 三分为预聚合方案——step 子查询先 GROUP BY session_id 消除行扇出，SUM 不被步数放大（v0.15.0） |
-| todo 完成率 | completed / total | `todo` 表 |
-| 记账守恒 | message 侧 prompt 三分（Σ `$.tokens.input` / `cache.read` / `cache.write`）+ `promptTotal` 与命中率；对照 `session_v2` 四列（input / cache_read / cache_write / output） | v0.29.0 A1；**完整性（pass/fail）只看异常计数** `negativeComponents` / `cacheReadExceedsPrompt`；跨源 `residualRatio` **仅信息性**（compaction 剪枝使 message 侧天然偏小，超差是已知差值，绝不作 pass/fail）；吃 `?session=` |
-| 会话内容构成 | 六分类**字符量**（`length()` code point）：assistantText / toolOutput / toolInput / reasoning / userText / other；`toolEstimatedTokens` = 自包含分词估算（仅工具输入+输出） | v0.29.0 A4；**字符量非 token**（真 token 无法归因到内容分类）；六分类 key 恒定出现、chars desc + key asc；🟡 仅工具估算那一项；吃 `?session=` |
-| 文件活动 | 只归组 `read`/`edit`/`write` 的 `$.state.input` 路径（规范化后 homedir→`~` 脱敏），按路径合计 reads / edits / writes / sessions / lastActiveMs | v0.29.0 B5；**无**改动行数 / 文件大小（DB 无字段）；ops desc + path asc；totals 为截断前全量；吃 `?session=` |
-| Agent 血缘图 | `session_v2` 父子指针构图：节点 tokens = input+output+cache.read 合计；自父 / 孤儿规范化为根、环断边、深度、子树大小 desc 的 BFS 预算、聚焦候选集（焦点 + 祖先 + 后代） | v0.29.0 B6；`limit` 为**节点预算**（缺省 400 / 上限 1000）；`omittedNodeCount` = 候选集 − 入选；`stats` 恒为结构全量（不截断）；聚焦走 `?session=` 存在性 gate |
-| 数字精度标签 | cost 为 DB 实值标 🟢；tokens 换算金额标 🟡 估算 | 采纳 claude-lens 精度分级；精度徽标仅在 KPI 卡逐数生效（kpi-card.js），模型表 / 会话列表 / 回放等其余面板由 index.html 页脚全局图例（🟢/🟡 说明）兜底语义 |
+| 今日总量 | Σ(`tokens.input`+`output`+`cache.read`) 的当日 assistant 消息；以 `session_message` 为准 | v0.1 |
+| 缓存命中率 | `cache.read / (cache.read + input)` | v0.1（见 §5.1） |
+| 模型单点指标 | 步数、总量、命中率、步均输出、步均上下文、中位/p95 上下文、推理占比、活跃区间（排行榜核心） | v0.1 |
+| 模型复合行细分 + 环比 | 按复合键 `modelId + providerId + variant` 分组（分隔符 `\u0000`，空值 / 空变体归 `""`）；环比 = 该复合行当前窗口与上一等长窗口的 tokens 差（`previousTokens`，无基数记 0） | v0.26.0（见 §5.2） |
+| agent 指纹 | Σ 各工具调用次数 / 该 agent 总调用（工具偏好分布） | v0.1 |
+| 逐日趋势 | 按本地时区分桶：步骤、input、read、output、命中率（折线/面积图数据） | v0.1 |
+| 小时热力 | 历史步骤数按 小时×星期 分桶（窗口回收下界与 trend 同构）；作息画像 | v0.2 |
+| 会话存活 | `time_created→time_updated` 时长分布、`idle_outcome` 计数；短命会话占比 | v0.2 |
+| 压缩事件 | compaction 消息计数（按会话/按日/按 reason）；马拉松会话信号 | v0.2 |
+| 目录维度 | 按 `session_v2.directory` 聚合：会话数 / assistant 步数 / tokens 三分（`tokensInput` / `tokensOutput` / `tokensCacheRead`，读 `session_v2` 汇总列）/ 最近活跃（`MAX(time_updated)`） | v0.3（见 §5.3） |
+| todo 完成率 | `completed / total`，读 `todo` 表 | v0.1 |
+| 数字精度标签 | `cost` 为 DB 实值标 🟢；tokens 换算金额标 🟡 估算 | v0.1（见 §5.4） |
+| 工具健康榜 | per-tool tool 段 `$.state.status` 计数（completed / error / running / total）+ `errorRate = error / total` | v0.18.0（见 §5.5） |
+| 会话 token 总量分布 | 每会话 tokens（input+output+cache.read）总量分布（对数半档桶 + p50/p90/p99）；排除零消耗会话 | v0.20.0（见 §5.7） |
+| 子代理开销占比 | Σ子代 tokens / Σ(子代+根) tokens；子代 = `session_v2.parent_id IS NOT NULL` | v0.21.0（见 §5.6） |
+| 会话步数分布 | 每会话 assistant 消息数分布（对数半档桶 + p50/p90/p99） | v0.21.0（见 §5.7） |
+| 会话墙钟时长 | `session_v2.time_updated - time_created`（仅正值会话）分布 + 会话列表列 | v0.21.0（见 §5.8） |
+| 工具错误率逐日趋势 | 按本地日分桶：tool 段 `$.state.status === "error"` 的调用数 `toolCalls` 与 `errors`，`errorRate = errors / toolCalls` | v0.22.0（见 §5.5） |
+| 失败中断会话 | 会话最后一条 assistant **对象**消息（`PARTITION BY session_id ORDER BY seq DESC` 取 rn=1）携带 `$.error` 即判「以错误收尾」；`interruptedShare = interruptedSessions / sessionsWithSteps` | v0.22.0（见 §5.9） |
+| 每工具 token 归因 | 步 token（input+output+cache.read）按步内**去重工具名**的自包含分词估算权重分摊；整数守恒（见 §5.10） | v0.27.0 → v0.28.0 |
+| 记账守恒 | message 侧 prompt 三分（Σ `$.tokens.input` / `cache.read` / `cache.write`）+ `promptTotal` 与命中率；对照 `session_v2` 四列（input / cache_read / cache_write / output） | v0.29.0 A1（见 §5.11） |
+| 会话内容构成 | 六分类**字符量**（`length()` code point）：assistantText / toolOutput / toolInput / reasoning / userText / other；`toolEstimatedTokens` = 自包含分词估算（仅工具输入+输出） | v0.29.0 A4（见 §5.12） |
+| 文件活动 | 只归组 `read`/`edit`/`write` 的 `$.state.input` 路径（规范化后 homedir→`~` 脱敏），按路径合计 reads / edits / writes / sessions / lastActiveMs | v0.29.0 B5（见 §5.13） |
+| Agent 血缘图 | `session_v2` 父子指针构图：节点 tokens = input+output+cache.read 合计；自父 / 孤儿规范化为根、环断边、深度、子树大小 desc 的 BFS 预算、聚焦候选集（焦点 + 祖先 + 后代） | v0.29.0 B6（见 §5.14） |
+
+### 5.1 缓存命中率
+usage-meter 同款口径；严格口径含 write 的 `strictHitRate` 纯函数已备，v0.2 在回放页接线并注明口径。
+
+### 5.2 模型复合行细分 + 环比
+SQL 与 JS 口径双锁（`offset=0` 逐字节不变）；前端复合行键 + 变体 chip + ▲/▼/持平/「— 环比」角标，列数不变（11 列）。
+
+### 5.3 目录维度
+全量口径，NULL/空目录排除出列表与 totals（v0.3 已接线）；tokens 三分为预聚合方案——step 子查询先 GROUP BY session_id 消除行扇出，SUM 不被步数放大（v0.15.0）。
+
+### 5.4 数字精度标签
+采纳 claude-lens 精度分级；精度徽标仅在 KPI 卡逐数生效（kpi-card.js），模型表 / 会话列表 / 回放等其余面板由 index.html 页脚全局图例（🟢/🟡 说明）兜底语义。
+
+### 5.5 工具健康榜 / 工具错误率逐日趋势
+两者**直读** wire（🟢 实值，非换算），且**同源抽取**（`tool-part-extraction.ts`），跨路由 Σ `toolCalls` / Σ `errors` 恒等（有守恒测试锁定）；全部会话口径、锚定 `session_v2`；工具健康榜吃 `?session=`，错误率趋势**不吃**。
+
+### 5.6 子代理开销占比
+tokens 口径 = input+output+cache.read；另出「直接子代消耗 TOP5」父会话（只含直接子代，不含孙代）。
+
+### 5.7 会话 token 总量分布 / 会话步数分布
+均锚定 `session_v2`（排除孤儿消息，与时长分布同锚）；token 分布额外排除零消耗会话。
+
+### 5.8 会话墙钟时长
+**非「活跃时长」**——`time_compacting` 全 0、`time_suspended` 仅 5，无从精确，故只做墙钟不引入估算。
+
+### 5.9 失败中断会话
+**推断口径**（🟡）——`session_v2` 无 status/error 列，只能自消息推断；`byErrorType` 为**会话级终局**错误类型（Σ count == `interruptedSessions`；终局缺 `type` 者不计桶但仍计入中断）；`sessionsWithSteps` 与步数分布同集合（锚定 `session_v2`、`type='assistant'` 去重计数）。
+
+### 5.10 每工具 token 归因
+- 权重：`weight = estimateTokens(tool) / ΣestimateTokens(step)`；`estimateTokens` = 自包含分词估算（ASCII ≈ 4 字符/token、3 字节非 ASCII ≈ 1 字符/token）＝ `asciiChars/4 + nonAsciiChars`（`nonAsciiChars = max(0,(byte−char)/2)`）。
+- 规模：该 part `$.state.input` 与输出字段（`$.state.metadata.output`（字符串）否则回退 `$.state.content[]` 各 `{type:"text",text}` 块拼接——**不是** `$.state.output`）的字符数（`length(json_extract(...))`）与 UTF-8 字节数（`length(CAST(json_extract(...) AS BLOB))`），字段缺失 → 0。
+- 边界：Σweight==0 → 等权 1/k；零工具步 → 归「无工具」桶（tool=""）；同一步同一工具多次出现先合并规模再参与权重。
+- 版本与守恒：v0.27.0（字节权重）→ **v0.28.0 起改自包含分词估算权重**；**🟡 估算**（归因，非 DB 字段）；整数守恒——最大余数法取整使 Σ 行 tokens === Σ 步 token **精确相等**；全部会话口径、锚定 `session_v2`，吃 `?session=`。
+
+### 5.11 记账守恒
+v0.29.0 A1；**完整性（pass/fail）只看异常计数** `negativeComponents` / `cacheReadExceedsPrompt`；跨源 `residualRatio` **仅信息性**（compaction 剪枝使 message 侧天然偏小，超差是已知差值，绝不作 pass/fail）；吃 `?session=`。
+
+### 5.12 会话内容构成
+v0.29.0 A4；**字符量非 token**（真 token 无法归因到内容分类）；六分类 key 恒定出现、chars desc + key asc；🟡 仅工具估算那一项；吃 `?session=`。
+
+### 5.13 文件活动
+v0.29.0 B5；**无**改动行数 / 文件大小（DB 无字段）；ops desc + path asc；totals 为截断前全量；吃 `?session=`。
+
+### 5.14 Agent 血缘图
+v0.29.0 B6；`limit` 为**节点预算**（缺省 400 / 上限 1000）；`omittedNodeCount` = 候选集 − 入选；`stats` 恒为结构全量（不截断）；聚焦走 `?session=` 存在性 gate。
 
 ## 6. Web API 设计（全部 GET；除 sessions.csv 为 CSV 附件外均 JSON）
 

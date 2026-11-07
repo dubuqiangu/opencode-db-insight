@@ -235,3 +235,57 @@ test("renderNoticeSection labels an empty message type as missing", () => {
   const section = renderNoticeSection(buildMessage({ type: "", data: null }))
   assert.equal(section, "---\n\n*未知消息类型（缺失）: null*")
 })
+
+const NOTICE_SECRET = "sk-testonly0000111122223333WXYZ"
+
+test("renderNoticeSection redacts credentials in a system notice (L3)", () => {
+  const section = renderNoticeSection(
+    buildMessage({ type: "system", data: { text: `系统指令 ${NOTICE_SECRET}` } }),
+  )
+  assert.ok(!section.includes(NOTICE_SECRET), "the secret must be gone")
+  assert.ok(section.includes("sk-…WXYZ"), "the masked tail stays readable")
+})
+
+test("renderNoticeSection redacts credentials in a compaction summary and reason (L3)", () => {
+  const section = renderNoticeSection(
+    buildMessage({
+      type: "compaction",
+      data: { reason: `auto ${NOTICE_SECRET}`, summary: `condensed ${NOTICE_SECRET}` },
+    }),
+  )
+  assert.ok(!section.includes(NOTICE_SECRET), "the secret must be gone from both fields")
+  assert.ok(section.includes("sk-…WXYZ"), "the masked tail stays readable")
+})
+
+test("renderNoticeSection redacts credentials in a switched model id (L3)", () => {
+  const section = renderNoticeSection(
+    buildMessage({
+      type: "model-switched",
+      data: { model: { id: NOTICE_SECRET }, previous: { id: "gpt-5" } },
+    }),
+  )
+  assert.ok(!section.includes(NOTICE_SECRET), "the secret must be gone")
+  assert.ok(section.includes("sk-…WXYZ"), "the masked tail stays readable")
+})
+
+test("renderNoticeSection redacts credentials in the unknown-type data preview (L3)", () => {
+  const section = renderNoticeSection(
+    buildMessage({ type: "mystery", data: { token: NOTICE_SECRET } }),
+  )
+  assert.ok(!section.includes(NOTICE_SECRET), "the secret must be gone")
+  assert.ok(section.includes("sk-…WXYZ"), "the masked tail stays readable")
+})
+
+test("renderNoticeSection redacts BEFORE truncation, so a boundary secret is not split (L3)", () => {
+  // 190 padding chars + a space + a 29-char token = 220 chars, past the
+  // 200-char notice limit. If truncation ran first, the token would be cut
+  // at the limit into an unrecognizable "sk-BBBBBB" fragment and the
+  // redaction patterns would then miss it. Redact-first shrinks it to the
+  // 8-char "sk-…WXYZ" mask, so nothing spills and nothing needs truncating.
+  const boundarySecret = "sk-" + "B".repeat(22) + "WXYZ"
+  const systemText = "x".repeat(190) + " " + boundarySecret
+  const section = renderNoticeSection(buildMessage({ type: "system", data: { text: systemText } }))
+  assert.ok(section.includes("sk-…WXYZ"), "the full token was redacted, not split")
+  assert.ok(!section.includes(boundarySecret), "the raw token never reaches the notice")
+  assert.ok(!section.includes("sk-BBBBBB"), "no truncated token fragment leaks")
+})

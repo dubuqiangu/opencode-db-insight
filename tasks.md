@@ -3,6 +3,19 @@
 > 每个任务小而可独立验证；完成一项勾一项。每完成一个里程碑（M0~M7）：
 > commit → push → 在 CHANGELOG.md 记一条。
 
+## 开放项 / 当前状态
+
+**一句话**：功能实现与文档（DESIGN / DATA-CONTRACT / CHANGELOG）已收到 v0.29.1；未关闭项集中在**用户侧真机（活体）冒烟**与少量**发布 / 观察挂账**，均不阻塞代码，但需要一次完整重启后在真实宿主上确认。历史条目一律保留在下方（本文件是按时间的开发日志）。
+
+未关闭项：
+
+- **用户真机（活体）冒烟**（累积多版本，需重启 TUI 后在真实宿主逐条确认）：v0.19.1 排序 / 自动刷新 → v0.20.0 scope 切换与分布卡 → v0.21.0 步数 / 时长 / 子代理三卡 → v0.21.0+v0.22.0 工具错误率卡与失败中断卡 → v0.24.0 侧栏 Todos 块（各见下方对应版本小节）。
+- **R-E 性能观察挂账**：node:sqlite 同步 API 在自动刷新一轮内的串行阻塞手感（停在回放页观察整 5 分钟边界），超标再议（见「ora-11 全仓审视」小节）。
+- **后续评估（未做）**：token 曲线框选缩放（v0.25.0 立项，需设计定交互）；PNG 导出（暂缓，需新依赖）（见 v0.24.x 回放分页小节）。
+- **源码领先安装态**：本地改动只在源码层，运行中的 18789–18792 服务仍是安装态，需发布后才体现（见 v0.24.x 回放分页小节末）。
+- **发布 / 打 tag**：v0.29.0 与 v0.29.1 的 tag 与安装态验证由 orchestrator 中央统一处理（本文件不重复记录版本号变更）。
+- **历史遗留小项（非阻塞）**：verify-install 增「宿主日志 grep 注册失败」检查、CSV 十二列立项决策等（见 v0.15.2 小节末）。
+
 ## M0 骨架与文档（push #1）
 
 - [x] T0.1 写 DESIGN.md（架构/数据面/API/图表选型/风险）——验证：本文档评审通过
@@ -624,7 +637,7 @@ backlog 清空：v0.2-A（0.2.0）、v0.3-A（0.3.1）、v0.2-B（0.4.0）全部
 
 ## v0.29.0 里程碑 D：借鉴 dsh 生态（A 组实时透视 + B 组上下文引擎）（2026-11-02，orchestrator 后端直写 + des-32 前端两波）
 
-> 参考 `references/COMPARISON-dsh-context-billion-context.md`；只借鉴 A 组 + B 组全部功能点。零运行时依赖 / 只读 5 表 / 既有估算口径均不变。
+> 借鉴 dsh-context（实时上下文透视）+ billion-context（上下文压缩引擎）两个 dsh 插件的可移植形状，只借鉴 A 组 + B 组全部功能点（三者互补非同类：dsh-context 管实时、billion-context 管压缩、本插件管历史归档）。零运行时依赖 / 只读 5 表 / 既有估算口径均不变。
 
 - [x] **Wave 1**：A1 记账守恒 `GET /api/token-ledger`（`token-ledger-queries.ts` + `stats/token-ledger.ts`）；A3 回放 token 曲线 Total/Delta 切换 + 会话事件标记 `GET /api/session/:id/events`（`session-event-queries.ts`）；A2 压缩阈值（🟡 推断）标注
 - [x] **Wave 2A**：A4 会话内容构成 `GET /api/content-composition` + B5 文件活动 `GET /api/file-activity`（后端 `content-composition-queries.ts` / `file-activity-queries.ts` + `stats/*`；前端 `content-composition-card.js` / `file-activity-table.js`）

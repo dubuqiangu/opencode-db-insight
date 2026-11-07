@@ -83,7 +83,12 @@ const TREND_CALENDAR_WINDOW_DAYS = MAX_TREND_DAYS;
 
 const state = {
   range: "30",
+  // 会话列表的模型过滤值：**纯 modelId**（与 session.modelIds 同口径）。
   modelFilter: null,
+  // 模型排行榜选中身份键（复合 modelId\0providerId\0variant）：只驱动行高亮，
+  // 与下发会话列表的纯 modelId（modelFilter）严格分家——复合键含 U+0000，
+  // 既不能进 HTML 属性，也不匹配 session.modelIds 的纯 id。
+  modelSelectionKey: null,
   directoryFilter: null,
   // 日历日下钻（Milestone A）：YYYY-MM-DD 或 null。点热力图某日 → 会话
   // 列表按该日过滤（服务端 ?day= 精确匹配 timeUpdated 所在本地日），与
@@ -371,6 +376,7 @@ function enterSessionScope(sessionId, sessionTitle) {
   // 进入即清零——模型表高亮、目录面板选中态、面板 chip 一并复位。
   // 日期过滤（Milestone A）同口径：单会话视图下按日过滤没有对象，一并清零。
   state.modelFilter = null;
+  state.modelSelectionKey = null;
   state.directoryFilter = null;
   state.dayFilter = null;
   renderModelTable(modelTableElement, state.cache.models ?? [], null, onModelSelected);
@@ -607,7 +613,7 @@ async function loadModelsSection() {
     state.cache.modelsByRange[requestRange] = modelMetrics;
     if (requestToken !== modelsLoadSequence || requestRange !== state.modelRange) return;
     state.cache.models = modelMetrics;
-    renderModelTable(modelTableElement, modelMetrics, state.modelFilter, onModelSelected);
+    renderModelTable(modelTableElement, modelMetrics, state.modelSelectionKey, onModelSelected);
     markSection("models", true);
   } catch (error) {
     if (handleSessionScopeVanished(error)) return;
@@ -625,7 +631,7 @@ function onModelRangeSelected(nextRange) {
   const cachedMetrics = state.cache.modelsByRange[nextRange];
   if (cachedMetrics !== undefined) {
     state.cache.models = cachedMetrics;
-    renderModelTable(modelTableElement, cachedMetrics, state.modelFilter, onModelSelected);
+    renderModelTable(modelTableElement, cachedMetrics, state.modelSelectionKey, onModelSelected);
     // R1：缓存命中同样记成功——否则先前窗口的失败计数残留顶栏，且
     // models 指针已指向完好的缓存数据，状态栏与数据面必须一致。
     markSection("models", true);
@@ -1170,9 +1176,16 @@ function loadSearchSection() {
 }
 
 /* ---------- 模型 / 目录下钻过滤 ---------- */
-function onModelSelected(modelId) {
-  state.modelFilter = modelId;
-  renderModelTable(modelTableElement, state.cache.models ?? [], state.modelFilter, onModelSelected);
+/**
+ * 模型行下钻。选中身份键（复合）驱动行高亮；会话列表过滤值取**纯 modelId**
+ * （与 session.modelIds 同口径）——两者必须分家，否则复合键（含 U+0000）
+ * 永远命不中 modelIds，会话列表必空。selectionKey 为 null（取消选中/清除）
+ * 即不过滤。
+ */
+function onModelSelected(selectionKey, plainModelId) {
+  state.modelSelectionKey = selectionKey;
+  state.modelFilter = selectionKey === null ? null : plainModelId;
+  renderModelTable(modelTableElement, state.cache.models ?? [], state.modelSelectionKey, onModelSelected);
   sessionSortController.renderCurrent();
   renderSessionFilterChip();
 }
@@ -1233,7 +1246,7 @@ function renderSessionFilterChip() {
       } else if (clearButton.dataset.clearFilter === "day") {
         onDaySelected(null);
       } else {
-        onModelSelected(null);
+        onModelSelected(null, null);
       }
     });
   }
@@ -1606,7 +1619,7 @@ function init() {
       );
     }
     if (state.cache.agents !== undefined) renderToolBars(toolBarsElement, state.cache.agents, state.cache.toolHealth ?? null, state.cache.toolTokens ?? null);
-    if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelFilter, onModelSelected);
+    if (state.cache.models !== undefined) renderModelTable(modelTableElement, state.cache.models, state.modelSelectionKey, onModelSelected);
     sessionSortController.renderCurrentIfLoaded();
   });
 

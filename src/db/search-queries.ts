@@ -105,9 +105,12 @@ function escapeRegExp(rawText: string): string {
  * 下标会比原文偏移，用于原文切片会错位。改为在原文上跑不区分大小写的
  * 字面量正则，exec().index 直接就是原文下标；RegExp 返回最左匹配，
  * 保留「首个命中」语义。
+ *
+ * caseInsensitiveRegExp 是调用方预编译的子串正则（与命中计数共用同一
+ * source），非全局指定，exec 不携带 lastIndex 状态。
  */
-function findSubstringMatchIndex(originalText: string, rawQuery: string): number {
-  const firstMatch = new RegExp(escapeRegExp(rawQuery), "i").exec(originalText)
+function findSubstringMatchIndex(originalText: string, caseInsensitiveRegExp: RegExp): number {
+  const firstMatch = caseInsensitiveRegExp.exec(originalText)
   return firstMatch === null ? -1 : firstMatch.index
 }
 
@@ -159,6 +162,13 @@ export function queryCrossSessionSearch(
     }
   }
 
+  // 子串模式也预先编译一次不区分大小写的字面量正则；命中定位与命中
+  // 计数共用它（下面 countRegExpOccurrences 从同一 source 派生全局
+  // 变体），两处的大小写折叠规则因此完全一致——不能一处用正则、一处
+  // 用 toLowerCase（'İ' 这类特殊折叠字符会给出不同的命中数）。
+  const compiledSubstringRegExp =
+    safeMode === "substring" ? new RegExp(escapeRegExp(query), "i") : null
+
   // 稳定「前 200 条」：按 time_created DESC, id DESC 排序，使命中顺序
   // 确定且最新优先（session_message 无 UNIQUE(session_id, seq)，仅靠主键 id
   // 无法保证顺序；200 上限截取的是最新 200 条而非任意 200 条）。
@@ -198,12 +208,9 @@ export function queryCrossSessionSearch(
     let hitCount = 0
     let snippet: string
     if (safeMode === "substring") {
-      const matchIndex = findSubstringMatchIndex(searchableText, query)
+      const matchIndex = findSubstringMatchIndex(searchableText, compiledSubstringRegExp!)
       if (matchIndex === -1) continue
-      hitCount = countSubstringOccurrences(
-        searchableText.toLowerCase(),
-        query.toLowerCase(),
-      )
+      hitCount = countRegExpOccurrences(searchableText, compiledSubstringRegExp!)
       snippet = buildSnippetAroundMatch(searchableText, matchIndex, query.length)
     } else {
       const matchPosition = findRegexMatch(searchableText, compiledRegExp!)
@@ -260,21 +267,11 @@ function parseMessageData(rawData: unknown): unknown {
   }
 }
 
-/** 统计子串在（已小写的）文本中的出现次数。 */
-function countSubstringOccurrences(loweredText: string, loweredQuery: string): number {
-  if (loweredQuery === "") return 0
-  let occurrenceCount = 0
-  let searchFromIndex = 0
-  for (;;) {
-    const foundIndex = loweredText.indexOf(loweredQuery, searchFromIndex)
-    if (foundIndex === -1) break
-    occurrenceCount += 1
-    searchFromIndex = foundIndex + loweredQuery.length
-  }
-  return occurrenceCount
-}
-
-/** 统计正则匹配在文本中的出现次数（全局扫描，不改变匹配状态机）。 */
+/**
+ * 统计正则在文本中的出现次数（全局扫描，不改变匹配状态机）。子串模式
+ * 也走这里：从预编译的子串正则 source 派生 "gi" 变体，保证命中计数与
+ * 命中定位共用同一套大小写折叠语义。
+ */
 function countRegExpOccurrences(text: string, caseInsensitiveRegExp: RegExp): number {
   let occurrenceCount = 0
   const globalRegExp = new RegExp(caseInsensitiveRegExp.source, "gi")

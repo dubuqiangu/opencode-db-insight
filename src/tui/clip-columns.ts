@@ -23,18 +23,25 @@ function glyphColumns(glyph: string): number {
 /**
  * Clip `text` to at most `maxColumns` display columns.
  *
- * A clipped result always ends with "…" and never exceeds the budget: the
- * ellipsis is charged one column, so a wide glyph that would land on the last
+ * Text that already fits passes through unchanged: the ellipsis is charged a
+ * column ONLY when truncation actually happens, so an exact fit ("abcde" at 5
+ * columns) is not sacrificed to an ellipsis that never appears. When the text
+ * overflows, a clipped result ends with "…" and never exceeds the budget: the
+ * ellipsis takes one column, so a wide glyph that would land on the last
  * column is dropped rather than half-rendered.
  */
 export function clipToColumns(text: string, maxColumns = SIDEBAR_TODO_LABEL_MAX_COLUMNS): string {
   if (maxColumns <= 0) return ""
+  let totalColumns = 0
+  for (const glyph of text) totalColumns += glyphColumns(glyph)
+  if (totalColumns <= maxColumns) return text
+  // Truncation really happens: now the trailing "…" is charged one column.
   let usedColumns = 0
   let kept = ""
   for (const glyph of text) {
-    if (usedColumns + glyphColumns(glyph) + 1 > maxColumns) return `${kept}…`
+    if (usedColumns + glyphColumns(glyph) + 1 > maxColumns) break
     kept += glyph
     usedColumns += glyphColumns(glyph)
   }
-  return text
+  return `${kept}…`
 }

@@ -1,7 +1,7 @@
 /**
  * Tests for the ?day=YYYY-MM-DD calendar-day filter (v0.24.0) on the
- * session list. The filter is a closed window
- * [dayStartMs, dayStartMs + 86400000) on session_v2.time_updated, computed
+ * session list. The filter is a half-open window
+ * [dayStartMs, nextLocalMidnight) on session_v2.time_updated, computed
  * server-side in api.ts (parseDayStartMs) and AND-composed with the
  * directory / range filters in querySessionList.
  *
@@ -82,11 +82,19 @@ function createDayFixtureDatabase(
   return database
 }
 
-/** One day in milliseconds, matching the query's own constant. */
-const DAY_MS = 86_400_000
+/**
+ * The local calendar day start this fixture pins (2026-10-07 local).
+ * Local midnight — NOT Date.UTC — so this fixture matches what api.ts
+ * parseDayStartMs feeds querySessionList, in any machine timezone.
+ */
+const PINNED_DAY_START_MS = new Date(2026, 9, 7).getTime()
 
-/** The local calendar day start this fixture pins (2026-10-07 UTC). */
-const PINNED_DAY_START_MS = Date.UTC(2026, 9, 7, 0, 0, 0)
+/**
+ * The next local midnight: the exclusive upper bound of the pinned day.
+ * Derived from local calendar components (not + 86_400_000) so a
+ * DST-transition day (23h/25h) would still be framed correctly.
+ */
+const PINNED_DAY_END_MS = new Date(2026, 9, 8).getTime()
 
 test(
   "real-SQL: only sessions whose time_updated falls in the pinned local day return",
@@ -97,10 +105,10 @@ test(
       { id: "ses_day_in", directory: "", timeUpdated: PINNED_DAY_START_MS + 1 },
       // 前一天最后一毫秒：落在 [start - 1, start) 之外。
       { id: "ses_day_previous", directory: "", timeUpdated: PINNED_DAY_START_MS - 1 },
-      // 后一天第一毫秒：落在 [start, start + DAY_MS) 之外。
-      { id: "ses_day_next", directory: "", timeUpdated: PINNED_DAY_START_MS + DAY_MS },
-      // 当天末尾（start + DAY_MS - 1）仍在窗口内。
-      { id: "ses_day_end", directory: "", timeUpdated: PINNED_DAY_START_MS + DAY_MS - 1 },
+      // 次日本地午夜（排他上界）：落在 [start, nextLocalMidnight) 之外。
+      { id: "ses_day_next", directory: "", timeUpdated: PINNED_DAY_END_MS },
+      // 当天最后一毫秒（nextLocalMidnight - 1）仍在窗口内。
+      { id: "ses_day_end", directory: "", timeUpdated: PINNED_DAY_END_MS - 1 },
     ])
     try {
       const sessionPage = querySessionList(
@@ -118,7 +126,7 @@ test(
         sessionPage.map((sessionSummary) => sessionSummary.id),
         // 默认排序 time_updated DESC，所以时间靠后的 ses_day_end 在前。
         ["ses_day_end", "ses_day_in"],
-        "只有落在 [dayStart, dayStart + 86400000) 内的会话返回",
+        "只有落在 [dayStart, nextLocalMidnight) 内的会话返回",
       )
     } finally {
       database.close()
@@ -132,7 +140,7 @@ test(
   () => {
     const database = createDayFixtureDatabase([
       { id: "ses_day_stack_alpha_in", directory: "D:/projects/example-alpha", timeUpdated: PINNED_DAY_START_MS + 1 },
-      { id: "ses_day_stack_alpha_out", directory: "D:/projects/example-alpha", timeUpdated: PINNED_DAY_START_MS + DAY_MS },
+      { id: "ses_day_stack_alpha_out", directory: "D:/projects/example-alpha", timeUpdated: PINNED_DAY_END_MS },
       { id: "ses_day_stack_beta_in", directory: "D:/projects/example-beta", timeUpdated: PINNED_DAY_START_MS + 2 },
     ])
     try {
@@ -161,7 +169,7 @@ test(
 test("null dayStartMs applies no day filter (full list)", { skip: skipReason }, () => {
   const database = createDayFixtureDatabase([
     { id: "ses_day_unfiltered_a", directory: "", timeUpdated: PINNED_DAY_START_MS + 1 },
-    { id: "ses_day_unfiltered_b", directory: "", timeUpdated: PINNED_DAY_START_MS + DAY_MS },
+    { id: "ses_day_unfiltered_b", directory: "", timeUpdated: PINNED_DAY_END_MS },
   ])
   try {
     const sessionPage = querySessionList(

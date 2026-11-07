@@ -17,6 +17,9 @@ test("matchApiRoute recognizes every static API route", () => {
   assert.deepEqual(matchApiRoute("/api/overview"), { routeName: "overview" })
   assert.deepEqual(matchApiRoute("/api/trend"), { routeName: "trend" })
   assert.deepEqual(matchApiRoute("/api/models"), { routeName: "models" })
+  // v0.27.0 每工具健康 / token 归因端点：两段静态路由，吃 ?session=。
+  assert.deepEqual(matchApiRoute("/api/tool-health"), { routeName: "tool-health" })
+  assert.deepEqual(matchApiRoute("/api/tool-tokens"), { routeName: "tool-tokens" })
   assert.deepEqual(matchApiRoute("/api/agents"), { routeName: "agents" })
   assert.deepEqual(matchApiRoute("/api/sessions"), { routeName: "sessions" })
   assert.deepEqual(matchApiRoute("/api/todo"), { routeName: "todo" })
@@ -42,6 +45,8 @@ test("matchApiRoute recognizes every static API route", () => {
   assert.deepEqual(matchApiRoute("/api/session-lineage"), { routeName: "session-lineage" })
   // v0.14.0 cache-control route: same two-segment shape, no parameters.
   assert.deepEqual(matchApiRoute("/api/refresh"), { routeName: "refresh" })
+  // v0.24.0 跨会话搜索端点：同款两段静态路由，无路径参数。
+  assert.deepEqual(matchApiRoute("/api/search"), { routeName: "search" })
 })
 
 test("matchApiRoute matches session routes and decodes the session id", () => {

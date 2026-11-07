@@ -2,7 +2,44 @@
 
 本项目的所有显著变更记录在此文件中。
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
+章节标题统一：标准类别一律用 `### Added` / `### Changed` / `### Deprecated` / `### Removed` / `### Fixed` / `### Security`；本项目固定三个扩展类别 `### Tests`（测试面）/ `### Docs`（文档）/ `### Review`（审视结论）。
+日期一律写成 `## [x.y.z] - YYYY-MM-DD`，描述与日期之间用 ` · ` 分隔。
 每个里程碑完成后 push 并在此追加一条记录，方便回溯。
+
+## [0.29.2] - 2026-11-07 · 复审修复：模型下钻失效 + 导出/日窗/脱敏边界 + 引导重写
+
+> 第二轮只读复审（后端正确性 / 前端正确性 / 测试覆盖 + 文档引导，三路并行）后的收口版本。零运行时依赖不变；只读 5 表不变；唯一许可估算不变（既有自包含分词估算，🟡）。
+
+### Fixed
+
+- **模型排行榜下钻失效（H1，用户可见）**：行身份用复合键 `modelId\0providerId\0variant`，却被当作会话过滤值去比对 `session.modelIds` 的**纯** `modelId`，恒不命中 → 点任意模型行都会让会话列表变空；且 `\u0000` 经 `innerHTML` 被 HTML 解析器替换为 U+FFFD，选中高亮在真实浏览器中同样失效。拆分为「复合选择键（仅驱动高亮/配色）」与「纯 `modelId`（驱动会话过滤）」，并改为按行闭包绑定（不再把键回读自 DOM 属性）。
+- **CSV 导出忽略 `?day=` 过滤（M1）**：会话列表的导出链接带 `day=YYYY-MM-DD`、标题也写「导出日期…的会话」，但 `sessionSummaryExport` 只读 `directory`/`range`，日窗固定传 `null` → 导出的是未过滤快照。改为解析 `?day=` 并把日窗下推到每一页 `querySessionList`。
+- **`?day=` 接受非法日期并静默滚动（L2）**：`2026-02-31` 经 `new Date` 翻到 3/3，过滤到另一天。改为构造后做 Y/M/D 往返校验，不合法即降级为「无过滤」。
+- **日历日窗口用固定 86_400_000ms（L1）**：DST 切换日实际为 23h/25h，固定 24h 会溢入/漏掉相邻日约 1 小时。改为「下一个本地午夜」，`[start,end)` 半开契约不变；同步修正 `api.ts` 中误称「Date.UTC（无时区漂移）」的注释。
+- **Markdown 导出未脱敏系统 notice（L3）**：`buildNoticeLine`（系统提示 / 压缩摘要 / 未知类型 data 预览）只折叠/截断，未过 `redactCredentials`，其余自由文本路径均已脱敏 → 补齐（先脱敏后截断）。
+- **搜索 `hitCount` 与定位大小写口径不一致（N1）**：定位用不区分大小写正则，计数却用 `toLowerCase`+`indexOf`，对特殊折叠字符（如 `İ` U+0130）结果不同 → 计数改用与定位同一正则源的全量变体。
+- **`clipToColumns` 精确适配被误截断（N2）**：省略号从不预留缓冲改为一律预留一列，恰好占满预算的文本（`"abcde"` 于 5 列）被截成 `"abcd…"` → 仅在真正溢出时才为省略号计列。
+
+### Changed
+
+- `INSIGHT_VERSION` / `package.json` 版本号 → `0.29.2`。
+
+### Tests
+
+- 同步两处陈旧的 route 清单：`test/router.test.ts` 补 `/api/tool-health`、`/api/tool-tokens`、`/api/search`；`test/api-routes.test.ts` 的 503 清单补 `/api/tool-health`、`/api/export/session/ses_example.md`。
+- `test/helpers/fake-insight-db.ts` 补 `queryOverview`（`sessionCount`/`totalCost`）与 `queryTodoStats`（`statusCount`）的忠实分支，堵住「静默落到分页兜底读作 0」的保真缺口。
+- 新增 `test/clip-columns.test.ts`（7 例：精确适配 / 超一列 / 宽字形 / 默认预算 / 非正预算）。
+- `test/behavior-queries.test.ts` 的「node:sqlite 缺失」伪装 skip（`assert.ok(true, …)`）改为真实条件 skip。
+- 扩测：`test/message-roles.test.ts`（notice 四类路径脱敏 + 先脱敏后截断边界）、`test/search-queries.test.ts`（`İ` 特殊折叠）、`test/session-summary-csv.test.ts`（真库 `?day=` 导出）、`test/session-day-filter.test.ts`（本地午夜夹具）、`test/api-routes.test.ts`（非法日期）、`test/web-components.test.ts`（下钻回归：过滤值取纯 id、列表非空、chip 无 NUL）。
+- 全量 **834** 用例通过；`npm run check` exit 0。
+
+### Docs
+
+- `README.md` 重构为小白黄金路径（这是什么 → 快速开始 → 功能 → 前置条件 → 安装 → 重启宿主 → 使用 → 更新/验证 → 开发 → 排障）：补前置条件与「快速开始」块、补一键验证 `pwsh ./scripts/verify-install.ps1`、补开发命令；修正安装法②的 Windows 陷阱（去 `&&` / 明确插件目录 / `npm install` 标注仅开发需要）、安装法③按真实宿主配置改为**数组**形式；排障改用 `curl.exe`；功能列表去除版本标签。
+- `DESIGN.md`：§1 移除已退役的「终端面板」（`/insight-status` 于 v0.18.0 退役）；§3.1「四条斜杠命令」正为三条、目录树按 `git ls-files` 刷新（补 `DATA-CONTRACT.md` / `plugin-definition.ts` / `insight-service-identity.ts` / 脚本）；§5 指标表拆分（一行摘要表 + 编号口径小节）以便扫读；版本 banner → 0.29.2，用例数 → 834。
+- `DATA-CONTRACT.md`：wire 形状由末尾追加（旧 §十 / §十一）收敛为单一「wire 载荷」小节并重排；§一 `session_v2` 读数据实标注为 ≈45（口径相关）。
+- `CHANGELOG.md`：标题统一为 `### Tests`（消除 `### Test`/`### Tests` 混用）、日期分隔统一 `·`、删除 [0.23.0] 内的占位残留、补 compare 链接脚注。
+- `tasks.md`：顶部新增「开放项 / 当前状态」摘要；移除悬空的 `references/…` 引用。
 
 ## [0.29.1] - 2026-11-03 · 全项目审查：异常修复 + 测试补全 + 文档收敛
 
@@ -20,13 +57,13 @@
 - **前端精度契约违规**：`kpi-card` / `model-table` 的「— 环比」硬编码破折号 → 统一走 `renderMissingValue(MISSING_REASON.noComparisonBaseline)`（占位 + 环比）。
 - **前端渲染器 cleanup 契约**：`session-survival-card` / `todo-card` / `compaction-panel` 空态返回 `undefined`；`trend-chart` 的 cleanup 非一次性（同一轮加载被连调两次 + 空态分支留旧句柄，`plot.destroy()` 重复调用的 use-after-free 隐患）→ 统一返回 cleanup，trend 改为「取出即清空句柄」的一次性消费。
 - **`search-panel` `hitCount` 未强转**（防御性）：非数字脏值原样进 `innerHTML` → 强转为有限数，否则退 1。
-- **`agent-table` 空态/表头为英文**（夹杂中文 UI）→ 改中文。
+- **`agent-table` 空态文案为英文**（夹杂中文 UI）→ 空态改中文；表头 `Agent` 作为专有名词保留（其余列头本为中文）。
 
 ### Changed
 
 - `INSIGHT_VERSION` / `package.json` 版本号 → `0.29.1`。
 
-### Test
+### Tests
 
 - 新增 `test/web-v029-panels.test.ts`（22 例）：v0.29 五个前端面板 + `agent-table` + 四个 `mock-*` 的契约测试（转义 / `<colgroup>` / `renderMissingValue` / 血缘图事件监听清理）。
 - 新增此前无直接测试的模块用例：`test/format-helpers.test.ts` / `test/message-roles.test.ts` / `test/tui-context.test.ts` / `test/plugin-definition.test.ts`。
@@ -36,12 +73,12 @@
 
 ### Docs
 
-- `DESIGN.md`：版本 banner → 0.29.1；用例数 654→818；§3.1 目录树补 v0.29 模块（stats / db / export / public）；§5 补「会话 token 总量分布」「工具健康榜」指标行；§7 `#toc-nav` 19→24 chip；§12 M6 移除已退役 `/insight-status`。
+- `DESIGN.md`：版本 banner → 0.29.1；用例数：DESIGN 中过期的 654 按实测校正为 818（0.29.0 报告的 722 为上一版实际数）；§3.1 目录树补 v0.29 模块（stats / db / export / public）；§5 补「会话 token 总量分布」「工具健康榜」指标行；§7 `#toc-nav` 19→24 chip；§12 M6 移除已退役 `/insight-status`。
 - `DATA-CONTRACT.md`：§一 读取计数重算（`session_v2` 26→45、`session_message` 21→26）并注明计数口径（锚定常量按引用计数）；§六 注明锚定谓词已收敛为单点常量。
 
 ## [0.29.0] - 2026-11-02 · 里程碑 D：借鉴 dsh 生态（A 组实时透视 + B 组上下文引擎）
 
-> 借鉴 dsh-context（实时上下文透视）与 billion-context（上下文压缩引擎）两个 dsh 插件的可移植形状（对比见 `references/COMPARISON-dsh-context-billion-context.md`；三者互补非同类：dsh-context 管实时、billion-context 管压缩、本插件管历史归档）。零运行时依赖不变；只读 5 表不变；唯一许可估算仍是既有自包含分词估算（🟡）。
+> 借鉴 dsh-context（实时上下文透视）与 billion-context（上下文压缩引擎）两个 dsh 插件的可移植形状（对比结论：dsh-context 管实时、billion-context 管压缩、本插件管历史归档，三者互补非同类，本轮只借鉴其可移植形状）。零运行时依赖不变；只读 5 表不变；唯一许可估算仍是既有自包含分词估算（🟡）。
 
 ### Added
 
@@ -63,7 +100,7 @@
 - 压缩事件新增「压缩阈值（推断）」标注（A2，🟡 推断）。
 - `buildExportDownloadFilename(summary, extension = "md")` 加可选扩展名参数（既有调用零改动）。
 
-### Test
+### Tests
 
 - 新增 `test/token-ledger.test.ts` / `test/content-composition.test.ts` / `test/file-activity.test.ts` / `test/session-lineage.test.ts` / `test/svg-export.test.ts`（纯函数面 + 真 `node:sqlite` parity 夹具）。
 - 同步 `test/router.test.ts` / `test/api-routes.test.ts`（503 名单）/ `test/session-filter.test.ts`（消费 `?session=` 名单）/ `test/helpers/fake-insight-db.ts`（SQL 子串分派）/ `test/web-session-scope.test.ts`（KEPT 清单）/ `test/export-route.test.ts`（`.svg` 路由 + handler）/ `test/export-filename.test.ts`。
@@ -99,7 +136,7 @@
   - **wire 契约不变**：`ToolTokenStat {tool,tokens,share,steps}` 与 `GET /api/tool-tokens` 的会话感知 / 未知 id → 404 / db 缺 → 503 语义与 v0.27.0 完全一致；前端 `tooltoken-row` 等 class 与 `data-*` 逐字保留，仅内部权重与角标文案（「字节比例」→「分词估算」）更新。
   - `DESIGN.md` §5 指标目录 + §6 路由表同步更新（`src/stats/tool-tokens.ts` 头注口径改写）。
 
-### Test
+### Tests
 
 - `test/tool-tokens.test.ts`：新增 `estimateTokensFromLengths` 纯函数面（ASCII 4 字符/token、3 字节 CJK 1 字符/token、线性可加、非正 / 非有限输入 clamp 到 0）；纯函数夹具改用 `{charCount,byteCount}` 并补 CJK-vs-ASCII 重加权用例（证明相对字节口径的改进）；真 `node:sqlite` 夹具新增 CJK 端到端用例，锁定 `length()` 字符语义。
 - 版本 0.28.0（`package.json` + `src/web/api.ts` 的 `INSIGHT_VERSION` 同步）。
@@ -123,7 +160,7 @@
   - `app.js` 加 `loadToolTokensSection`（独立加载 / 独立容错，与 tool-health 互不阻塞）。
   - `DESIGN.md` §5 指标目录 + §6 路由表各加一行。
 
-### Test
+### Tests
 
 - `test/tool-tokens.test.ts`：纯函数（单工具全额 / 双工具字节比取整 / 同工具合并 / 零工具桶 / 全空均摊 / **整数守恒 Σ 精确** / share 和 1 / 排序）+ 真 `node:sqlite` 夹具（字节比例归因、legacy `tool` 键回退、孤儿排除、db-null 契约、`?session=` 会话过滤、路由匹配与近失形状）。
 - `test/api-routes.test.ts` 的 503 名单 + `test/session-filter.test.ts` 的消费 `?session=` 名单各加 `/api/tool-tokens`。
@@ -146,14 +183,14 @@
   - 前端总 token 单元格内联环比角标，沿用 KPI 卡的 ▲/▼/持平 与 `.delta/.up/.down/.flat`；无基数时渲染「— 环比」。列数仍为 11，不新增列。
   - `?days=0` 与全历史请求无上一窗口，全部渲染「— 环比」。真实库冒烟：days=7 → 19 行 / 5 有基数，days=30 → 9 有基数，全历史 → 全 0。
 
-### Test
+### Tests
 
 - `test/model-metrics.test.ts`：复合分组（同 modelId 跨 variant / 跨 provider 各自成行、缺 variant 归空）与 `attachPreviousWindowTokens`（匹配键继承、新模型记 0、消失模型不产出、重复键求和）。
 - `test/model-metrics-days-window.test.ts`：真实 `node:sqlite` 双窗口夹具，断言环比基数来自上一等长窗口、仅当前窗口出现的模型基数记 0、`offset-0` 结果与 `queryModelMetrics` 一致。
 - `test/web-components.test.ts`：变体 chip 与复合行键唯一性、环比角标四种形态（▲ / ▼ / 持平 / —）、11 列不变。
 - 全量 608 用例通过；`npm run check` exit 0。
 
-## [0.25.2] - 2026-10-29 —— 修复：`/api/health` 自报版本与 `package.json` 脱节
+## [0.25.2] - 2026-10-29 · 修复：`/api/health` 自报版本与 `package.json` 脱节
 
 ### Fixed
 
@@ -190,7 +227,7 @@
 
 - **`session-list.js` 的 `SESSIONS_CSV_EXPORT_AVAILABLE` 导入路径**：原从 `session-csv-export.js` 引一个不存在的导出导致 SyntaxError（28 个会话列表测试全挂）；改从 `data-source.js` 引，并同步修好 `web-session-scope.test.ts` 的 6 参 `fetchSessionsPage` 桩（scope 落在错位参数上）。
 
-### Test
+### Tests
 
 - **`test/web-search-panel.test.ts`**（新增）：idle / 禁用态 / 表单提交路由 / loading / 命中行 / 空态 / 正则错误 / 外部文本转义 / snippet 透传 9 个用例。
 - **`test/web-components.test.ts`**：补日历热力图 `onDaySelect` 点击（2 例）与会话列表 `dayFilter` 脚注标注 / 清除（1 例）。
@@ -287,7 +324,7 @@
   原因：`white-space: nowrap` 配自动布局时，长模型 ID / 长会话标题会挤占数字列，列宽随内容漂移。参考 billion-context `src/web/page.ts` 的 `<colgroup>` 写法。
   每张表的第一列保持无宽度以吃掉剩余空间，避免固定布局下表格不满宽。
 
-## [0.23.0] - 2026-10-19（未单独打 tag，内容并入 v0.24.0）
+## [0.23.0] - 2026-10-19 · 未单独打 tag，内容并入 v0.24.0
 
 ### Added
 - **TUI 右侧栏「Todos」块**：挂在宿主 `sidebar.content` 槽位，实时展示当前会话的 todo。已完成打 ✓、进行中打 ∼、未做打 ·；`in_progress` 恒在首位（多条并行按 `position`）；每页 4 条、底部 `‹ n/m ›` 可点翻页；**没有未完成项时整块消失**，有新 todo 自动出现。标题行整行点击折叠/展开，折叠态经 `context.storage.store` 持久化。
@@ -302,8 +339,6 @@
 
 ### Deferred
 - **侧栏「提问列表 + 跳转到提问位置」**：数据面可行（`session_message` `type='user'`，已有 `(session_id, type, seq)` 索引），但 V2 插件 API **未暴露消息级定位**（`ui.router.navigate` 仅到会话粒度，无 scroll/reveal/focus），故缓办。详见 DESIGN.md §13 与该条的再触发条件。
-
-（暂无——下一批变更记录于此）
 
 ## [0.22.0] - 2026-10-19 · B 档指标：工具错误率逐日趋势 + 失败中断识别
 
@@ -975,3 +1010,57 @@
 ### Technical Debt（M7 处理）
 - status-panel-data.ts 重复一条只读 SELECT（queries.ts 无今日分组导出），建议上提为 queries.ts 导出
 - showInsightToast 在 tui-context.ts 与 export-command.ts 各一份，M7 合并
+
+[0.29.2]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.29.1...v0.29.2
+[0.29.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.29.0...v0.29.1
+[0.29.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.28.1...v0.29.0
+[0.28.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.28.0...v0.28.1
+[0.28.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.27.0...v0.28.0
+[0.27.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.26.0...v0.27.0
+[0.26.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.25.2...v0.26.0
+[0.25.2]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.25.1...v0.25.2
+[0.25.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.25.0...v0.25.1
+[0.25.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.22.0...v0.24.0
+[0.23.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.22.0...v0.24.0
+[0.22.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.19.1...v0.20.0
+[0.19.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.19.0...v0.19.1
+[0.19.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.18.1...v0.19.0
+[0.18.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.18.0...v0.18.1
+[0.18.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.16.2...v0.17.0
+[0.16.2]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.16.1...v0.16.2
+[0.16.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.16.0...v0.16.1
+[0.16.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.15.3...v0.16.0
+[0.15.3]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.15.2...v0.15.3
+[0.15.2]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.15.1...v0.15.2
+[0.15.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.12.1...v0.13.0
+[0.12.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.12.0...v0.12.1
+[0.12.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.10.1...v0.11.0
+[0.10.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.9.1...v0.10.0
+[0.9.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.2.1...v0.3.1
+[0.3.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.2.1...v0.3.1
+[0.2.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/dubuqiangu/opencode-db-insight/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/dubuqiangu/opencode-db-insight/releases/tag/v0.1.0

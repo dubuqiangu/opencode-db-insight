@@ -77,8 +77,13 @@ function hitRateCell(metric) {
 }
 
 /**
- * 复合下钻键：modelId + providerId + variant。榜单行已是复合粒度，下钻/选中/
- * 配色都必须按复合行唯一键区分（同一 modelId 不同 provider/variant 是独立行）。
+ * 复合选中身份键：modelId + providerId + variant。榜单行已是复合粒度，行选中
+ * 高亮与配色都必须按复合行唯一键区分（同一 modelId 不同 provider/variant 是
+ * 独立行）。
+ *
+ * 注意：该键含 U+0000，**只作内部选中身份**，绝不进 HTML 属性——HTML 预处理
+ * 会把 U+0000 换成 U+FFFD，属性值不再可往返。下钻过滤值另走纯 modelId
+ * （见 onSelectModel 的第二个参数），与 session.modelIds 的纯 id 同口径。
  */
 function compositeModelKey(modelMetric) {
   // 旧 wire（宿主更新窗口期）可能缺 variant：缺失/非字符串一律归一为 ""，
@@ -116,9 +121,15 @@ function renderPeriodDeltaBadge(metric) {
 
 /**
  * 渲染模型排行榜。
- * onSelectModel(modelId | null)：行点击下钻；再次点击同一行取消。
+ *
+ * selectedModelKey：当前选中的复合身份键（compositeModelKey 产出），只驱动
+ * 行高亮——行的点击身份按复合粒度区分。
+ * onSelectModel(selectionKey | null, plainModelId)：行点击下钻回调。选中身份键
+ * 与派发给会话列表的**纯 modelId** 是两个分开的参数：复合键含 U+0000 既不能
+ * 进 HTML 属性，也不匹配 session.modelIds 的纯 id（模型下钻空列表的根因）。
+ * 再次点击同一行取消选中（selectionKey 传 null，配合 plainModelId 一并回传）。
  */
-export function renderModelTable(container, modelMetrics, selectedModelId, onSelectModel) {
+export function renderModelTable(container, modelMetrics, selectedModelKey, onSelectModel) {
   if (modelMetrics === null) {
     renderLoading(container, 4);
     return;
@@ -144,16 +155,17 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
       </th>`;
   }).join("");
 
-  const rowsHtml = sortModels(modelMetrics).map((metric) => {
+  const sortedMetrics = sortModels(modelMetrics);
+  const rowsHtml = sortedMetrics.map((metric, rowIndex) => {
     const modelKey = compositeModelKey(metric);
-    const isSelected = modelKey === selectedModelId;
+    const isSelected = modelKey === selectedModelKey;
     const modelColor = tokenRankColor.get(modelKey) ?? "transparent";
     const variantChip =
       metric.variant === ""
         ? ""
         : `<span class="model-variant">${escapeHtml(metric.variant)}</span>`;
     return `
-      <tr data-model="${escapeHtml(modelKey)}" class="${isSelected ? "selected" : ""}" title="点击过滤下方会话列表">
+      <tr class="model-row ${isSelected ? "selected" : ""}" data-model-id="${escapeHtml(metric.modelId)}" data-model-index="${rowIndex}" title="点击过滤下方会话列表">
         <td class="primary"><span class="model-cell"><span class="dot" style="background:${modelColor}"></span><span class="name">${escapeHtml(metric.modelId)}</span>${variantChip}</span></td>
         <td>${escapeHtml(metric.providerId)}</td>
         <td class="num">${formatCount(metric.steps)}</td>
@@ -189,15 +201,22 @@ export function renderModelTable(container, modelMetrics, selectedModelId, onSel
         sortKey = clickedKey;
         sortDirection = "desc";
       }
-      renderModelTable(container, modelMetrics, selectedModelId, onSelectModel);
+      renderModelTable(container, modelMetrics, selectedModelKey, onSelectModel);
     });
   }
 
-  for (const row of container.querySelectorAll("tbody tr")) {
+  // 逐行绑定、按闭包捕获该行的 metric——不再把复合键回写 dataset 再读回来
+  // （dataset 往返会撞上 U+0000 → U+FFFD 的 HTML 预处理，选中态永远对不上）。
+  // data-model-index 是排序后数组的下标，只用于取回该行 metric；它不含 NUL，
+  // 可安全往返。
+  for (const row of container.querySelectorAll("tr.model-row")) {
+    const metric = sortedMetrics[Number(row.dataset.modelIndex)];
+    if (metric === undefined) continue;
     row.classList.add("session-row");
     row.addEventListener("click", () => {
-      const modelName = row.dataset.model;
-      onSelectModel(modelName === selectedModelId ? null : modelName);
+      const selectionKey = compositeModelKey(metric);
+      // 选中身份键（复合）与会话列表过滤值（纯 modelId）分两个参数下发。
+      onSelectModel(selectionKey === selectedModelKey ? null : selectionKey, metric.modelId);
     });
   }
 }

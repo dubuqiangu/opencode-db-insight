@@ -3473,14 +3473,14 @@ function clickModelColumnHeader(container: StubElement, columnKey: string): void
 }
 
 /** Body-row model ids in DOM order. The shim parses opening tags flat in
- * document order, so "tr" + data-model filtering yields the rendered sort
- * order (thead tr carries no data-model and drops out). */
+ * document order, so "tr" + data-model-id filtering yields the rendered sort
+ * order (thead tr carries no data-model-id and drops out). */
 function modelBodyRowOrder(container: StubElement): Array<string | undefined> {
   return container
     .querySelectorAll("tr")
-    .filter((rowElement) => rowElement.dataset.model !== undefined)
-    // data-model 是复合键（modelId\0providerId\0variant）；此处按行序只取模型名段。
-    .map((rowElement) => rowElement.dataset.model!.split("\u0000")[0])
+    .filter((rowElement) => rowElement.dataset.modelId !== undefined)
+    // data-model-id 是纯 modelId；复合选中身份键留在 JS 闭包里，不进属性。
+    .map((rowElement) => rowElement.dataset.modelId)
 }
 
 /**
@@ -3515,7 +3515,7 @@ async function pinModelSortState(
   }
 }
 
-test("renderModelTable shows the variant chip and keys rows by composite modelId+providerId+variant", async () => {
+test("renderModelTable shows the variant chip, keeps variant rows distinct and never smuggles the NUL composite key into the DOM", async () => {
   const { renderModelTable } = await import("../src/web/public/components/model-table.js")
   // 同一 modelId 的两个 variant 是两行（复合键）；空 variant 不渲染 chip。
   const variantMetrics = [
@@ -3525,21 +3525,135 @@ test("renderModelTable shows the variant chip and keys rows by composite modelId
   ]
 
   const container = freshContainer()
-  renderModelTable(container, variantMetrics, null, noopModelSelect)
+  const clickedSelectionKeys: Array<string | null> = []
+  renderModelTable(container, variantMetrics, null, (selectionKey) => {
+    clickedSelectionKeys.push(selectionKey)
+  })
 
   const chipTexts = (container.innerHTML.match(/<span class="model-variant">([^<]*)<\/span>/g) ?? [])
   assert.deepEqual(chipTexts.length, 2, "只有两个非空 variant 渲染 chip")
   assert.ok(container.innerHTML.includes('<span class="model-variant">high</span>'))
   assert.ok(container.innerHTML.includes('<span class="model-variant">max</span>'))
 
-  // 复合行键唯一：同一 modelId 的两行 data-model 不同（区分 provider 与 variant）。
-  const rowKeys = container
-    .querySelectorAll("tr")
-    .filter((rowElement) => rowElement.dataset.model !== undefined)
-    .map((rowElement) => rowElement.dataset.model!)
-  assert.equal(new Set(rowKeys).size, rowKeys.length, "复合键下每行唯一")
-  assert.ok(rowKeys.includes("glm-5.3\u0000z-ai\u0000high"))
-  assert.ok(rowKeys.includes("glm-5.3\u0000z-ai\u0000max"))
+  // 复合选中身份键只作内部身份：绝不进 HTML 属性——U+0000 不可往返，
+  // HTML 预处理会把它换成 U+FFFD，属性读回来就对不上真实行了。
+  assert.ok(!container.innerHTML.includes("\u0000"), "渲染出的标记里不含 NUL")
+  assert.ok(!container.innerHTML.includes("\uFFFD"), "渲染出的标记里不含 U+FFFD")
+
+  // 行身份：data-model-id 是纯 modelId（可为空 variant 行），data-model-index 唯一。
+  const rowElements = container.querySelectorAll("tr.model-row")
+  assert.equal(rowElements.length, 3, "三行（含空 variant 行）都带 model-row 钩子")
+  assert.deepEqual(
+    rowElements.map((rowElement) => rowElement.dataset.modelId),
+    ["glm-5.3", "glm-5.3", "phi-5"],
+    "data-model-id 是纯 modelId，同一 modelId 的两行相同（复合身份不在属性里）",
+  )
+  assert.equal(
+    new Set(rowElements.map((rowElement) => rowElement.dataset.modelIndex)).size,
+    3,
+    "data-model-index 每行唯一",
+  )
+
+  // 同一 modelId+provider、不同 variant 的两行，点击必须各自上报不同的复合选中键。
+  for (const rowElement of rowElements) rowElement.click()
+  assert.equal(new Set(clickedSelectionKeys).size, 3, "每行上报自己唯一的复合选中键")
+  assert.ok(clickedSelectionKeys.includes("glm-5.3\u0000z-ai\u0000high"))
+  assert.ok(clickedSelectionKeys.includes("glm-5.3\u0000z-ai\u0000max"))
+})
+
+test("model-table drill-down hands session-list a plain modelId and the list shows the matching session (no NUL chip)", async () => {
+  const { renderModelTable } = await import("../src/web/public/components/model-table.js")
+  const { renderSessionList } = await import("../src/web/public/components/session-list.js")
+
+  // 排行榜行来自 step 级模型：charlie 的启动模型是 claude-sonnet-4.6，但它的
+  // step 里用过 glm-5.3——点 glm-5.3 行必须命中 charlie（口径见 v0.19.0）。
+  const modelMetrics = [
+    modelMetricFixture({ modelId: "glm-5.3", providerId: "z-ai", variant: "high", tokens: 900 }),
+    modelMetricFixture({ modelId: "phi-5", providerId: "microsoft", variant: "", tokens: 500 }),
+  ]
+  const sessions = [
+    { id: "ses_example_alpha", title: "alpha fixture", modelId: "glm-5.3", modelIds: ["glm-5.3"], agent: "build", directory: "D:/projects/example-alpha", timeCreated: 1000, timeUpdated: 5000, tokens: 1500, cost: 1.0 },
+    { id: "ses_example_charlie", title: "charlie fixture", modelId: "claude-sonnet-4.6", modelIds: ["claude-sonnet-4.6", "glm-5.3"], agent: "build", directory: "D:/projects/example-alpha", timeCreated: 3000, timeUpdated: 7000, tokens: 900, cost: 0.5 },
+    { id: "ses_example_bravo", title: "bravo fixture", modelId: "phi-5", modelIds: ["phi-5"], agent: "plan", directory: "D:/projects/example-alpha", timeCreated: 2000, timeUpdated: 9000, tokens: 600, cost: 2.5 },
+  ]
+
+  const modelContainer = freshContainer()
+  const sessionContainer = freshContainer()
+
+  // 镜像 app.js 接线：复合选中键（state.modelSelectionKey）驱动行高亮，纯
+  // modelId（state.modelFilter）下发给会话列表——两个独立状态槽。
+  let selectionKeyState: string | null = null
+  let filterState: string | null = null
+  const renderList = () => renderSessionList(
+    sessionContainer,
+    { total: sessions.length, sessions },
+    filterState,
+    "time_updated",
+    "desc",
+  )
+  const onSelectModel = (selectionKey: string | null, plainModelId: string | null) => {
+    selectionKeyState = selectionKey
+    filterState = selectionKey === null ? null : plainModelId
+    renderModelTable(modelContainer, modelMetrics, selectionKeyState, onSelectModel)
+    renderList()
+  }
+
+  renderModelTable(modelContainer, modelMetrics, null, onSelectModel)
+  renderList()
+  assert.equal(
+    sessionContainer.querySelectorAll("tr.session-row").length,
+    3,
+    "基线：未过滤时三条会话都在",
+  )
+
+  const findGlmModelRow = () => modelContainer
+    .querySelectorAll("tr.model-row")
+    .find((rowElement) => rowElement.dataset.modelId === "glm-5.3")!
+
+  findGlmModelRow().click()
+
+  // (a) 下发给会话列表的过滤值是纯 modelId，命中 session.modelIds——复合键
+  // （含 U+0000）命中必为 false，就是空列表的根因。
+  assert.equal(filterState, "glm-5.3", "过滤值是纯 modelId")
+  assert.ok(!filterState!.includes("\u0000"), "过滤值不含 NUL")
+  assert.ok(!filterState!.includes("\uFFFD"), "过滤值不含 U+FFFD")
+  assert.ok(
+    sessions.some((session) => session.modelIds.includes(filterState!)),
+    "纯 modelId 命中某条会话的 modelIds",
+  )
+  // 选中身份键仍是复合的（驱动行高亮），与过滤值分家。
+  assert.ok(selectionKeyState!.includes("\u0000"), "选中身份键保持复合")
+
+  // (b) 会话列表非空，且命中 step 级用过 glm-5.3 的会话（charlie 启动模型是别的）。
+  assert.ok(!sessionContainer.innerHTML.includes("没有会话记录"), "不再是全局空态")
+  assert.ok(!sessionContainer.innerHTML.includes("没有 glm-5.3 的会话"), "不再是模型空态")
+  assert.deepEqual(
+    sessionContainer.querySelectorAll("tr.session-row").map((rowElement) => rowElement.dataset.sessionId),
+    ["ses_example_alpha", "ses_example_charlie"],
+    "命中 step 级 modelIds 的两条会话都留下（含启动模型不同的）",
+  )
+
+  // (c) chip 文案 = 纯 modelId（app.js 就是把这个值插进 filter-chip），不含 NUL/U+FFFD。
+  const chipText = `模型：${filterState}`
+  assert.equal(chipText, "模型：glm-5.3")
+  assert.ok(!chipText.includes("\u0000") && !chipText.includes("\uFFFD"), "chip 文本干净")
+
+  // 选中行高亮跟随复合选中键。
+  assert.ok(findGlmModelRow().classTokenList().includes("selected"), "选中行带 selected 类")
+
+  // 再点同一行 → 取消选中：选中键与过滤值都归 null，列表恢复全量。
+  findGlmModelRow().click()
+  assert.equal(selectionKeyState, null, "第二次点击清空选中身份键")
+  assert.equal(filterState, null, "第二次点击清空过滤值")
+  assert.equal(
+    sessionContainer.querySelectorAll("tr.session-row").length,
+    3,
+    "取消过滤后三条会话都回来",
+  )
+  assert.ok(
+    modelContainer.querySelectorAll("tr.model-row").every((rowElement) => !rowElement.classTokenList().includes("selected")),
+    "无行处于选中态",
+  )
 })
 
 test("renderModelTable renders the v0.12.0 token 占比 column next to 总 token", async () => {

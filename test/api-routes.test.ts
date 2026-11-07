@@ -66,6 +66,8 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/duration-distribution",
     "/api/child-share",
     "/api/tool-error-trend",
+    // v0.29.0 每工具健康度：db 缺失时同样走 503 短接。
+    "/api/tool-health",
     "/api/session-outcomes",
     // v0.27.0 每工具 token 归因：两段路由，db 缺失时同样走 503 短接。
     "/api/tool-tokens",
@@ -85,6 +87,8 @@ test("every data route answers 503 with the unavailable error when the db is mis
     "/api/export/sessions.csv",
     // v0.29.0 B8 SVG 报告导出：4 段路由，db 缺失时同样走 503 短接。
     "/api/export/session/ses_example.svg",
+    // v0.28.1 markdown 会话导出（.md）：db 缺失时同样走 503 短接。
+    "/api/export/session/ses_example.md",
   ]
   for (const pathname of dataRoutePathnames) {
     const requestContext = requestContextFor(pathname)
@@ -1409,4 +1413,21 @@ test("parseDayStartMs degrades to null for empty or malformed dates", () => {
   assert.equal(parseDayStartMs(""), null, "an empty day param applies no filter")
   assert.equal(parseDayStartMs("not-a-date"), null, "a non-date string applies no filter")
   assert.equal(parseDayStartMs("2026-13-40"), null, "an out-of-range month/day applies no filter")
+})
+
+test("parseDayStartMs rejects calendar-impossible dates instead of silently rolling over (L2)", () => {
+  // new Date(2026, 1, 31) rolls over to Mar 3 — a silent wrong-day filter.
+  // The round-trip check must turn these into null (no filter), like every
+  // other malformed ?day= shape.
+  assert.equal(parseDayStartMs("2026-02-31"), null, "Feb 31 does not exist")
+  assert.equal(parseDayStartMs("2026-02-30"), null, "Feb 30 does not exist")
+  assert.equal(parseDayStartMs("2025-02-29"), null, "Feb 29 in a non-leap year does not exist")
+  assert.equal(parseDayStartMs("2026-04-31"), null, "Apr 31 does not exist")
+  assert.equal(parseDayStartMs("2026-06-31"), null, "Jun 31 does not exist")
+  // A leap-year Feb 29 is a real local day and stays valid (local midnight).
+  assert.equal(
+    parseDayStartMs("2024-02-29"),
+    new Date(2024, 1, 29).getTime(),
+    "a leap-year Feb 29 is accepted as local midnight",
+  )
 })

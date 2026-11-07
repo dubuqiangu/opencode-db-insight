@@ -413,38 +413,61 @@ function createInMemoryCompactionDatabase(
   }
 }
 
-test("queryCompactionStats follows real SQLite json_extract semantics for weird reason shapes", () => {
-  const inMemoryDatabase = createInMemoryCompactionDatabase([
-    { sessionId: "ses_weird_reasons", data: '{"status":"completed","reason":"auto","summary":"x"}' },
-    { sessionId: "ses_weird_reasons", data: '{"reason":false}' },
-    { sessionId: "ses_weird_reasons", data: '{"reason":true}' },
-    { sessionId: "ses_weird_reasons", data: '{"reason":5}' },
-    { sessionId: "ses_weird_reasons", data: '{"reason":""}' },
-    { sessionId: "ses_weird_reasons", data: '{"reason":{"a":1}}' },
-    { sessionId: "ses_weird_reasons", data: "not valid json {{" },
-    { sessionId: "ses_weird_reasons", data: null },
-    { sessionId: "ses_weird_reasons", data: '{"status":"completed","summary":"no reason key"}' },
-  ])
-  if (inMemoryDatabase === null) {
-    assert.ok(true, "node:sqlite unavailable on this machine — skipping the in-memory semantics test")
-    return
-  }
-
+/**
+ * node:sqlite availability, probed once at module load so the in-memory
+ * semantics test declares a REAL skip when the driver is missing instead of
+ * a green no-op that reports passed. Mirrors the fixture-skip pattern in
+ * test/session-filter.test.ts / test/session-todo.test.ts.
+ */
+function canLoadNodeSqlite(): boolean {
   try {
-    const compactionStats = queryCompactionStats(inMemoryDatabase)!
-
-    // auto + the five shaped keys + four "unknown" folds
-    // ("" / invalid JSON / NULL data / missing reason).
-    assert.deepEqual(compactionStats.byReason, {
-      auto: 1,
-      ...WEIRD_REASON_BY_REASON_EXPECTED,
-      unknown: WEIRD_REASON_BY_REASON_EXPECTED.unknown + 1,
-    })
-    assert.equal(compactionStats.total, 9)
-    assert.deepEqual(compactionStats.topSessions, [
-      { sessionId: "ses_weird_reasons", count: 9 },
-    ])
-  } finally {
-    inMemoryDatabase.close()
+    createRequire(import.meta.url)("node:sqlite")
+    return true
+  } catch {
+    return false
   }
-})
+}
+
+const inMemorySqliteSkipReason: string | false = canLoadNodeSqlite()
+  ? false
+  : "node:sqlite unavailable on this machine — skipping the in-memory semantics test"
+
+test(
+  "queryCompactionStats follows real SQLite json_extract semantics for weird reason shapes",
+  { skip: inMemorySqliteSkipReason },
+  (testContext) => {
+    const inMemoryDatabase = createInMemoryCompactionDatabase([
+      { sessionId: "ses_weird_reasons", data: '{"status":"completed","reason":"auto","summary":"x"}' },
+      { sessionId: "ses_weird_reasons", data: '{"reason":false}' },
+      { sessionId: "ses_weird_reasons", data: '{"reason":true}' },
+      { sessionId: "ses_weird_reasons", data: '{"reason":5}' },
+      { sessionId: "ses_weird_reasons", data: '{"reason":""}' },
+      { sessionId: "ses_weird_reasons", data: '{"reason":{"a":1}}' },
+      { sessionId: "ses_weird_reasons", data: "not valid json {{" },
+      { sessionId: "ses_weird_reasons", data: null },
+      { sessionId: "ses_weird_reasons", data: '{"status":"completed","summary":"no reason key"}' },
+    ])
+    if (inMemoryDatabase === null) {
+      testContext.skip("node:sqlite unavailable — the in-memory semantics test cannot run")
+      return
+    }
+
+    try {
+      const compactionStats = queryCompactionStats(inMemoryDatabase)!
+
+      // auto + the five shaped keys + four "unknown" folds
+      // ("" / invalid JSON / NULL data / missing reason).
+      assert.deepEqual(compactionStats.byReason, {
+        auto: 1,
+        ...WEIRD_REASON_BY_REASON_EXPECTED,
+        unknown: WEIRD_REASON_BY_REASON_EXPECTED.unknown + 1,
+      })
+      assert.equal(compactionStats.total, 9)
+      assert.deepEqual(compactionStats.topSessions, [
+        { sessionId: "ses_weird_reasons", count: 9 },
+      ])
+    } finally {
+      inMemoryDatabase.close()
+    }
+  },
+)

@@ -218,7 +218,16 @@ function readToolOutput(stateRecord: Record<string, unknown>): string {
     .join("\n\n")
 }
 
-/** Build the single italic notice line for a non-conversation message. */
+/**
+ * Build the single italic notice line for a non-conversation message.
+ *
+ * Every free-text field the line embeds is run through redactCredentials
+ * BEFORE truncateNoticeText (redact-then-truncate): truncating first could
+ * slice a credential in half at the notice character limit, leaving a
+ * fragment the redaction patterns no longer recognise and leaking it. This
+ * matches the free-text paths in the user / assistant / reasoning / tool
+ * renderers, which all redact too.
+ */
 function buildNoticeLine(message: SessionMessageRecord): string {
   const messageType = coerceText(message.type)
   const dataRecord = asRecord(message.data)
@@ -227,13 +236,13 @@ function buildNoticeLine(message: SessionMessageRecord): string {
     const systemText =
       dataRecord === null ? "" : collapseToSingleLine(coerceText(dataRecord["text"]))
     if (systemText === "") return "系统指令更新（内容缺失）"
-    return `系统指令更新: ${truncateNoticeText(systemText)}`
+    return `系统指令更新: ${truncateNoticeText(redactCredentials(systemText))}`
   }
 
   if (messageType === "model-switched") {
     const currentModelId = readModelId(dataRecord, "model")
     const previousModelId = readModelId(dataRecord, "previous")
-    return `模型切换: ${previousModelId} → ${currentModelId}`
+    return `模型切换: ${redactCredentials(previousModelId)} → ${redactCredentials(currentModelId)}`
   }
 
   if (messageType === "compaction") {
@@ -242,10 +251,12 @@ function buildNoticeLine(message: SessionMessageRecord): string {
     const compactionSummary =
       dataRecord === null ? "" : collapseToSingleLine(coerceText(dataRecord["summary"]))
     const reasonLabel = compactionReason === "" ? "未知原因" : compactionReason
-    return `上下文压缩（${reasonLabel}）: ${truncateNoticeText(compactionSummary)}`
+    return `上下文压缩（${redactCredentials(reasonLabel)}）: ${truncateNoticeText(redactCredentials(compactionSummary))}`
   }
 
-  const dataPreview = truncateNoticeText(collapseToSingleLine(safeStringifyJson(message.data)))
+  const dataPreview = truncateNoticeText(
+    redactCredentials(collapseToSingleLine(safeStringifyJson(message.data))),
+  )
   const typeLabel = messageType === "" ? "缺失" : messageType
   return `未知消息类型（${typeLabel}）: ${dataPreview}`
 }

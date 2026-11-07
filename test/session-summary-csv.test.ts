@@ -729,3 +729,70 @@ test(
     }
   },
 )
+
+test(
+  "real-SQL export: the ?day= window filters the CSV snapshot to that local day (M1)",
+  { skip: skipReason },
+  () => {
+    // The frontend builds a day-aware export URL
+    // (sessionsExportCsvPath(directory, range, day) appends day=YYYY-MM-DD,
+    // titled "导出日期 … 的会话为 CSV"), so the server must consume ?day=
+    // instead of silently exporting the whole list.
+    const pinnedDayStartMs = new Date(2026, 9, 7).getTime()
+    const pinnedDayEndMs = new Date(2026, 9, 8).getTime()
+    const database = createRangeShapedDatabase([
+      { id: "ses_csv_day_in_alpha", directory: "D:/projects/example-alpha", timeUpdated: pinnedDayStartMs + 1 },
+      { id: "ses_csv_day_in_beta", directory: "D:/projects/example-beta", timeUpdated: pinnedDayEndMs - 1 },
+      { id: "ses_csv_day_previous", directory: "D:/projects/example-alpha", timeUpdated: pinnedDayStartMs - 1 },
+      { id: "ses_csv_day_next", directory: "D:/projects/example-beta", timeUpdated: pinnedDayEndMs },
+    ])
+    try {
+      const dataIdsFor = (queryString: string): string[] => {
+        clearResultCache()
+        const exportResponse = handleApiRequest(csvContextFor(database, queryString))
+        assert.equal(exportResponse.statusCode, 200)
+        return parseCsvDocument(exportResponse.rawText!.text)
+          .slice(1)
+          .map((record) => record[0])
+      }
+
+      clearResultCache()
+      assert.deepEqual(
+        dataIdsFor("day=2026-10-07"),
+        ["ses_csv_day_in_beta", "ses_csv_day_in_alpha"],
+        "only the pinned local day's sessions export, newest first",
+      )
+
+      // The day window composes with the directory drill-down (intersection).
+      assert.deepEqual(
+        dataIdsFor("day=2026-10-07&directory=D%3A%2Fprojects%2Fexample-alpha"),
+        ["ses_csv_day_in_alpha"],
+        "day + directory is an intersection",
+      )
+
+      // A calendar-impossible day degrades to no filter (the full snapshot,
+      // newest first) — not the silently-rolled-over wrong day.
+      assert.deepEqual(
+        dataIdsFor("day=2026-02-31"),
+        [
+          "ses_csv_day_next",
+          "ses_csv_day_in_beta",
+          "ses_csv_day_in_alpha",
+          "ses_csv_day_previous",
+        ],
+        "an impossible day applies no filter and exports the full list",
+      )
+
+      // A day with no sessions is a header-only 200 CSV (filter semantics).
+      const missResponse = handleApiRequest(csvContextFor(database, "day=2020-01-01"))
+      assert.equal(missResponse.statusCode, 200)
+      assert.equal(missResponse.rawText!.text, "\uFEFF" + SESSION_SUMMARY_CSV_HEADER + "\r\n")
+
+      // One-shot export: none of these requests left a TTL entry behind.
+      assert.equal(resultCacheSize(), 0, "the day export never touches the result cache")
+    } finally {
+      clearResultCache()
+      database.close()
+    }
+  },
+)

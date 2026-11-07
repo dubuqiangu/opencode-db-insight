@@ -34,6 +34,17 @@ export interface FakeCompactionMessageFixture {
   data: unknown
 }
 
+/**
+ * One fake `todo` row for queryTodoStats (GET /api/todo). Only the two
+ * columns that query reads exist here: the status bucket key and the
+ * session_id used by the optional ?session= filter. Absent rows mean the
+ * session/database has no todos, which the real query reports as total 0.
+ */
+export interface FakeTodoRow {
+  sessionId: string
+  status: string
+}
+
 /** Reason bucket the SQL CASE emits for unusable json_extract results. */
 const UNKNOWN_FAKE_REASON_KEY = "unknown"
 
@@ -159,6 +170,11 @@ export interface FakeInsightDatabaseScenario {
   directoryColumnBySessionId?: Record<string, string | null>
   /** Compaction message fixtures served to the /api/compaction scans. */
   compactionMessages?: FakeCompactionMessageFixture[]
+  /**
+   * todo rows served to queryTodoStats (GET /api/todo), grouped by status
+   * with the optional ?session= session_id filter.
+   */
+  todoRows?: FakeTodoRow[]
 }
 
 /** Turn a SessionSummary into the raw column shape of session_v2. */
@@ -208,6 +224,7 @@ export function createFakeInsightDatabase(
       data: JSON.stringify(compactionFixture.data),
     }),
   )
+  const todoRows = scenario.todoRows ?? []
 
   const prepareStatement = (sql: string): SqliteStatement => {
     if (sql.trim() === "SELECT 1") {
@@ -537,6 +554,27 @@ export function createFakeInsightDatabase(
         get: () => undefined,
       }
     }
+    if (sql.includes("AS statusCount")) {
+      // v0.20.0 GET /api/todo（queries.ts queryTodoStats）：todo 按 status
+      // 归组的计数，可带 ?session= 的 WHERE session_id = ?。返回行形状与
+      // 生产端读取一致（status + statusCount）。
+      const hasTodoSessionFilter = sql.includes("session_id = ?")
+      return {
+        all: (...parameters: unknown[]) => {
+          const sessionFilterValue = hasTodoSessionFilter ? String(parameters[0] ?? "") : null
+          const statusCountByKey = new Map<string, number>()
+          for (const todoRow of todoRows) {
+            if (sessionFilterValue !== null && todoRow.sessionId !== sessionFilterValue) continue
+            statusCountByKey.set(todoRow.status, (statusCountByKey.get(todoRow.status) ?? 0) + 1)
+          }
+          return [...statusCountByKey.entries()].map(([status, statusCount]) => ({
+            status,
+            statusCount,
+          }))
+        },
+        get: () => undefined,
+      }
+    }
     // 锚定统一后（v0.30.0），**每条**消息扫描的 SQL 都带共享锚定谓词
     // SESSION_V2_ANCHOR_PREDICATE_SQL（内含 "SELECT id FROM session_v2"）。
     // 下面的 session_v2 分支很宽，会先把消息扫描截走，所以这里显式让路：
@@ -548,6 +586,33 @@ export function createFakeInsightDatabase(
       sql.includes("FROM session_v2") &&
       !sql.includes(SESSION_V2_ANCHOR_PREDICATE_SQL)
     ) {
+      if (sql.includes("AS sessionCount") || sql.includes("AS totalCost")) {
+        // v0.20.0 GET /api/overview 的两个会话级聚合（aggregate-queries.ts
+        // queryOverview）：COUNT(*) 与 SUM(cost)，可带 ?session= 的
+        // WHERE id = ?。单会话时两值都收窄到该会话（sessionCount 退化为 1）。
+        // **必须**放在宽泛的 `WHERE id = ?` 点查分支之前，否则会被它截走，
+        // 让生产端的 readRowNumber 读不到 sessionCount/totalCost 而记 0。
+        const hasOverviewSessionFilter = sql.includes("WHERE id = ?")
+        const readsSessionCount = sql.includes("AS sessionCount")
+        return {
+          all: () => [],
+          get: (...parameters: unknown[]) => {
+            const targetSessionId = hasOverviewSessionFilter
+              ? String(parameters[0] ?? "")
+              : null
+            const matchedRows =
+              targetSessionId === null
+                ? sessionRows
+                : sessionRows.filter((sessionRow) => String(sessionRow.id) === targetSessionId)
+            if (readsSessionCount) return { sessionCount: matchedRows.length }
+            // SUM(cost) 空集返回 NULL，查询层 readRowNumber 折叠为 0。
+            if (matchedRows.length === 0) return { totalCost: null }
+            let totalCost = 0
+            for (const sessionRow of matchedRows) totalCost += Number(sessionRow.cost ?? 0)
+            return { totalCost }
+          },
+        }
+      }
       if (sql.includes("AS total_sessions")) {
         // v0.21.0 GET /api/child-share 的整体归总：COUNT + 父子分桶 +
         // tokens 三列合计。镜像 SQL 的 COALESCE(SUM(...)) 折叠与

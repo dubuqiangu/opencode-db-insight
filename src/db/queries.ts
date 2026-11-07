@@ -249,11 +249,34 @@ const SESSION_RANGE_FILTER_SQL = "time_updated >= ?"
 
 /**
  * Calendar-day window condition (v0.24.0): a closed `time_updated >= ?
- * AND time_updated < ?` pair bounding one local calendar day. Both
- * thresholds are computed server-side per request (dayStartMs and
- * dayStartMs + 86400000) and only ever reach SQLite as bind parameters.
+ * AND time_updated < ?` pair bounding one local calendar day. The lower
+ * bound is the local midnight handed in by the caller; the upper bound is
+ * the NEXT local midnight (see nextLocalMidnightAfter — not a fixed
+ * +86400000, which is wrong on DST-transition days). Both thresholds are
+ * computed server-side per request and only ever reach SQLite as bind
+ * parameters.
  */
 const SESSION_DAY_FILTER_SQL = "time_updated >= ? AND time_updated < ?"
+
+/**
+ * The exclusive upper bound of the local calendar day that starts at
+ * `localMidnightMs`: advance the local calendar date by one day and take
+ * its local midnight. `localMidnightMs` is always built as
+ * `new Date(year, month-1, day)` (api.ts parseDayStartMs), so
+ * `new Date(localMidnightMs)` recovers the exact same local Y/M/D; the
+ * derived `new Date(year, month-1, day+1)` then lands on the real next
+ * local midnight. A DST-transition local day is 23h or 25h long, so the
+ * naïve `localMidnightMs + 86_400_000` would leak the first hour of the
+ * following day (or drop the last hour of this one).
+ */
+function nextLocalMidnightAfter(localMidnightMs: number): number {
+  const localMidnight = new Date(localMidnightMs)
+  return new Date(
+    localMidnight.getFullYear(),
+    localMidnight.getMonth(),
+    localMidnight.getDate() + 1,
+  ).getTime()
+}
 
 /** One day in milliseconds, for the ?range= window presets. */
 export const SESSION_RANGE_WINDOW_MS_PER_DAY = 86_400_000
@@ -381,7 +404,12 @@ export function querySessionList(
   const hasDirectoryFilter = typeof directoryValue === "string" && directoryValue !== ""
   const hasRangeFilter = typeof rangeStartMs === "number" && Number.isFinite(rangeStartMs)
   const hasDayFilter = typeof dayStartMs === "number" && Number.isFinite(dayStartMs)
-  const dayEndMs = hasDayFilter ? dayStartMs + SESSION_RANGE_WINDOW_MS_PER_DAY : null
+  // 日界用「次日本地午夜」而非 start + 86_400_000：DST 切换日本地日
+  // 是 23h/25h，固定 +24h 会多收次日第一小时（或漏掉当日最后一小时）。
+  // dayStartMs 由 parseDayStartMs 以 new Date(year, month-1, day) 本地
+  // 午夜构造，nextLocalMidnightAfter 无损还原同一组本地年月日再 +1 天，
+  // 半开区间 [dayStartMs, dayEndMs) 的契约不变。
+  const dayEndMs = hasDayFilter ? nextLocalMidnightAfter(dayStartMs) : null
 
   // Filter conditions compose in a fixed order (directory first, then
   // the range window, then the calendar-day window) so the bind

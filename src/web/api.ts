@@ -90,7 +90,7 @@ import {
 } from "./router.ts"
 
 /** Keep in sync with package.json version (bumped together in M7). */
-export const INSIGHT_VERSION = "0.29.1"
+export const INSIGHT_VERSION = "0.29.2"
 
 export const DATABASE_UNAVAILABLE_MESSAGE =
   "opencode database unavailable: node:sqlite missing or db file not found"
@@ -321,6 +321,13 @@ const DAY_PARAM_PATTERN = /^\d{4}-\d{2}-\d{2}$/
  * dateKeyToEpoch so a heatmap day-click filters the same local-day window
  * the heatmap itself renders). Missing, empty or malformed dates return
  * null (no filter, degrade silently like sort/order).
+ *
+ * The date must be calendar-valid, not merely in-range: new Date rolls an
+ * impossible day over (new Date(2026, 1, 31) → Mar 3), which would filter
+ * a completely different day. So after constructing the local date we
+ * round-trip its Y/M/D and reject any mismatch (also covers Feb 30 and
+ * Feb 29 in a non-leap year). A mismatch degrades to null like the other
+ * malformed shapes.
  */
 export function parseDayStartMs(dayParamValue: string): number | null {
   if (dayParamValue === "" || !DAY_PARAM_PATTERN.test(dayParamValue)) return null
@@ -331,7 +338,15 @@ export function parseDayStartMs(dayParamValue: string): number | null {
     return null
   }
   if (month < 1 || month > 12 || day < 1 || day > 31) return null
-  return new Date(year, month - 1, day).getTime()
+  const localDate = new Date(year, month - 1, day)
+  if (
+    localDate.getFullYear() !== year ||
+    localDate.getMonth() !== month - 1 ||
+    localDate.getDate() !== day
+  ) {
+    return null
+  }
+  return localDate.getTime()
 }
 
 /**
@@ -631,11 +646,14 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             ? sessionRangeResolution.rangeStartMs
             : null
         // Calendar-day filter (v0.24.0): a well-formed ?day=YYYY-MM-DD
-        // pins the local calendar-day window [dayStartMs, dayStartMs +
-        // 86400000) via Date.UTC (no timezone drift). Missing, empty or
-        // malformed dates degrade to no filter (silent, like sort/order).
-        // The cache key carries the RAW day string ("" for no filter), not
-        // the computed threshold — same discipline as range/directory.
+        // pins the local calendar-day window [dayStartMs, next local
+        // midnight) — the day's own local midnight (not UTC, no timezone
+        // drift) through the NEXT local midnight, so DST-transition days
+        // (23h/25h) stay correct. Missing, empty, malformed or
+        // calendar-impossible dates degrade to no filter (silent, like
+        // sort/order). The cache key carries the RAW day string ("" for no
+        // filter), not the computed threshold — same discipline as
+        // range/directory.
         const sessionDayParamValue = requestContext.searchParams.get("day") ?? ""
         const sessionDayStartMs = parseDayStartMs(sessionDayParamValue)
         // The cache key carries the RAW range word ("" for a missing
@@ -927,6 +945,14 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
           exportRangeResolution.rangeKind === "window"
             ? exportRangeResolution.rangeStartMs
             : null
+        // Calendar-day window (v0.24.0): the export reuses the sessions
+        // list's ?day= contract verbatim (the frontend builds a day-aware
+        // export URL, sessionsExportCsvPath(directory, range, day)). A
+        // well-formed day pins [dayStartMs, next local midnight); missing,
+        // empty, malformed or calendar-impossible values degrade to no
+        // filter (silent, like the list).
+        const exportDayParamValue = requestContext.searchParams.get("day") ?? ""
+        const exportDayStartMs = parseDayStartMs(exportDayParamValue)
         const exportSummaries: SessionSummary[] = []
         // Full-pull semantics: page through at querySessionList's clamp
         // ceiling (limit 500 — its hard maximum, see
@@ -934,8 +960,8 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
         // (~800 rows) therefore exports whole. The fixed ordering plus
         // the id ASC tie-break make the pagination deterministic: no
         // duplicated or skipped rows across page boundaries. The range
-        // window rides EVERY page (contract #3) — same threshold, same
-        // bind slot — so the no-dup/no-skip invariant holds on the
+        // and day windows ride EVERY page (contract #3) — same threshold,
+        // same bind slot — so the no-dup/no-skip invariant holds on the
         // filtered subset exactly as it does unfiltered.
         const exportPageSize = 500
         for (let pageOffset = 0; ; pageOffset += exportPageSize) {
@@ -950,7 +976,7 @@ export function handleApiRequest(requestContext: ApiRequestContext): ApiResponse
             DEFAULT_SESSION_SORT_ORDER,
             exportDirectoryFilter,
             exportRangeStartMs,
-            null,
+            exportDayStartMs,
             false,
           )
           // Unreachable with a non-null db; kept as belt-and-braces so a
